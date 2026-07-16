@@ -74,6 +74,8 @@ const diagramSchema = new mongoose.Schema(
       default: [],
     },
     businessCapability: { type: String, default: null, trim: true },
+    valueStream: { type: String, default: null, trim: true },
+    journey: { type: String, default: null, trim: true },
     // Parsed from <bpmndi:BPMNDiagram name="..."> on save
     lineOfBusiness: { type: String, default: null },
     channel: { type: String, default: null },
@@ -105,6 +107,8 @@ diagramSchema.index({
   domain: 'text',
   subdomain: 'text',
   product: 'text',
+  valueStream: 'text',
+  journey: 'text',
   businessFlow: 'text',
   businessCapability: 'text',
   status: 'text',

@@ -2,6 +2,12 @@ const mongoose = require('mongoose');
 const ComponentSearchIndex = require('../models/ComponentSearchIndex');
 const CanonicalComponent = require('../models/CanonicalComponent');
 
+function logHeap(stage, extra = {}) {
+  const usedMb = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
+  const totalMb = Math.round(process.memoryUsage().heapTotal / 1024 / 1024);
+  console.log(`[INDEX] Heap ${stage}: ${usedMb}MB used / ${totalMb}MB total`, extra);
+}
+
 /**
  * Rebuild the search index for all components in a neighborhood
  * This should be called after component uploads or updates
@@ -11,50 +17,76 @@ async function rebuildSearchIndex(neighborhoodName, options = {}) {
   const SearchIndexModel = options.SearchIndexModel || ComponentSearchIndex;
   const indexLabel = options.indexLabel || 'ComponentSearchIndex';
   const dataType = options.dataType || '';
+  const sourceBatchSize = options.sourceBatchSize || 1000;
+  const indexBatchSize = options.indexBatchSize || 500;
 
   console.log(`[INDEX] Starting ${indexLabel} rebuild for neighborhood: ${neighborhoodName}`);
+  logHeap('start', { neighborhoodName, indexLabel });
 
   try {
-    // Get canonical rows and group into synthesized "components" by componentType
-    const canonicalRows = await CanonicalModel.find({ neighborhoodName }).lean();
-    if (!canonicalRows.length) {
+    // Stream canonical rows and group them into synthesized "components" by componentType.
+    const rowProjection = {
+      _id: 1,
+      componentType: 1,
+      component_type: 1,
+      values: 1,
+      parentName: 1,
+      parentRefs: 1,
+    };
+    const componentsByType = new Map();
+    const canonicalById = new Map();
+    let canonicalRowCount = 0;
+
+    const canonicalCursor = CanonicalModel.find({ neighborhoodName }, rowProjection).lean().cursor({ batchSize: sourceBatchSize });
+    for await (const row of canonicalCursor) {
+      canonicalRowCount += 1;
+
+      const type = String(row.componentType || row.component_type || 'unknown');
+      if (!componentsByType.has(type)) {
+        componentsByType.set(type, {
+          _id: type,
+          name: type,
+          parentFactoryName: '',
+          rows: [],
+        });
+      }
+
+      const rowValues = row.values && typeof row.values === 'object'
+        ? (row.values instanceof Map ? Object.fromEntries(row.values.entries()) : { ...row.values })
+        : {};
+
+      const compactRow = {
+        _id: row._id,
+        values: rowValues,
+        parentName: (rowValues && (rowValues.parentName || rowValues.parent)) || row.parentName || null,
+        parentRefs: Array.isArray(row.parentRefs) ? row.parentRefs.map((id) => String(id)) : [],
+      };
+
+      componentsByType.get(type).rows.push(compactRow);
+      canonicalById.set(String(row._id), compactRow);
+
+      if (canonicalRowCount % sourceBatchSize === 0) {
+        logHeap('streamed source rows', { canonicalRowCount, componentTypes: componentsByType.size });
+      }
+    }
+
+    const canonicalRows = canonicalRowCount;
+    if (!canonicalRows) {
       console.log(`[INDEX] No canonical rows found for ${indexLabel} neighborhood: ${neighborhoodName}`);
       return;
     }
 
-    // Group by componentType
-    const componentsByType = new Map();
-    for (const r of canonicalRows) {
-      const type = (r.componentType || r.component_type || 'unknown') + '';
-      if (!componentsByType.has(type)) componentsByType.set(type, []);
-      componentsByType.get(type).push(r);
-    }
-
-    const components = Array.from(componentsByType.keys()).map(type => {
-      const rows = componentsByType.get(type).map(r => ({
-        _id: r._id,
-        values: r.values || {},
-        // preserve any parentName present on the canonical row values
-        parentName: (r.values && (r.values.parentName || r.values.parent)) || r.parentName || null,
-        // include parentRefs (array of canonical ObjectId strings) for link-based hierarchies
-        parentRefs: Array.isArray(r.parentRefs) ? r.parentRefs : [],
-      }));
-      return {
-        _id: type,
-        name: type,
-        // canonical rows don't carry a parentFactoryName by default; leave empty
-        parentFactoryName: '',
-        rows,
-      };
-    });
+    const components = Array.from(componentsByType.values());
+    logHeap('grouped source rows', { canonicalRowCount, componentTypes: components.length });
 
     console.log(`[INDEX] Synthesized ${components.length} components from canonicalcomponents for ${neighborhoodName}`);
+    logHeap('after synthesize components', { components: components.length, canonicalRows: canonicalRowCount });
 
     // Create component map for hierarchy lookup
     const componentMap = new Map(components.map(c => [normalizeValue(c.name), c]));
 
     // Also create a map of canonical rows by their _id for direct parentRef lookups
-    const canonicalById = new Map(canonicalRows.map(r => [String(r._id), r]));
+    // (built during the streaming source pass above).
 
     // Helper function to normalize values for comparison
     function normalizeValue(val) {
@@ -179,9 +211,21 @@ async function rebuildSearchIndex(neighborhoodName, options = {}) {
       return hierarchies.length > 0 ? hierarchies : [singleNode];
     };
 
-    // Build index entries
-    const indexEntries = [];
+    // Build index entries in batches so we do not retain the full neighborhood in memory.
     let totalRowsProcessed = 0;
+    let totalIndexEntries = 0;
+    let batchEntries = [];
+
+    const flushIndexBatch = async (reason) => {
+      if (!batchEntries.length) return;
+      const entriesToInsert = batchEntries;
+      batchEntries = [];
+      await SearchIndexModel.insertMany(entriesToInsert, { ordered: false });
+      totalIndexEntries += entriesToInsert.length;
+      logHeap('flushed index batch', { reason, inserted: entriesToInsert.length, totalIndexEntries });
+    };
+
+    await SearchIndexModel.deleteMany({ neighborhoodName });
 
     for (const component of components) {
       const rows = component.rows || [];
@@ -207,7 +251,7 @@ async function rebuildSearchIndex(neighborhoodName, options = {}) {
         const pathStrings = hierarchies.map(h => h.map(node => node.rowName).join(' > '));
 
         // Create ONE index entry with ALL paths
-        indexEntries.push({
+        batchEntries.push({
           neighborhoodName,
           componentName: component.name,
           componentId: mongoose.isValidObjectId(component._id) ? component._id : null,
@@ -229,20 +273,22 @@ async function rebuildSearchIndex(neighborhoodName, options = {}) {
         });
 
         totalRowsProcessed++;
+
+        if (batchEntries.length >= indexBatchSize) {
+          await flushIndexBatch('batch-size');
+        }
       }
     }
 
-    // Clear old index for this neighborhood
-    await SearchIndexModel.deleteMany({ neighborhoodName });
+    await flushIndexBatch('final');
 
-    // Bulk insert new index
-    if (indexEntries.length > 0) {
-      await SearchIndexModel.insertMany(indexEntries);
-      console.log(`[INDEX] Successfully indexed ${indexEntries.length} entries into ${indexLabel}`);
+    if (totalIndexEntries > 0) {
+      console.log(`[INDEX] Successfully indexed ${totalIndexEntries} entries into ${indexLabel}`);
     }
 
     console.log(`[INDEX] ${indexLabel} rebuild complete: ${neighborhoodName}`);
-    return { success: true, entriesCount: indexEntries.length };
+    logHeap('complete', { totalRowsProcessed, totalIndexEntries });
+    return { success: true, entriesCount: totalIndexEntries };
   } catch (error) {
     console.error(`[INDEX] Error rebuilding ${indexLabel} for ${neighborhoodName}:`, error);
     throw error;

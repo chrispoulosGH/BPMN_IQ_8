@@ -25,6 +25,8 @@ async function getFlowLineage(flowDoc) {
     lineOfBusiness: null,
     channel: null,
     product: null,
+    valueStream: null,
+    journey: null,
     businessCapability: null,
     subdomain: null,
     domain: null,
@@ -44,6 +46,8 @@ async function getFlowLineage(flowDoc) {
     if (typeMatches(parent.componentType, 'Line of Business')) lineage.lineOfBusiness = parentName;
     else if (typeMatches(parent.componentType, 'Channel')) lineage.channel = parentName;
     else if (typeMatches(parent.componentType, 'Product')) lineage.product = parentName;
+    else if (typeMatches(parent.componentType, 'Value Stream')) lineage.valueStream = parentName;
+    else if (typeMatches(parent.componentType, 'Journey')) lineage.journey = parentName;
     else if (typeMatches(parent.componentType, 'Business Capability')) lineage.businessCapability = parentName;
     else if (typeMatches(parent.componentType, 'Subdomain')) lineage.subdomain = parentName;
     else if (typeMatches(parent.componentType, 'Domain')) lineage.domain = parentName;
@@ -74,7 +78,7 @@ async function generateDiagramForFlow(neighborhoodName, flow) {
     applications: (t.childrenRefs || []).map((id) => appNameById.get(String(id))).filter(Boolean),
   }));
 
-  const { breadcrumb, lineOfBusiness, channel, product, businessCapability, domain, subdomain } = await getFlowLineage(flow);
+  const { breadcrumb, lineOfBusiness, channel, product, valueStream, journey, businessCapability, domain, subdomain } = await getFlowLineage(flow);
   const { xml } = buildBpmnXmlForFlow({ flowName, breadcrumb, tasks });
 
   const diagramTasks = tasks.map((t, i) => ({
@@ -104,14 +108,17 @@ async function generateDiagramForFlow(neighborhoodName, flow) {
         lineOfBusiness: lineOfBusiness || null,
         channel: channel || null,
         product: product || null,
+        valueStream: valueStream || null,
+        journey: journey || null,
         domain: domain || null,
         subdomain: subdomain || null,
         businessFlow: flowName,
         businessCapability: businessCapability || null,
         sourcedFrom: SOURCED_FROM,
         updatedBy: SOURCED_FROM,
+        status: 'published',
       },
-      $setOnInsert: { createdBy: SOURCED_FROM, version: 1, status: 'draft' },
+      $setOnInsert: { createdBy: SOURCED_FROM, version: 1 },
     },
     { upsert: true }
   );

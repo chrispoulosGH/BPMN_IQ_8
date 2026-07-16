@@ -42,6 +42,21 @@ const HIERARCHY_FILTERS: FilterDefinition[] = [
 
 const COMPONENT_FILTERS: FilterDefinition[] = [
   {
+    key: 'businessCapability',
+    label: 'Business Capability',
+    getValues: (diagram) => [diagram.businessCapability || ''].map((value) => String(value || '').trim()).filter(Boolean),
+  },
+  {
+    key: 'valueStream',
+    label: 'Value Stream',
+    getValues: (diagram) => [diagram.valueStream || ''].map((value) => String(value || '').trim()).filter(Boolean),
+  },
+  {
+    key: 'journey',
+    label: 'Journey',
+    getValues: (diagram) => [diagram.journey || ''].map((value) => String(value || '').trim()).filter(Boolean),
+  },
+  {
     key: 'businessFlow',
     label: 'Business Process Flow',
     getValues: (diagram) => [diagram.businessFlow || diagram.name || ''].map((value) => String(value || '').trim()).filter(Boolean),

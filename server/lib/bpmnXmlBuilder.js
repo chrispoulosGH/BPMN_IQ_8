@@ -143,6 +143,33 @@ function buildBpmnXmlForFlow({ flowName, breadcrumb, tasks }) {
     .map((f) => `    <bpmn:sequenceFlow id="${f.id}" sourceRef="${f.sourceRef}" targetRef="${f.targetRef}"/>`)
     .join('\n');
 
+  // ── layout / DI ─────────────────────────────────────────────────────
+  const diagramWidth = START_X + Math.max(taskNodes.length, 1) * STEP_X + 300;
+  const laneY = (laneId) => TOP_Y + laneIndexById.get(laneId) * LANE_HEIGHT;
+  const laneCenterY = (laneId) => laneY(laneId) + LANE_HEIGHT / 2;
+
+  const positions = new Map(); // id -> { x, y, width, height }
+  positions.set(startEventId, {
+    x: START_X - STEP_X + (TASK_WIDTH - EVENT_SIZE) / 2,
+    y: laneCenterY(firstLaneId) - EVENT_SIZE / 2,
+    width: EVENT_SIZE,
+    height: EVENT_SIZE,
+  });
+  taskNodes.forEach((t, i) => {
+    positions.set(t.id, {
+      x: START_X + i * STEP_X,
+      y: laneCenterY(t.laneId) - TASK_HEIGHT / 2,
+      width: TASK_WIDTH,
+      height: TASK_HEIGHT,
+    });
+  });
+  positions.set(endEventId, {
+    x: START_X + taskNodes.length * STEP_X + (TASK_WIDTH - EVENT_SIZE) / 2,
+    y: laneCenterY(lastLaneId) - EVENT_SIZE / 2,
+    width: EVENT_SIZE,
+    height: EVENT_SIZE,
+  });
+
   // ── text annotations (application lists per task) ─────────────────────
   const annotations = [];
   taskNodes.forEach((t) => {
@@ -177,33 +204,6 @@ function buildBpmnXmlForFlow({ flowName, breadcrumb, tasks }) {
       `    <bpmn:association id="${a.associationId}" sourceRef="${a.id}" targetRef="${a.targetId}"/>`
     )),
   ].join('\n');
-
-  // ── layout / DI ─────────────────────────────────────────────────────
-  const diagramWidth = START_X + Math.max(taskNodes.length, 1) * STEP_X + 300;
-  const laneY = (laneId) => TOP_Y + laneIndexById.get(laneId) * LANE_HEIGHT;
-  const laneCenterY = (laneId) => laneY(laneId) + LANE_HEIGHT / 2;
-
-  const positions = new Map(); // id -> { x, y, width, height }
-  positions.set(startEventId, {
-    x: START_X - STEP_X + (TASK_WIDTH - EVENT_SIZE) / 2,
-    y: laneCenterY(firstLaneId) - EVENT_SIZE / 2,
-    width: EVENT_SIZE,
-    height: EVENT_SIZE,
-  });
-  taskNodes.forEach((t, i) => {
-    positions.set(t.id, {
-      x: START_X + i * STEP_X,
-      y: laneCenterY(t.laneId) - TASK_HEIGHT / 2,
-      width: TASK_WIDTH,
-      height: TASK_HEIGHT,
-    });
-  });
-  positions.set(endEventId, {
-    x: START_X + taskNodes.length * STEP_X + (TASK_WIDTH - EVENT_SIZE) / 2,
-    y: laneCenterY(lastLaneId) - EVENT_SIZE / 2,
-    width: EVENT_SIZE,
-    height: EVENT_SIZE,
-  });
 
   const laneShapesXml = laneOrder.map(({ laneId }) => (
     `      <bpmndi:BPMNShape id="${laneId}_di" bpmnElement="${laneId}" isHorizontal="true" stroke="gray">\n` +

@@ -26,6 +26,17 @@ const { findApplicationByAcronym, findApplicationByCorrelationId } = require('..
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 250 * 1024 * 1024 } });
 const DATA_NEIGHBORHOOD_NAME = 'System Components';
+const XLSX_READ_OPTIONS = {
+  type: 'buffer',
+  raw: false,
+  dense: false,
+  cellStyles: false,
+  cellFormula: false,
+  cellHTML: false,
+  cellNF: false,
+  cellText: false,
+  cellDates: false,
+};
 const handleSpreadsheetUpload = (req, res, next) => {
   upload.single('file')(req, res, (err) => {
     if (err) {
@@ -362,7 +373,7 @@ function parseWorkbookRows(buffer, fileName) {
     if (!buffer || buffer.length === 0) {
       throw createValidationError('File buffer is empty');
     }
-    const workbook = XLSX.read(buffer, { type: 'buffer', raw: false, dense: true });
+    const workbook = XLSX.read(buffer, XLSX_READ_OPTIONS);
     const sheetName = workbook.SheetNames[0];
     if (!sheetName) throw new Error(`No worksheet found in ${fileName || 'uploaded file'}`);
     const sheet = workbook.Sheets[sheetName];
@@ -413,7 +424,7 @@ function parseNeighborhoodWorkbook(buffer, fileName) {
     if (!buffer || buffer.length === 0) {
       throw createValidationError('File buffer is empty');
     }
-    const workbook = XLSX.read(buffer, { type: 'buffer', raw: false, dense: true });
+    const workbook = XLSX.read(buffer, XLSX_READ_OPTIONS);
     const sheetName = workbook.SheetNames[0];
     if (!sheetName) throw new Error(`No worksheet found in ${fileName || 'uploaded file'}`);
     const sheet = workbook.Sheets[sheetName];
@@ -456,8 +467,9 @@ function parseModelCatalogWorkbook(buffer, fileName) {
     }
     
     console.log('[XLSX-READ] Starting XLSX.read with buffer size:', buffer.length);
-    const workbook = XLSX.read(buffer, { type: 'buffer', raw: false, dense: true });
-    console.log('[XLSX-READ] XLSX.read succeeded');
+    const xlsxReadStart = Date.now();
+    const workbook = XLSX.read(buffer, XLSX_READ_OPTIONS);
+    console.log('[XLSX-READ] XLSX.read succeeded in', Date.now() - xlsxReadStart, 'ms');
     
     const sheetName = workbook.SheetNames[0];
     if (!sheetName) throw new Error(`No worksheet found in ${fileName || 'uploaded file'}`);

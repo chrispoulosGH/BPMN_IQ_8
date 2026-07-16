@@ -12,6 +12,9 @@ export interface DiagramMeta {
   domain?: string | null;
   subdomain?: string | null;
   product?: string | null;
+  businessCapability?: string | null;
+  valueStream?: string | null;
+  journey?: string | null;
   businessFlow?: string | null;
   status?: string | null;
   sourcedFrom?: string | null;
@@ -136,6 +139,9 @@ export interface DiagramMetadata {
   domain?: string;
   subdomain?: string;
   product?: string;
+  businessCapability?: string;
+  valueStream?: string;
+  journey?: string;
   businessFlow?: string;
 }
 

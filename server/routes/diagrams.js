@@ -190,6 +190,9 @@ function parseDiagramMetadata(xml) {
     else if (key === 'domain') meta.domain = value;
     else if (key === 'subdomain') meta.subdomain = value;
     else if (key === 'product') meta.product = value;
+    else if (key === 'value stream') meta.valueStream = value;
+    else if (key === 'journey') meta.journey = value;
+    else if (key === 'business capability') meta.businessCapability = value;
     else if (key === 'business flow') meta.businessFlow = value;
   }
   return meta;
@@ -267,12 +270,15 @@ async function getNeighborhoodMetadataMappings(neighborhoodName) {
     lineOfBusiness: { label: 'Line of Business', kind: 'reference', model: LineOfBusiness },
     channel: { label: 'Channel', kind: 'reference', model: Channel },
     product: { label: 'Product', kind: 'reference', model: Product },
+    valueStream: { label: 'Value Stream', kind: 'customFactory', factoryName: 'value stream', parentFactoryName: 'product', parentField: 'product' },
+    journey: { label: 'Journey', kind: 'customFactory', factoryName: 'journey', parentFactoryName: 'value stream', parentField: 'valueStream' },
+    businessCapability: { label: 'Business Capability', kind: 'customFactory', factoryName: 'business capability', parentFactoryName: 'journey', parentField: 'journey' },
     businessFlow: {
       label: 'Business Flow',
       kind: 'customFactory',
       factoryName: 'business_flow',
-      parentFactoryName: 'subdomain',
-      parentField: 'subdomain',
+      parentFactoryName: 'business capability',
+      parentField: 'businessCapability',
     },
   };
 
@@ -293,14 +299,17 @@ async function getNeighborhoodMetadataMappings(neighborhoodName) {
   });
 
   const mappings = {};
-  const fieldOrder = ['lineOfBusiness', 'channel', 'product', 'domain', 'subdomain', 'businessFlow'];
+  const fieldOrder = ['lineOfBusiness', 'channel', 'product', 'domain', 'subdomain', 'valueStream', 'journey', 'businessCapability', 'businessFlow'];
   const parentFieldByField = {
     lineOfBusiness: null,
     channel: 'lineOfBusiness',
     product: 'channel',
     domain: 'product',
     subdomain: 'domain',
-    businessFlow: 'subdomain',
+    valueStream: 'subdomain',
+    journey: 'valueStream',
+    businessCapability: 'journey',
+    businessFlow: 'businessCapability',
   };
 
   for (let index = 0; index < fieldOrder.length; index += 1) {
@@ -353,6 +362,9 @@ async function getComponentFieldMatchInfo(neighborhoodName, mapping, fieldName, 
   if (mapping?.label) candidateNames.push(String(mapping.label || '').trim());
 
   if (fieldName === 'lineOfBusiness') candidateNames.push('line_of_business', 'line of business', 'lob');
+  if (fieldName === 'valueStream') candidateNames.push('value_stream', 'value stream');
+  if (fieldName === 'journey') candidateNames.push('journey');
+  if (fieldName === 'businessCapability') candidateNames.push('business_capability', 'business capability');
   if (fieldName === 'businessFlow') candidateNames.push('business_flow', 'business flow');
   if (fieldName === 'subdomain') candidateNames.push('sub_domain', 'sub domain');
 
@@ -659,6 +671,9 @@ router.post('/validate', async (req, res) => {
       domain: diagramLike.domain || metadata.domain,
       subdomain: diagramLike.subdomain || metadata.subdomain,
       product: diagramLike.product || metadata.product,
+      valueStream: diagramLike.valueStream || metadata.valueStream,
+      journey: diagramLike.journey || metadata.journey,
+      businessCapability: diagramLike.businessCapability || metadata.businessCapability,
       businessFlow: diagramLike.businessFlow || diagramLike.name || metadata.businessFlow || '',
     };
 
@@ -726,8 +741,25 @@ router.get('/', async (req, res) => {
     const filter = (!role || role === 'Viewer')
       ? { $and: [buildNeighborhoodFilter(neighborhoodName), { status: 'published' }] }
       : buildNeighborhoodFilter(neighborhoodName);
-    const diagrams = await Diagram.find(filter, '-xml').sort({ updatedAt: -1 });
-    res.json(diagrams);
+    const diagrams = await Diagram.find(filter).sort({ updatedAt: -1 }).lean();
+    const hydratedDiagrams = diagrams.map((diagram) => {
+      const metadata = parseDiagramMetadata(diagram.xml);
+      const hydrated = {
+        ...diagram,
+        lineOfBusiness: diagram.lineOfBusiness || metadata.lineOfBusiness || null,
+        channel: diagram.channel || metadata.channel || null,
+        product: diagram.product || metadata.product || null,
+        domain: diagram.domain || metadata.domain || null,
+        subdomain: diagram.subdomain || metadata.subdomain || null,
+        businessCapability: diagram.businessCapability || metadata.businessCapability || null,
+        valueStream: diagram.valueStream || metadata.valueStream || null,
+        journey: diagram.journey || metadata.journey || null,
+        businessFlow: diagram.businessFlow || metadata.businessFlow || null,
+      };
+      delete hydrated.xml;
+      return hydrated;
+    });
+    res.json(hydratedDiagrams);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -742,7 +774,7 @@ router.get('/flow-breadcrumbs', async (req, res) => {
     if (!names.length) return res.json([]);
     const docs = await Diagram.find(
       { $and: [buildNeighborhoodFilter(getNeighborhoodName(req)), { businessFlow: { $in: names } }] },
-      { businessFlow: 1, lineOfBusiness: 1, channel: 1, product: 1, domain: 1, subdomain: 1 }
+      { businessFlow: 1, businessCapability: 1, valueStream: 1, journey: 1, lineOfBusiness: 1, channel: 1, product: 1, domain: 1, subdomain: 1 }
     ).lean();
     // De-dupe: keep one record per businessFlow name
     const seen = new Set();
@@ -752,6 +784,9 @@ router.get('/flow-breadcrumbs', async (req, res) => {
       seen.add(d.businessFlow);
       result.push({
         name: d.businessFlow,
+        businessCapability: d.businessCapability || null,
+        valueStream: d.valueStream || null,
+        journey: d.journey || null,
         lineOfBusiness: d.lineOfBusiness || null,
         channel: d.channel || null,
         product: d.product || null,
@@ -801,7 +836,7 @@ router.get('/search', async (req, res) => {
     if (!results.length) {
       const escaped = q.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const regex = new RegExp(escaped, 'i');
-      const orConditions = [{ name: regex }, { businessFlow: regex }, { lineOfBusiness: regex }, { domain: regex }, { subdomain: regex }, { product: regex }, { channel: regex }, { status: regex }, { createdBy: regex }, { 'tasks.name': regex }];
+      const orConditions = [{ name: regex }, { businessFlow: regex }, { businessCapability: regex }, { valueStream: regex }, { journey: regex }, { lineOfBusiness: regex }, { domain: regex }, { subdomain: regex }, { product: regex }, { channel: regex }, { status: regex }, { createdBy: regex }, { 'tasks.name': regex }];
       const regexFilter = isViewer
         ? { $and: [buildNeighborhoodFilter(neighborhoodName), { $or: orConditions }, { status: 'published' }] }
         : { $and: [buildNeighborhoodFilter(neighborhoodName), { $or: orConditions }] };
