@@ -11,3 +11,5 @@ prompt2_techfast.txt
 # OS files
 Thumbs.db
 .DS_Store
+client/node_modules/
+server/node_modules/
