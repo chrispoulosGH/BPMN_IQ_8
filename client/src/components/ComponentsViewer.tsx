@@ -57,20 +57,10 @@ export default function ComponentsViewer({
     const loadHierarchies = async () => {
       setLoading(true);
       try {
-        console.log(`[ComponentsViewer] API CALL: Loading hierarchies for ${neighborhoodName}/${activeModelName} (${components.length} component types)`);
-        
-        // Fetch hierarchies for each component type
-        const allPaths: any[] = [];
-        for (const component of components) {
-          try {
-            const result = await getComponentHierarchies(neighborhoodName, component.name, activeModelName);
-            const componentPaths = result.paths || [];
-            console.log(`[ComponentsViewer] TRACE: ${component.name} has ${componentPaths.length} paths`);
-            allPaths.push(...componentPaths);
-          } catch (err) {
-            console.warn(`[ComponentsViewer] Failed to load hierarchies for ${component.name}:`, err);
-          }
-        }
+        const { leafComponent } = await getLeafComponent(neighborhoodName, activeModelName);
+        console.log(`[ComponentsViewer] API CALL: Loading ${leafComponent} hierarchies for ${neighborhoodName}/${activeModelName}`);
+        const result = await getComponentHierarchies(neighborhoodName, leafComponent, activeModelName, true);
+        const allPaths = result.paths || [];
         
         // Deduplicate paths by pathKey
         const uniquePaths = Array.from(new Map(allPaths.map(p => [p.pathKey, p])).values());
@@ -324,7 +314,7 @@ export default function ComponentsViewer({
           const targetScope = fk.targetScope?.toLowerCase();
           if (targetScope === 'application' && selectedNodeInfo?.rowName) {
             try {
-              const appData = await getApplicationByName(selectedNodeInfo.rowName, 'ATT Journey Model');
+              const appData = await getApplicationByName(selectedNodeInfo.rowName, activeModelName || neighborhoodName);
               component = {
                 ...component,
                 name: appData.name,
@@ -341,8 +331,8 @@ export default function ComponentsViewer({
           }
         } else if (selectedNodeInfo?.componentName === 'application') {
           // No FK column but it's an application node — try direct lookup by name
-          try {
-            const appData = await getApplicationByName(selectedNodeInfo.rowName, 'ATT Journey Model');
+            try {
+              const appData = await getApplicationByName(selectedNodeInfo.rowName, activeModelName || neighborhoodName);
             component = {
               ...component,
               name: appData.name,

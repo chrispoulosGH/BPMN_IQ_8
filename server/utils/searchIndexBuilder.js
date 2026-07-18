@@ -19,6 +19,7 @@ async function rebuildSearchIndex(neighborhoodName, options = {}) {
   const dataType = options.dataType || '';
   const sourceBatchSize = options.sourceBatchSize || 1000;
   const indexBatchSize = options.indexBatchSize || 500;
+  const maxPathsPerRow = options.maxPathsPerRow || 500;
 
   console.log(`[INDEX] Starting ${indexLabel} rebuild for neighborhood: ${neighborhoodName}`);
   logHeap('start', { neighborhoodName, indexLabel });
@@ -57,6 +58,7 @@ async function rebuildSearchIndex(neighborhoodName, options = {}) {
 
       const compactRow = {
         _id: row._id,
+        componentType: type,
         values: rowValues,
         parentName: (rowValues && (rowValues.parentName || rowValues.parent)) || row.parentName || null,
         parentRefs: Array.isArray(row.parentRefs) ? row.parentRefs.map((id) => String(id)) : [],
@@ -104,10 +106,17 @@ async function rebuildSearchIndex(neighborhoodName, options = {}) {
 
     // Helper to build ALL hierarchy paths for a row (recursively handling multiple parents)
     // Returns array of hierarchies, where each hierarchy is an array of {componentName, rowName, componentId, rowId}
+    const hierarchyPathCache = new Map();
+    const truncatedHierarchyRows = new Set();
+
     const buildAllHierarchyPaths = async (component, row, visitedRowKeys = new Set()) => {
       const rowValues = getRowValues(row);
       const rowName = String(rowValues.name || row.name || 'unnamed').trim();
       const currentRowKey = `${component.name}:${String(row._id)}`;
+
+      if (visitedRowKeys.size === 0 && hierarchyPathCache.has(currentRowKey)) {
+        return hierarchyPathCache.get(currentRowKey);
+      }
 
       // Prevent infinite loops
       if (visitedRowKeys.has(currentRowKey)) {
@@ -166,7 +175,10 @@ async function rebuildSearchIndex(neighborhoodName, options = {}) {
           });
         }
 
-        return hierarchies.length > 0 ? hierarchies : [singleNode];
+        const result = hierarchies.length > 0 ? hierarchies.slice(0, maxPathsPerRow) : [singleNode];
+        if (hierarchies.length > maxPathsPerRow) truncatedHierarchyRows.add(currentRowKey);
+        if (visitedRowKeys.size === 0) hierarchyPathCache.set(currentRowKey, result);
+        return result;
       }
 
       // Build hierarchies from parentRefs (canonical link-based)
@@ -198,6 +210,7 @@ async function rebuildSearchIndex(neighborhoodName, options = {}) {
         pathVisitedSet.add(currentRowKey);
         const parentHierarchies = await buildAllHierarchyPaths(parentComponent, parentRow, pathVisitedSet);
         parentHierarchies.forEach(parentPath => {
+          if (hierarchies.length >= maxPathsPerRow) return;
           const fullPath = [...parentPath, {
             componentName: component.name,
             componentId: String(component._id),
@@ -206,9 +219,16 @@ async function rebuildSearchIndex(neighborhoodName, options = {}) {
           }];
           hierarchies.push(fullPath);
         });
+
+        if (hierarchies.length >= maxPathsPerRow) {
+          truncatedHierarchyRows.add(currentRowKey);
+          break;
+        }
       }
 
-      return hierarchies.length > 0 ? hierarchies : [singleNode];
+      const result = hierarchies.length > 0 ? hierarchies : [singleNode];
+      if (visitedRowKeys.size === 0) hierarchyPathCache.set(currentRowKey, result);
+      return result;
     };
 
     // Build index entries in batches so we do not retain the full neighborhood in memory.
@@ -287,7 +307,7 @@ async function rebuildSearchIndex(neighborhoodName, options = {}) {
     }
 
     console.log(`[INDEX] ${indexLabel} rebuild complete: ${neighborhoodName}`);
-    logHeap('complete', { totalRowsProcessed, totalIndexEntries });
+    logHeap('complete', { totalRowsProcessed, totalIndexEntries, truncatedHierarchyRows: truncatedHierarchyRows.size });
     return { success: true, entriesCount: totalIndexEntries };
   } catch (error) {
     console.error(`[INDEX] Error rebuilding ${indexLabel} for ${neighborhoodName}:`, error);

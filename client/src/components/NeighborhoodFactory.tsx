@@ -77,7 +77,6 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
   const { message } = AntApp.useApp();
   const ALL_COLUMNS_OPTION = '__all__';
   const PRIMARY_KEY_COLUMN = 'name';
-  const DEFAULT_NEIGHBORHOOD_NAME = 'ATT Journey Model';
   const [neighborhoods, setNeighborhoods] = useState<FactoryNeighborhoodSummary[]>([]);
   const [factories, setFactories] = useState<CustomFactory[]>([]);
   const [selectedNeighborhood, setSelectedNeighborhood] = useState<string | null>(null);
@@ -260,18 +259,18 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
     try {
       const data = await getFactoryNeighborhoods();
       setNeighborhoods(data);
+      const fallbackNeighborhood = fixedNeighborhoodName || data[0]?.name || null;
       setSelectedNeighborhood((current) => {
         if (fixedNeighborhoodName && data.some((item) => item.name === fixedNeighborhoodName)) return fixedNeighborhoodName;
         if (current && data.some((item) => item.name === current)) return current;
-        if (data.some((item) => item.name === DEFAULT_NEIGHBORHOOD_NAME)) return DEFAULT_NEIGHBORHOOD_NAME;
-        return data[0]?.name ?? null;
+        return fallbackNeighborhood;
       });
     } catch (error: any) {
       message.error(error.response?.data?.error || error.message);
     } finally {
       setLoadingNeighborhoods(false);
     }
-  }, [DEFAULT_NEIGHBORHOOD_NAME, fixedNeighborhoodName, message]);
+  }, [fixedNeighborhoodName, message]);
 
   const loadFactories = useCallback(async (neighborhoodName: string) => {
     setLoadingFactories(true);
@@ -528,7 +527,7 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
           setSelectedFactoryId(null);
           setFactories([]);
           if (!fixedNeighborhoodName) {
-            setSelectedNeighborhood(DEFAULT_NEIGHBORHOOD_NAME);
+            setSelectedNeighborhood(neighborhoods[0]?.name || null);
           }
           await onNeighborhoodsChanged?.();
           await onNeighborhoodDeleted?.(name);
@@ -537,7 +536,7 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
         }
       },
     });
-  }, [DEFAULT_NEIGHBORHOOD_NAME, fixedNeighborhoodName, message, onNeighborhoodDeleted, onNeighborhoodsChanged]);
+  }, [fixedNeighborhoodName, message, onNeighborhoodDeleted, onNeighborhoodsChanged, neighborhoods]);
 
   const handleDeleteAllComponents = useCallback(async (name: string) => {
     if (!name) return;
@@ -547,7 +546,7 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
       message.success(`Deleted ${result.deletedFactoryCount} components from ${name}`);
       // Refresh lists
       await loadNeighborhoods();
-      if (!fixedNeighborhoodName) setSelectedNeighborhood(DEFAULT_NEIGHBORHOOD_NAME);
+      if (!fixedNeighborhoodName) setSelectedNeighborhood(neighborhoods[0]?.name || null);
       await onNeighborhoodsChanged?.();
       if (selectedNeighborhood) await loadFactories(selectedNeighborhood);
     } catch (error: any) {
@@ -555,7 +554,7 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
     } finally {
       setLoadingFactories(false);
     }
-  }, [DEFAULT_NEIGHBORHOOD_NAME, fixedNeighborhoodName, loadFactories, loadNeighborhoods, message, onNeighborhoodsChanged, selectedNeighborhood]);
+  }, [fixedNeighborhoodName, loadFactories, loadNeighborhoods, message, neighborhoods, onNeighborhoodsChanged, selectedNeighborhood]);
 
   const rowColumns: ColumnsType<CustomFactoryRow> = useMemo(() => {
     const factoryId = selectedFactory?._id || '';

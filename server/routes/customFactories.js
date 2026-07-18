@@ -1191,7 +1191,7 @@ async function doesDataComponentExist({ type, value, neighborhoodName, correlati
   return true;
 }
 
-async function buildComponentUploadFactories({ neighborhoodName, rows, componentColumns, sourceFileName, owner, createdBy }) {
+async function buildComponentUploadFactories({ neighborhoodName, rows, componentColumns, sourceFileName, owner, createdBy, rowNumberOffset = 0 }) {
   const factoryRowMaps = new Map(componentColumns.map((column) => [column.name, new Map()]));
   const dataExistenceCache = new Map();
 
@@ -1206,7 +1206,7 @@ async function buildComponentUploadFactories({ neighborhoodName, rows, component
 
       const parentName = column.parentFactoryName ? (rowComponentValues.get(column.parentFactoryName) || '') : '';
       if (column.parentFactoryName && !parentName) {
-        throw createValidationError(`Row ${rowIndex + 2}: ${column.name} has value \"${componentValue}\" but parent component ${column.parentFactoryName} is blank`);
+        throw createValidationError(`Row ${rowNumberOffset + rowIndex + 2}: ${column.name} has value \"${componentValue}\" but parent component ${column.parentFactoryName} is blank`);
       }
 
       const rowMap = factoryRowMaps.get(column.name);
@@ -2646,6 +2646,7 @@ router.post('/upload', requireAdminWrite, handleSpreadsheetUpload, async (req, r
           sourceFileName: req.file.originalname,
           owner,
           createdBy,
+          rowNumberOffset: batchIdx * BATCH_SIZE,
         });
         allUploadedFactories.push(...batchFactories);
       }
@@ -3552,32 +3553,16 @@ router.get('/hierarchies/tree', async (req, res) => {
   try {
     const neighborhoodName = String(req.query?.neighborhoodName || DEFAULT_NEIGHBORHOOD_NAME).trim();
     const componentName = String(req.query?.componentName || 'Application').trim();
-    
-    // Try to find leaf component entries - try common names first
-    const possibleLeafComponents = ['Application', 'application', 'app', 'App', 'Task', 'task'];
-    let entries = [];
-    let leafComponentName = 'Application';
-    
-    for (const leafName of possibleLeafComponents) {
-      entries = await ComponentSearchIndex.find({
-        neighborhoodName,
-        componentName: leafName,
-      })
-      .limit(1)
-      .lean();
-      
-      if (entries.length > 0) {
-        leafComponentName = leafName;
-        // Now get all entries for this leaf component
-        entries = await ComponentSearchIndex.find({
+    const compact = String(req.query?.compact || '').trim().toLowerCase() === 'true';
+
+    const entries = await ComponentSearchIndex.find(compact
+      ? { neighborhoodName }
+      : {
           neighborhoodName,
-          componentName: leafComponentName,
+          componentName: { $regex: new RegExp(`^${escapeRegExp(componentName)}$`, 'i') },
         })
-        .sort({ rowName: 1 })
-        .lean();
-        break;
-      }
-    }
+    .sort({ rowName: 1 })
+    .lean();
     
     // Extract unique hierarchies that contain the requested component
     const hierarchyMap = new Map();
@@ -3585,10 +3570,12 @@ router.get('/hierarchies/tree', async (req, res) => {
     
     entries.forEach((entry) => {
       const hierarchies = entry.cachedHierarchies || [];
-      
-      hierarchies.forEach((hierarchy) => {
-        // Check if this hierarchy contains the requested component
-        const containsComponent = hierarchy.some(node => node.componentName === componentName);
+
+      const selectedHierarchies = compact ? hierarchies.slice(0, 1) : hierarchies;
+      selectedHierarchies.forEach((hierarchy) => {
+        const containsComponent = hierarchy.some(
+          (node) => compact || String(node.componentName || '').trim().toLowerCase() === componentName.toLowerCase()
+        );
         
         if (!containsComponent) return;
         

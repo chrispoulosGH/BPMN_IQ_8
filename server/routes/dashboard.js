@@ -527,6 +527,88 @@ router.get('/capability-flow-relationships', async (req, res) => {
 });
 
 /**
+ * GET /api/dashboard/value-stream-relationships
+ * Returns value streams and capability intersections for the current neighborhood.
+ */
+router.get('/value-stream-relationships', async (req, res) => {
+  try {
+    const diagrams = await Diagram.find(
+      withNeighborhood(req),
+      { name: 1, businessFlow: 1, businessCapability: 1, valueStream: 1, capabilities: 1 }
+    ).lean();
+
+    const valueStreamCounts = new Map();
+    const capabilityCounts = new Map();
+    const linkCounts = new Map();
+    const valueStreamRollups = new Map();
+
+    for (const diagram of diagrams) {
+      const valueStream = String(diagram.valueStream || '').trim();
+      if (!valueStream) continue;
+
+      const domain = normalizeValue(diagram.domain, 'Unspecified Domain');
+      const subdomain = normalizeValue(diagram.subdomain, 'Unspecified Subdomain');
+      const rollupLabel = `${domain} | ${subdomain}`;
+
+      const capabilityNames = Array.from(new Set(
+        (diagram.capabilities || [])
+          .map((capability) => String(capability?.capabilityName || '').trim())
+          .filter(Boolean)
+      ));
+
+      valueStreamCounts.set(valueStream, (valueStreamCounts.get(valueStream) || 0) + 1);
+
+      if (!valueStreamRollups.has(valueStream)) {
+        valueStreamRollups.set(valueStream, new Map());
+      }
+      const rollupCounts = valueStreamRollups.get(valueStream);
+      rollupCounts.set(rollupLabel, (rollupCounts.get(rollupLabel) || 0) + 1);
+
+      if (!capabilityNames.length) continue;
+
+      for (const capabilityName of capabilityNames) {
+        capabilityCounts.set(capabilityName, (capabilityCounts.get(capabilityName) || 0) + 1);
+        const key = `${capabilityName}|||${valueStream}`;
+        linkCounts.set(key, (linkCounts.get(key) || 0) + 1);
+      }
+    }
+
+    const valueStreams = [...valueStreamCounts.entries()]
+      .map(([name, count]) => {
+        const rollupCounts = valueStreamRollups.get(name) || new Map();
+        const rollupLabel = [...rollupCounts.entries()]
+          .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))[0]?.[0] || 'Unspecified Domain | Unspecified Subdomain';
+        return { name, count, rollupLabel };
+      })
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+
+    const capabilities = [...capabilityCounts.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+
+    const links = [...linkCounts.entries()]
+      .map(([key, count]) => {
+        const [capability, valueStream] = key.split('|||');
+        return { capability, valueStream, count };
+      })
+      .sort((a, b) => b.count - a.count || a.capability.localeCompare(b.capability) || a.valueStream.localeCompare(b.valueStream));
+
+    res.json({
+      totalDiagrams: diagrams.length,
+      diagramCount: diagrams.length,
+      valueStreamCount: valueStreams.length,
+      capabilityCount: capabilities.length,
+      linkCount: links.length,
+      valueStreams,
+      capabilities,
+      links,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
  * GET /api/dashboard/lob-drilldown-tree
  * Returns a hierarchical drilldown tree:
  * LOB -> Channel -> Product -> Domain -> Subdomain -> Business Flow -> Task -> Application

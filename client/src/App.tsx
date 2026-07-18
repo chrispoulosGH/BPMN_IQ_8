@@ -70,6 +70,7 @@ import CapabilitiesFactory from './components/CapabilitiesFactory';
 import ActorFactory from './components/ActorFactory';
 import BpmnFactory from './components/BpmnFactory';
 import Dashboard from './components/Dashboard';
+import ValueStreamsMatrix from './components/ValueStreamsMatrix';
 import ReportsPanel from './components/ReportsPanel';
 import Login from './components/Login';
 import AdminPanel from './components/AdminPanel';
@@ -502,7 +503,8 @@ export default function App() {
 
 function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: string; displayName: string; role?: string | null; capabilities?: { function: string; permission: string }[] }; onLogout: () => void }) {
   const { message, modal } = AntApp.useApp();
-  const DEFAULT_NEIGHBORHOOD_NAME = 'ATT Journey Model';
+  const [neighborhoodTabs, setNeighborhoodTabs] = useState<FactoryNeighborhoodSummary[]>([]);
+  const DEFAULT_NEIGHBORHOOD_NAME = neighborhoodTabs[0]?.name || '';
   const REFERENCE_DATA_NEIGHBORHOOD_NAME = 'System Components';
   const ALL_NEIGHBORHOODS_TOKEN = '__all__';
   const DEFAULT_NEIGHBORHOOD_FACTORY_COUNT = 13;
@@ -514,8 +516,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   const [showAdmin, setShowAdmin] = useState(false);
   const [showGlobalComponentSearch, setShowGlobalComponentSearch] = useState(false);
   const [componentSearchTerms, setComponentSearchTerms] = useState<Record<string, string>>({}); // Key: ${neighborhoodName}:${componentId}
-  const [neighborhoodTabs, setNeighborhoodTabs] = useState<FactoryNeighborhoodSummary[]>([]);
-  const [activeNeighborhoodTab, setActiveNeighborhoodTab] = useState<string>(DEFAULT_NEIGHBORHOOD_NAME);
+  const [activeNeighborhoodTab, setActiveNeighborhoodTab] = useState<string>('');
   const [loadingNeighborhoodTabs, setLoadingNeighborhoodTabs] = useState(false);
   const [neighborhoodTabsResolved, setNeighborhoodTabsResolved] = useState(false);
   const [neighborhoodFactories, setNeighborhoodFactories] = useState<Record<string, CustomFactory[]>>({});
@@ -531,10 +532,11 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   );
 
   // Tab state — outer app tabs, analytics/data subtabs, and factory tabs scoped per neighborhood
-  const [activeOuterTab, setActiveOuterTab] = useState<string>('analytics');   // outer: analytics | bpmn | data | neighborhoods
+  const [activeOuterTab, setActiveOuterTab] = useState<string>('analytics');   // outer: analytics | valueStreams | bpmn | data | neighborhoods
   const [activeAnalyticsTab, setActiveAnalyticsTab] = useState<string>('dashboard'); // inner Analytics sub-tabs
-  const [activeAnalyticsModel, setActiveAnalyticsModel] = useState<string>(DEFAULT_NEIGHBORHOOD_NAME);
-  const [activeAnalyticsTabsByModel, setActiveAnalyticsTabsByModel] = useState<Record<string, string>>({ [DEFAULT_NEIGHBORHOOD_NAME]: 'dashboard' });
+  const [activeAnalyticsModel, setActiveAnalyticsModel] = useState<string>('');
+  const [activeAnalyticsTabsByModel, setActiveAnalyticsTabsByModel] = useState<Record<string, string>>({});
+  const [activeValueStreamsModel, setActiveValueStreamsModel] = useState<string>('');
   const [activeDiagramNeighborhoodName, setActiveDiagramNeighborhoodName] = useState<string | null>(null);
   const [activeDataTab, setActiveDataTab] = useState<string>('applications');
   const [deleteAllComponentsLoading, setDeleteAllComponentsLoading] = useState(false);
@@ -546,7 +548,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   const getDataTypeTabKey = useCallback((dataType: string) => {
     return String(dataType || '').trim();
   }, []);
-  const [activeFactoryTabs, setActiveFactoryTabs] = useState<Record<string, string>>({ [DEFAULT_NEIGHBORHOOD_NAME]: getModelCatalogTabKey(DEFAULT_NEIGHBORHOOD_NAME) });
+  const [activeFactoryTabs, setActiveFactoryTabs] = useState<Record<string, string>>({});
   const [activeModelComponentTabs, setActiveModelComponentTabs] = useState<Record<string, string>>({});
   const activeTab = activeFactoryTabs[activeNeighborhoodTab]
     || getModelCatalogTabKey(activeNeighborhoodTab);
@@ -617,10 +619,8 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
 
   const getDisplayedFactoryCount = useCallback((neighborhood: FactoryNeighborhoodSummary) => {
     const modelSpecificCount = typeof neighborhood.factoryCount === 'number' ? neighborhood.factoryCount : 0;
-    return neighborhood.name === DEFAULT_NEIGHBORHOOD_NAME
-      ? DEFAULT_NEIGHBORHOOD_FACTORY_COUNT
-      : modelSpecificCount + GLOBAL_MODEL_FACTORY_COUNT;
-  }, [DEFAULT_NEIGHBORHOOD_FACTORY_COUNT, DEFAULT_NEIGHBORHOOD_NAME]);
+    return modelSpecificCount + GLOBAL_MODEL_FACTORY_COUNT;
+  }, [GLOBAL_MODEL_FACTORY_COUNT]);
 
   const getDiagramMetadataConfig = useCallback((neighborhoodName: string) => {
     if (neighborhoodName === DEFAULT_NEIGHBORHOOD_NAME) {
@@ -675,7 +675,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   const factoryDropSideRef = useRef<'before' | 'after'>('after');
   const [factoryDropTarget, setFactoryDropTarget] = useState<{ key: string; side: 'before' | 'after' } | null>(null);
 
-  const OUTER_TAB_KEYS = ['analytics', 'bpmn', 'data', 'neighborhoods'];
+  const OUTER_TAB_KEYS = ['analytics', 'valueStreams', 'bpmn', 'data', 'neighborhoods'];
   const ANALYTICS_TAB_KEYS = ['dashboard', 'reports'];
   const DATA_TAB_KEYS = ['applications', 'servers', 'databases'];
 
@@ -840,15 +840,24 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
     try {
       const data = await getFactoryNeighborhoods();
       setNeighborhoodTabs(data);
+      const fallbackName = data[0]?.name ?? '';
       setActiveNeighborhoodTab((current) => {
         if (current && data.some((item) => item.name === current)) return current;
-        if (data.some((item) => item.name === DEFAULT_NEIGHBORHOOD_NAME)) return DEFAULT_NEIGHBORHOOD_NAME;
-        return data[0]?.name ?? '';
+        return fallbackName;
       });
       setActiveAnalyticsModel((current) => {
         if (current && data.some((item) => item.name === current)) return current;
-        if (data.some((item) => item.name === DEFAULT_NEIGHBORHOOD_NAME)) return DEFAULT_NEIGHBORHOOD_NAME;
-        return data[0]?.name ?? DEFAULT_NEIGHBORHOOD_NAME;
+        return fallbackName;
+      });
+      setActiveAnalyticsTabsByModel((current) => {
+        if (!fallbackName) return current;
+        if (current[fallbackName]) return current;
+        return { ...current, [fallbackName]: 'dashboard' };
+      });
+      setActiveFactoryTabs((current) => {
+        if (!fallbackName) return current;
+        if (current[fallbackName]) return current;
+        return { ...current, [fallbackName]: getModelCatalogTabKey(fallbackName) };
       });
     } catch (error: any) {
       message.error(error.response?.data?.error || error.message || 'Failed to load neighborhoods');
@@ -856,7 +865,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
       setLoadingNeighborhoodTabs(false);
       setNeighborhoodTabsResolved(true);
     }
-  }, [DEFAULT_NEIGHBORHOOD_NAME, message]);
+  }, [getModelCatalogTabKey, message]);
 
   useEffect(() => {
     loadNeighborhoodTabs();
@@ -916,10 +925,12 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
     ? REFERENCE_DATA_NEIGHBORHOOD_NAME
     : activeOuterTab === 'analytics'
       ? (activeAnalyticsModel || DEFAULT_NEIGHBORHOOD_NAME)
+      : activeOuterTab === 'valueStreams'
+        ? (activeValueStreamsModel || DEFAULT_NEIGHBORHOOD_NAME)
       : activeOuterTab === 'bpmn'
         ? (activeDiagramNeighborhoodName || activeNeighborhoodTab)
-      : activeNeighborhoodTab !== DEFAULT_NEIGHBORHOOD_NAME && GLOBAL_SHARED_FACTORY_TAB_KEYS.includes(activeTab)
-        ? DEFAULT_NEIGHBORHOOD_NAME
+      : activeNeighborhoodTab && GLOBAL_SHARED_FACTORY_TAB_KEYS.includes(activeTab)
+        ? activeNeighborhoodTab
         : activeNeighborhoodTab;
 
   useLayoutEffect(() => {
@@ -1004,7 +1015,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
 
   const loadDataTypeSummaries = useCallback(async () => {
     try {
-      const summarySources = [REFERENCE_DATA_NEIGHBORHOOD_NAME, DEFAULT_NEIGHBORHOOD_NAME].filter((value, index, all) => all.indexOf(value) === index);
+      const summarySources = [REFERENCE_DATA_NEIGHBORHOOD_NAME, activeNeighborhoodTab || DEFAULT_NEIGHBORHOOD_NAME].filter((value, index, all) => all.indexOf(value) === index);
       const merged = new Map<string, { key: string; dataType: string; batchCount: number }>();
       for (const neighborhoodName of summarySources) {
         const types = await getDataFactoryTypes(neighborhoodName);
@@ -1033,7 +1044,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
     setLoadingDataFactoriesByType((current) => ({ ...current, [typeKey]: true }));
     try {
       const queryDataType = getDataTypeQueryName(dataType);
-      const dataSources = [REFERENCE_DATA_NEIGHBORHOOD_NAME, DEFAULT_NEIGHBORHOOD_NAME].filter((value, index, all) => all.indexOf(value) === index);
+      const dataSources = [REFERENCE_DATA_NEIGHBORHOOD_NAME, activeNeighborhoodTab || DEFAULT_NEIGHBORHOOD_NAME].filter((value, index, all) => all.indexOf(value) === index);
       let factories: CustomFactory[] = [];
       for (const neighborhoodName of dataSources) {
         factories = await getDataFactories(neighborhoodName, queryDataType);
@@ -1880,15 +1891,25 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
     [message],
   );
 
-  const toggleCanvasDiagram = useCallback(async (id: string) => {
+  const toggleCanvasDiagram = useCallback(async (id: string, neighborhoodName?: string) => {
     setActiveOuterTab('bpmn');
     setSelectedDiagramIds((current) => {
+      const shouldReplace = Boolean(
+        neighborhoodName
+        && activeDiagramNeighborhoodName
+        && neighborhoodName !== activeDiagramNeighborhoodName
+      );
       const exists = current.includes(id);
-      const next = exists ? current.filter((diagramId) => diagramId !== id) : [...current, id];
+      const next = shouldReplace
+        ? [id]
+        : (exists ? current.filter((diagramId) => diagramId !== id) : [...current, id]);
+      if (shouldReplace) {
+        setActiveDiagramNeighborhoodName(neighborhoodName || null);
+      }
       void rebuildCompositeCanvas(next);
       return next;
     });
-  }, [rebuildCompositeCanvas]);
+  }, [activeDiagramNeighborhoodName, rebuildCompositeCanvas]);
 
   const openDiagramInCanvas = useCallback(
     async (id: string) => {
@@ -2240,6 +2261,26 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
     });
   }, [DEFAULT_NEIGHBORHOOD_NAME, neighborhoodTabOrder, neighborhoodTabs]);
 
+  const sortedValueStreamModels = useMemo(() => {
+    const sourceModels = neighborhoodTabs.length
+      ? neighborhoodTabs
+      : [{ name: DEFAULT_NEIGHBORHOOD_NAME, factoryCount: 0 } as FactoryNeighborhoodSummary];
+
+    return [...sourceModels].sort((left, right) => {
+      const leftIndex = neighborhoodTabOrder.indexOf(left.name);
+      const rightIndex = neighborhoodTabOrder.indexOf(right.name);
+      const safeLeft = leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex;
+      const safeRight = rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex;
+      return safeLeft - safeRight;
+    });
+  }, [DEFAULT_NEIGHBORHOOD_NAME, neighborhoodTabOrder, neighborhoodTabs]);
+
+  const valueStreamModelTabItems = useMemo(() => sortedValueStreamModels.map((model) => ({
+    key: model.name,
+    label: neighborhoodTabLabel(model.name, model.name),
+    children: <ValueStreamsMatrix neighborhoodName={model.name} />,
+  })), [neighborhoodTabLabel, sortedValueStreamModels]);
+
   const analyticsModelTabItems = useMemo(() => sortedAnalyticsModels.map((model) => ({
     key: model.name,
     label: neighborhoodTabLabel(model.name, model.name),
@@ -2386,7 +2427,6 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                     const remaining = neighborhoodTabs
                       .map((tab) => tab.name)
                       .filter((tabName) => tabName !== name);
-                    if (remaining.includes(DEFAULT_NEIGHBORHOOD_NAME)) return DEFAULT_NEIGHBORHOOD_NAME;
                     return remaining[0] || '';
                   });
                   setActiveOuterTab('neighborhoods');
@@ -2633,6 +2673,18 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                 ),
               },
               {
+                key: 'valueStreams',
+                label: outerTabLabel('valueStreams', <span><BranchesOutlined /> Value Streams</span>),
+                children: (
+                  <Tabs
+                    className="factory-tabs"
+                    activeKey={activeValueStreamsModel}
+                    onChange={setActiveValueStreamsModel}
+                    items={valueStreamModelTabItems}
+                  />
+                ),
+              },
+              {
                 key: 'bpmn',
                 label: outerTabLabel('bpmn', <span><PartitionOutlined /> Diagrams</span>),
                 children: (
@@ -2666,12 +2718,15 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                           <DiagramBrowser
                             frameworks={neighborhoodTabs}
                             selectedDiagramIds={selectedDiagramIds}
-                            onToggleDiagram={async (id) => {
+                            onToggleDiagram={async (id, neighborhoodName) => {
+                              if (neighborhoodName) {
+                                setApiNeighborhoodScope(neighborhoodName);
+                              }
                               const selected = await getDiagram(id);
                               if ((selected as any).neighborhoodName) {
                                 setApiNeighborhoodScope((selected as any).neighborhoodName);
                               }
-                              await toggleCanvasDiagram(id);
+                              await toggleCanvasDiagram(id, (selected as any).neighborhoodName || neighborhoodName);
                             }}
                           />
                         </div>

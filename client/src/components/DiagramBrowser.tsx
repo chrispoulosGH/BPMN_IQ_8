@@ -82,7 +82,7 @@ function normalizeFacetKey(value: string) {
 interface DiagramBrowserProps {
   frameworks: FactoryNeighborhoodSummary[];
   selectedDiagramIds: string[];
-  onToggleDiagram: (id: string) => void;
+  onToggleDiagram: (id: string, neighborhoodName?: string) => void;
 }
 
 export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggleDiagram }: DiagramBrowserProps) {
@@ -252,14 +252,24 @@ export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggl
           {filteredDiagrams.map((diagram) => {
             const selected = selectedDiagramIds.includes(diagram._id);
             const framework = diagram.neighborhoodName || 'Unassigned framework';
-            const hierarchy = [diagram.lineOfBusiness, diagram.channel, diagram.product, diagram.domain, diagram.subdomain]
+            const hierarchy = [
+              diagram.lineOfBusiness,
+              diagram.channel,
+              diagram.product,
+              diagram.domain,
+              diagram.subdomain,
+              diagram.valueStream,
+              diagram.journey,
+              diagram.businessCapability,
+              diagram.businessFlow || diagram.name,
+            ]
               .filter(Boolean)
               .join(' | ');
             return (
               <button
                 key={diagram._id}
                 type="button"
-                onClick={() => onToggleDiagram(diagram._id)}
+                onClick={() => onToggleDiagram(diagram._id, diagram.neighborhoodName || undefined)}
                 className={`min-h-[118px] border p-3 text-left transition-colors ${selected
                   ? 'border-teal-700 bg-teal-100 shadow-sm'
                   : 'border-slate-200 bg-white hover:border-teal-400 hover:bg-teal-50'}`}

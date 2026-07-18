@@ -140,6 +140,26 @@ export interface FlowBreadcrumb { name: string; lineOfBusiness: string | null; c
 export const getFlowBreadcrumbs = (names: string[]): Promise<FlowBreadcrumb[]> =>
   api.get('/diagrams/flow-breadcrumbs', { params: { names: names.join(',') } }).then((r) => r.data);
 
+export interface ValueStreamRelationshipLink {
+  capability: string;
+  valueStream: string;
+  count: number;
+}
+
+export interface ValueStreamRelationshipData {
+  totalDiagrams: number;
+  diagramCount: number;
+  valueStreamCount: number;
+  capabilityCount: number;
+  linkCount: number;
+  valueStreams: Array<{ name: string; count: number; rollupLabel: string }>;
+  capabilities: Array<{ name: string; count: number }>;
+  links: ValueStreamRelationshipLink[];
+}
+
+export const getDashboardValueStreamRelationships = (neighborhoodName?: string): Promise<ValueStreamRelationshipData> =>
+  api.get('/dashboard/value-stream-relationships', scopedRequestConfig(neighborhoodName)).then((r) => r.data);
+
 // ── Reference Data CRUD (for ReferenceFactory) ──────────────
 export const getRefItems = (collection: string): Promise<RefItem[]> =>
   api.get(`/tasks/reference/${collection}`).then((r) => r.data);
@@ -322,8 +342,8 @@ export const getCanonicalFactories = async (neighborhoodName: string, fetchFirst
   return out;
 };
 
-export const getComponentHierarchies = (neighborhoodName?: string, componentName: string = 'Application', modelName?: string): Promise<import('./types').HierarchiesResponse> => {
-  const params = { neighborhoodName, componentName } as any;
+export const getComponentHierarchies = (neighborhoodName?: string, componentName: string = 'Application', modelName?: string, compact = false): Promise<import('./types').HierarchiesResponse> => {
+  const params = { neighborhoodName, componentName, ...(compact ? { compact: true } : {}) } as any;
   const modelConfig = scopedModelRequestConfig(modelName) || {};
   return api.get('/custom-factories/hierarchies/tree', { params, ...(modelConfig || {}) }).then((r) => r.data);
 };
