@@ -46,6 +46,7 @@ export default function ComponentsViewer({
   const selectedNodeRef = useRef<HTMLDivElement>(null);
   const horizontalTreeContainerRef = useRef<HTMLDivElement>(null);
   const horizontalTreeNodeRefMap = useRef<Map<React.Key, HTMLButtonElement>>(new Map());
+  const pendingHorizontalRevealKeyRef = useRef<React.Key | null>(null);
 
   // Load hierarchies from ComponentSearchIndex
   // Load hierarchies for all component types (not just leaf)
@@ -516,6 +517,7 @@ export default function ComponentsViewer({
             const parentNode = pathToNode.get(parentPath);
             if (parentNode && parentNode.children) {
               parentNode.children.push(newNode);
+              parentNode.isLeaf = false;
               if (node.rowName === 'Care') {
                 console.log(`[TreeBuilder] ✅ ADDED Care as child of:`, parentPath);
               }
@@ -809,11 +811,16 @@ export default function ComponentsViewer({
     }
   }, [components]);
 
-  // Auto-scroll horizontal tree to keep selected/expanded node centered
+  // Auto-scroll horizontal tree to keep the selected branch and newly revealed column visible.
   useEffect(() => {
     if (viewMode !== 'tree-horizontal') return;
-    
-    const buttonToCenter = selectedNodeKey ? horizontalTreeNodeRefMap.current.get(selectedNodeKey) : null;
+
+    const revealKey = pendingHorizontalRevealKeyRef.current;
+    const buttonToCenter = revealKey
+      ? horizontalTreeNodeRefMap.current.get(revealKey)
+      : selectedNodeKey
+        ? horizontalTreeNodeRefMap.current.get(selectedNodeKey)
+        : null;
     if (buttonToCenter && horizontalTreeContainerRef.current) {
       const rect = buttonToCenter.getBoundingClientRect();
       const containerRect = horizontalTreeContainerRef.current.getBoundingClientRect();
@@ -828,6 +835,8 @@ export default function ComponentsViewer({
         top: Math.max(0, targetScrollTop),
         behavior: 'smooth',
       });
+
+      pendingHorizontalRevealKeyRef.current = null;
     }
   }, [selectedNodeKey, expandedKeys, viewMode]);
 
@@ -835,11 +844,22 @@ export default function ComponentsViewer({
   const filteredTreeData = useMemo<DataNode[]>(() => {
     if (!searchText.trim()) return treeData;
 
-    const normalized = searchText.toLowerCase();
+    const normalized = searchText.trim().toLowerCase();
 
     const filterNode = (node: DataNode): DataNode | null => {
-      const nodeText = String(node.title).toLowerCase();
+      const nodeData = (node as DataNode & {
+        data?: { rowName?: string };
+      }).data;
+      const nodeText = String(nodeData?.rowName ?? '').toLowerCase();
       const matches = nodeText.includes(normalized);
+
+      if (matches) {
+        return {
+          ...node,
+          children: [],
+          isLeaf: true,
+        };
+      }
 
       const filteredChildren = node.children
         ? node.children
@@ -847,7 +867,7 @@ export default function ComponentsViewer({
             .filter((child) => child !== null) as DataNode[]
         : undefined;
 
-      if (matches || (filteredChildren && filteredChildren.length > 0)) {
+      if (filteredChildren && filteredChildren.length > 0) {
         return {
           ...node,
           children: filteredChildren,
@@ -1184,6 +1204,17 @@ export default function ComponentsViewer({
                 type="button"
                 onClick={() => {
                   handleNodeSelect([p.node.key]);
+                  if (hasChildren) {
+                    if (!isExpanded) {
+                      const firstChildKey = p.node.children?.[0]?.key;
+                      pendingHorizontalRevealKeyRef.current = firstChildKey || p.node.key;
+                    }
+                    setExpandedKeys((previousKeys) =>
+                      previousKeys.includes(p.node.key)
+                        ? previousKeys.filter((key) => key !== p.node.key)
+                        : [...previousKeys, p.node.key]
+                    );
+                  }
                 }}
                 style={{
                   position: 'absolute',
@@ -1242,6 +1273,11 @@ export default function ComponentsViewer({
                   <span
                     onClick={(e) => {
                       e.stopPropagation();
+                      if (!isExpanded) {
+                        const firstChildKey = p.node.children?.[0]?.key;
+                        pendingHorizontalRevealKeyRef.current = firstChildKey || p.node.key;
+                        setSelectedNodeKey(p.node.key);
+                      }
                       setExpandedKeys(prev =>
                         prev.includes(p.node.key)
                           ? prev.filter(k => k !== p.node.key)

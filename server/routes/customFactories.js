@@ -3571,7 +3571,16 @@ router.get('/hierarchies/tree', async (req, res) => {
     entries.forEach((entry) => {
       const hierarchies = entry.cachedHierarchies || [];
 
-      const selectedHierarchies = compact ? hierarchies.slice(0, 1) : hierarchies;
+      const selectedHierarchies = compact
+        ? Array.from(new Map(hierarchies.map((hierarchy) => {
+            const parentNode = hierarchy.length > 1 ? hierarchy[hierarchy.length - 2] : null;
+            const currentNode = hierarchy[hierarchy.length - 1] || null;
+            const relationshipKey = parentNode
+              ? `${parentNode.componentName}:${parentNode.rowId || parentNode.rowName}->${currentNode?.componentName}:${currentNode?.rowId || currentNode?.rowName}`
+              : `root:${currentNode?.componentName}:${currentNode?.rowId || currentNode?.rowName}`;
+            return [relationshipKey, hierarchy];
+          })).values())
+        : hierarchies;
       selectedHierarchies.forEach((hierarchy) => {
         const containsComponent = hierarchy.some(
           (node) => compact || String(node.componentName || '').trim().toLowerCase() === componentName.toLowerCase()
