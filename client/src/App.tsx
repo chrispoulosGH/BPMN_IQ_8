@@ -52,7 +52,6 @@ import {
 import BpmnEditor, { EMPTY_DIAGRAM, type BpmnEditorHandle } from './components/BpmnEditor';
 import DiagramBrowser from './components/DiagramBrowser';
 import SystemComponentsImportButton from './components/SystemComponentsImportButton';
-import DiagramList from './components/DiagramList';
 import SaveModal from './components/SaveModal';
 import AppMatchModal, { computeAppMatches, type AppMatchResult } from './components/AppMatchModal';
 import CapabilityMatchPanel from './components/CapabilityMatchPanel';
@@ -70,7 +69,7 @@ import CapabilitiesFactory from './components/CapabilitiesFactory';
 import ActorFactory from './components/ActorFactory';
 import BpmnFactory from './components/BpmnFactory';
 import Dashboard from './components/Dashboard';
-import ValueStreamsMatrix from './components/ValueStreamsMatrix';
+import ValueStreamsMatrix, { type ValueStreamCapabilitySelection, type ValueStreamFlowSelection, type ValueStreamRollupSelection } from './components/ValueStreamsMatrix';
 import ReportsPanel from './components/ReportsPanel';
 import Login from './components/Login';
 import AdminPanel from './components/AdminPanel';
@@ -92,6 +91,78 @@ interface ActiveDiagram {
   neighborhoodName?: string;
   /** 'db' = loaded from DB; 'local-match' = local file whose BF name already exists in DB */
   source?: 'db' | 'local-match';
+}
+
+interface SelectedValueStreamEntity {
+  type: 'businessCapability' | 'valueStream' | 'rollup';
+  title: string;
+  neighborhoodName: string;
+  domain: string;
+  subdomain: string;
+  valueStreamName?: string;
+  capabilityName?: string;
+  relationshipCount: number;
+  secondaryCountLabel?: string;
+  metadata: Array<{ label: string; value: string }>;
+}
+
+function normalizeLookupToken(value: unknown): string {
+  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function isBusinessCapabilityFactory(factory: CustomFactory): boolean {
+  return [factory.name, factory.componentType, factory.dataType, factory.sourceColumnName]
+    .map((value) => normalizeLookupToken(value))
+    .some((value) => value === 'businesscapability' || value === 'businesscapabilities');
+}
+
+function getCapabilityMetadata(factory: CustomFactory | null, capabilityName: string): Array<{ label: string; value: string }> {
+  if (!factory) return [];
+
+  const target = normalizeLookupToken(capabilityName);
+  if (!target) return [];
+
+  const preferredKeys = [factory.sourceColumnName, 'name', 'business capability', 'business_capability']
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+
+  const findMatch = (values: Record<string, unknown>) => {
+    for (const key of preferredKeys) {
+      if (normalizeLookupToken(values[key]) === target) return true;
+    }
+    return Object.values(values || {}).some((value) => normalizeLookupToken(value) === target);
+  };
+
+  const matchingRow = factory.rows.find((row) => findMatch(row.values || {}));
+  if (!matchingRow) return [];
+
+  return Object.entries(matchingRow.values || {})
+    .map(([label, value]) => ({ label, value: String(value ?? '').trim() }))
+    .filter((entry) => entry.value);
+}
+
+function getFactoryMetadata(factory: CustomFactory | null, targetName: string): Array<{ label: string; value: string }> {
+  if (!factory) return [];
+
+  const target = normalizeLookupToken(targetName);
+  if (!target) return [];
+
+  const preferredKeys = [factory.sourceColumnName, 'name', factory.name]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+
+  const matchingRow = factory.rows.find((row) => {
+    const values = row.values || {};
+    for (const key of preferredKeys) {
+      if (normalizeLookupToken(values[key]) === target) return true;
+    }
+    return Object.values(values || {}).some((value) => normalizeLookupToken(value) === target);
+  });
+  if (!matchingRow) return [];
+
+  return Object.entries(matchingRow.values || {})
+    .map(([label, value]) => ({ label, value: String(value ?? '').trim() }))
+    .filter((entry) => entry.value);
 }
 
 function extractTaskNames(xml: string): string[] {
@@ -538,7 +609,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   const [activeAnalyticsTabsByModel, setActiveAnalyticsTabsByModel] = useState<Record<string, string>>({});
   const [activeValueStreamsModel, setActiveValueStreamsModel] = useState<string>('');
   const [activeDiagramNeighborhoodName, setActiveDiagramNeighborhoodName] = useState<string | null>(null);
-  const [activeDataTab, setActiveDataTab] = useState<string>('applications');
+  const [activeDataTab, setActiveDataTab] = useState<string>('databases');
   const [deleteAllComponentsLoading, setDeleteAllComponentsLoading] = useState(false);
   const [deleteComponentTypeLoading, setDeleteComponentTypeLoading] = useState<string | null>(null);
   const getModelCatalogTabKey = useCallback((modelName: string) => `modelCatalog:${modelName}`, []);
@@ -546,7 +617,22 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   const getModelBpmnComponentTabKey = useCallback((modelName: string) => `modelBpmnComponent:${modelName}`, []);
   const getComponentSearchTabKey = useCallback((modelName: string) => `componentSearch:${modelName}`, []);
   const getDataTypeTabKey = useCallback((dataType: string) => {
-    return String(dataType || '').trim();
+    const normalized = String(dataType || '').trim().toLowerCase();
+    if (!normalized) return '';
+
+    const aliases: Record<string, string> = {
+      application: 'applications',
+      applications: 'applications',
+      server: 'servers',
+      servers: 'servers',
+      db: 'databases',
+      database: 'databases',
+      databases: 'databases',
+      databaseinstance: 'databases',
+      databaseinstances: 'databases',
+    };
+
+    return aliases[normalized] || normalized;
   }, []);
   const [activeFactoryTabs, setActiveFactoryTabs] = useState<Record<string, string>>({});
   const [activeModelComponentTabs, setActiveModelComponentTabs] = useState<Record<string, string>>({});
@@ -677,7 +763,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
 
   const OUTER_TAB_KEYS = ['analytics', 'valueStreams', 'bpmn', 'data', 'neighborhoods'];
   const ANALYTICS_TAB_KEYS = ['dashboard', 'reports'];
-  const DATA_TAB_KEYS = ['applications', 'servers', 'databases'];
+  const DATA_TAB_KEYS = ['databases', 'applications', 'servers'];
 
   const [outerTabOrder, setOuterTabOrder] = useState<string[]>(() => {
     try {
@@ -884,6 +970,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   // Build the list of Data subtabs from the summary list, then lazily load rows per active type.
   const visibleDataTabs = useMemo(() => {
     const entries = dataTypeSummaries
+      .filter((summary) => DATA_TAB_KEYS.includes(summary.key))
       .map((summary) => {
         const key = summary.key;
         const groupFactories = dataFactoriesByType[key] || [];
@@ -910,7 +997,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
       return ia - ib;
     });
     return entries;
-  }, [dataFactoriesByType, dataTypeSummaries, dataTabOrder]);
+  }, [DATA_TAB_KEYS, dataFactoriesByType, dataTypeSummaries, dataTabOrder]);
 
   // Validate activeDataTab when the set of visible data tabs changes
   useEffect(() => {
@@ -1159,7 +1246,6 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
 
   // Sidebar
   const [refreshTick, setRefreshTick] = useState(0);
-  const [searchQuery, setSearchQuery] = useState('');
   const [rightCollapsed, setRightCollapsed] = useState(false);
   const [rightWidth, setRightWidth] = useState(320);
   const rightResizing = useRef(false);
@@ -1208,6 +1294,8 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   const [capLoading, setCapLoading] = useState(false);
   const [selectedCaps, setSelectedCaps] = useState<CapabilityMatch[]>([]);
   const [selectedCapability, setSelectedCapability] = useState<CapabilityMatch | null>(null);
+  const [selectedValueStreamEntity, setSelectedValueStreamEntity] = useState<SelectedValueStreamEntity | null>(null);
+  const [selectedValueStreamEntityLoading, setSelectedValueStreamEntityLoading] = useState(false);
   const [capError, setCapError] = useState<string | null>(null);
   const [savedCaps, setSavedCaps] = useState<CapabilityMatch[]>([]);
   const savedXmlRef = useRef<string>(EMPTY_DIAGRAM);
@@ -1231,6 +1319,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   const [factoryAdd, setFactoryAdd] = useState<Record<string, string | TaskAddData>>({});
   const [modelCatalogSearchRequest, setModelCatalogSearchRequest] = useState<Record<string, { text: string; column?: string; exact?: boolean; trigger: number }>>({});
   const [requestedApplicationDetail, setRequestedApplicationDetail] = useState<{ correlationId: string; nonce: number } | null>(null);
+  const [diagramBrowserFilterRequest, setDiagramBrowserFilterRequest] = useState<{ frameworks?: string[]; filters?: Record<string, string[]>; nonce: number } | null>(null);
   // Selected task in diagram (for right sidebar link)
   const [selectedDiagramTask, setSelectedDiagramTask] = useState<{ name: string; id: string } | null>(null);
 
@@ -1507,7 +1596,174 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   const handleCapabilityClick = useCallback((capability: CapabilityMatch, nextSelected: CapabilityMatch[]) => {
     setSelectedCaps(nextSelected);
     setSelectedCapability(capability);
+    setSelectedValueStreamEntity(null);
   }, []);
+
+  const handleValueStreamCapabilitySelect = useCallback(async (selection: ValueStreamCapabilitySelection) => {
+    setSelectedCapability(null);
+    setSelectedValueStreamEntityLoading(true);
+    setSelectedValueStreamEntity({
+      type: 'businessCapability',
+      title: selection.capabilityName,
+      neighborhoodName: selection.neighborhoodName,
+      domain: selection.domain,
+      subdomain: selection.subdomain,
+      valueStreamName: selection.valueStreamName,
+      capabilityName: selection.capabilityName,
+      relationshipCount: selection.relationshipCount,
+      metadata: [],
+    });
+
+    try {
+      const factories = await getCustomFactories(selection.neighborhoodName, selection.neighborhoodName);
+      const capabilityFactory = factories.find(isBusinessCapabilityFactory) || null;
+      const metadata = getCapabilityMetadata(capabilityFactory, selection.capabilityName);
+      setSelectedValueStreamEntity({
+        type: 'businessCapability',
+        title: selection.capabilityName,
+        neighborhoodName: selection.neighborhoodName,
+        domain: selection.domain,
+        subdomain: selection.subdomain,
+        valueStreamName: selection.valueStreamName,
+        capabilityName: selection.capabilityName,
+        relationshipCount: selection.relationshipCount,
+        metadata,
+      });
+    } catch {
+      setSelectedValueStreamEntity({
+        type: 'businessCapability',
+        title: selection.capabilityName,
+        neighborhoodName: selection.neighborhoodName,
+        domain: selection.domain,
+        subdomain: selection.subdomain,
+        valueStreamName: selection.valueStreamName,
+        capabilityName: selection.capabilityName,
+        relationshipCount: selection.relationshipCount,
+        metadata: [],
+      });
+    } finally {
+      setSelectedValueStreamEntityLoading(false);
+    }
+  }, []);
+
+  const handleValueStreamRollupSelect = useCallback(async (selection: ValueStreamRollupSelection) => {
+    setSelectedCapability(null);
+    setSelectedValueStreamEntityLoading(true);
+    setSelectedValueStreamEntity({
+      type: 'rollup',
+      title: `${selection.domain} | ${selection.subdomain}`,
+      neighborhoodName: selection.neighborhoodName,
+      domain: selection.domain,
+      subdomain: selection.subdomain,
+      relationshipCount: selection.relationshipCount,
+      secondaryCountLabel: `${selection.valueStreamCount} value stream${selection.valueStreamCount === 1 ? '' : 's'}`,
+      metadata: [],
+    });
+
+    try {
+      const factories = await getCustomFactories(selection.neighborhoodName, selection.neighborhoodName);
+      const domainFactory = factories.find((factory) => normalizeLookupToken(factory.name) === 'domain') || null;
+      const subdomainFactory = factories.find((factory) => normalizeLookupToken(factory.name) === 'subdomain') || null;
+      const metadata = [
+        ...getFactoryMetadata(domainFactory, selection.domain),
+        ...getFactoryMetadata(subdomainFactory, selection.subdomain),
+      ];
+      setSelectedValueStreamEntity({
+        type: 'rollup',
+        title: `${selection.domain} | ${selection.subdomain}`,
+        neighborhoodName: selection.neighborhoodName,
+        domain: selection.domain,
+        subdomain: selection.subdomain,
+        relationshipCount: selection.relationshipCount,
+        secondaryCountLabel: `${selection.valueStreamCount} value stream${selection.valueStreamCount === 1 ? '' : 's'}`,
+        metadata,
+      });
+    } catch {
+      setSelectedValueStreamEntity({
+        type: 'rollup',
+        title: `${selection.domain} | ${selection.subdomain}`,
+        neighborhoodName: selection.neighborhoodName,
+        domain: selection.domain,
+        subdomain: selection.subdomain,
+        relationshipCount: selection.relationshipCount,
+        secondaryCountLabel: `${selection.valueStreamCount} value stream${selection.valueStreamCount === 1 ? '' : 's'}`,
+        metadata: [],
+      });
+    } finally {
+      setSelectedValueStreamEntityLoading(false);
+    }
+  }, []);
+
+  const handleValueStreamFlowSelect = useCallback(async (selection: ValueStreamFlowSelection) => {
+    setSelectedCapability(null);
+    setSelectedValueStreamEntityLoading(true);
+    setSelectedValueStreamEntity({
+      type: 'valueStream',
+      title: selection.valueStreamName,
+      neighborhoodName: selection.neighborhoodName,
+      domain: selection.domain,
+      subdomain: selection.subdomain,
+      valueStreamName: selection.valueStreamName,
+      relationshipCount: selection.relationshipCount,
+      metadata: [],
+    });
+
+    try {
+      const factories = await getCustomFactories(selection.neighborhoodName, selection.neighborhoodName);
+      const valueStreamFactory = factories.find((factory) => normalizeLookupToken(factory.name) === 'valuestream') || null;
+      const metadata = getFactoryMetadata(valueStreamFactory, selection.valueStreamName);
+      setSelectedValueStreamEntity({
+        type: 'valueStream',
+        title: selection.valueStreamName,
+        neighborhoodName: selection.neighborhoodName,
+        domain: selection.domain,
+        subdomain: selection.subdomain,
+        valueStreamName: selection.valueStreamName,
+        relationshipCount: selection.relationshipCount,
+        metadata,
+      });
+    } catch {
+      setSelectedValueStreamEntity({
+        type: 'valueStream',
+        title: selection.valueStreamName,
+        neighborhoodName: selection.neighborhoodName,
+        domain: selection.domain,
+        subdomain: selection.subdomain,
+        valueStreamName: selection.valueStreamName,
+        relationshipCount: selection.relationshipCount,
+        metadata: [],
+      });
+    } finally {
+      setSelectedValueStreamEntityLoading(false);
+    }
+  }, []);
+
+  const handleOpenCapabilityDiagrams = useCallback(() => {
+    if (!selectedValueStreamEntity) return;
+
+    setSelectedDiagramIds([]);
+    void rebuildCompositeCanvas([]);
+    setSelectedDiagramTask(null);
+
+    const filters: Record<string, string[]> = {};
+    if (selectedValueStreamEntity.type === 'businessCapability' && selectedValueStreamEntity.capabilityName) {
+      filters.businessCapability = [selectedValueStreamEntity.capabilityName];
+    }
+    if (selectedValueStreamEntity.type === 'valueStream' && selectedValueStreamEntity.valueStreamName) {
+      filters.valueStream = [selectedValueStreamEntity.valueStreamName];
+    }
+    if (selectedValueStreamEntity.type === 'rollup') {
+      filters.domain = [selectedValueStreamEntity.domain];
+      filters.subdomain = [selectedValueStreamEntity.subdomain];
+    }
+
+    setDiagramBrowserFilterRequest({
+      frameworks: [selectedValueStreamEntity.neighborhoodName],
+      filters,
+      nonce: Date.now(),
+    });
+    setActiveOuterTab('bpmn');
+  }, [rebuildCompositeCanvas, selectedValueStreamEntity]);
 
   const handleViewCapabilityInCatalog = useCallback((capability: CapabilityMatch) => {
     const clickedName = getCapabilityFocusName(capability.capabilityName);
@@ -1911,33 +2167,6 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
     });
   }, [activeDiagramNeighborhoodName, rebuildCompositeCanvas]);
 
-  const openDiagramInCanvas = useCallback(
-    async (id: string) => {
-      setActiveOuterTab('bpmn');
-      await toggleCanvasDiagram(id);
-    },
-    [toggleCanvasDiagram],
-  );
-
-  const handleDiagramDeleted = useCallback(
-    (deletedId: string) => {
-      if (activeDiagram?._id !== deletedId) return;
-      setActiveDiagram(null);
-      setSelectedDiagramIds((current) => current.filter((diagramId) => diagramId !== deletedId));
-      setCurrentXml(EMPTY_DIAGRAM);
-      setImportTrigger((t) => t + 1);
-      setDiagramMeta({});
-      setActiveFileName(null);
-      setCanvasDiagramName(null);
-      setIsDirty(false);
-      setCapMatches([]);
-      setSelectedCaps([]);
-      setSavedCaps([]);
-      message.info('Diagram deleted. Canvas reset to blank.');
-    },
-    [activeDiagram, message],
-  );
-
   // Canvas tab diagram search handler
   const handleCanvasDiagramSearch = useCallback((value: string) => {
     if (canvasSearchTimer.current) clearTimeout(canvasSearchTimer.current);
@@ -2278,8 +2507,19 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   const valueStreamModelTabItems = useMemo(() => sortedValueStreamModels.map((model) => ({
     key: model.name,
     label: neighborhoodTabLabel(model.name, model.name),
-    children: <ValueStreamsMatrix neighborhoodName={model.name} />,
-  })), [neighborhoodTabLabel, sortedValueStreamModels]);
+    children: (
+      <ValueStreamsMatrix
+        neighborhoodName={model.name}
+        onCapabilitySelect={handleValueStreamCapabilitySelect}
+        onRollupSelect={handleValueStreamRollupSelect}
+        onValueStreamSelect={handleValueStreamFlowSelect}
+        selectedCapabilityName={selectedValueStreamEntity?.type === 'businessCapability' ? selectedValueStreamEntity.capabilityName || null : null}
+        selectedValueStreamName={selectedValueStreamEntity?.valueStreamName || null}
+        selectedRollupKey={selectedValueStreamEntity?.type === 'rollup' ? `${selectedValueStreamEntity.domain}|||${selectedValueStreamEntity.subdomain}` : null}
+        selectedValueStreamKey={selectedValueStreamEntity?.type === 'valueStream' && selectedValueStreamEntity.valueStreamName ? `${selectedValueStreamEntity.valueStreamName}|||${selectedValueStreamEntity.domain} | ${selectedValueStreamEntity.subdomain}` : null}
+      />
+    ),
+  })), [handleValueStreamCapabilitySelect, handleValueStreamFlowSelect, handleValueStreamRollupSelect, neighborhoodTabLabel, selectedValueStreamEntity, sortedValueStreamModels]);
 
   const analyticsModelTabItems = useMemo(() => sortedAnalyticsModels.map((model) => ({
     key: model.name,
@@ -2321,28 +2561,39 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
       label: dataTabLabel(componentType, <span>{getDataTypeDisplayName(componentType)}</span>),
       children: renderScrollablePane(
         isApplicationsTab ? (
-          isLoaded ? (
-            <ApplicationFactory
-              defaultSearch={factorySearch[componentType]}
-              defaultAdd={typeof factoryAdd[componentType] === 'string' ? factoryAdd[componentType] : ''}
-              userRole={user.role}
-              readOnly={readOnly}
-              dataColumns={effectiveDataColumns}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <SystemComponentSummary
+              dataType={getDataTypeDisplayName(componentType)}
+              batchCount={tab.batchCount}
               dataRows={loadedFactories.flatMap((factory) => factory.rows || [])}
-              foreignKeyColumns={loadedFactories.flatMap((factory) => factory.foreignKeyColumns || [])}
-              requestedDetailRequest={requestedApplicationDetail}
-              onNavigateToFactory={(navTab: string, search: string) => {
-                setFactorySearch((prev) => ({ ...prev, [navTab]: search }));
-                setActiveDataTab(navTab);
-              }}
-              onDeleteAllComponents={() => handleDeleteDataComponentType(componentType, Array.from(new Set(loadedFactories.map((factory) => String(factory.dataType || factory.componentType || factory.name || '').trim()).filter(Boolean))))}
-              deleteLoading={deleteComponentTypeLoading === componentType}
+              dataColumns={tab.dataColumns}
+              isLoaded={isLoaded}
+              neighborhoodName={REFERENCE_DATA_NEIGHBORHOOD_NAME}
+              readOnly
             />
-          ) : (
-            <div className="flex min-h-[240px] items-center justify-center">
-              <Spin size="large" tip={`Loading ${getDataTypeDisplayName(componentType)}...`} />
-            </div>
-          )
+            {isLoaded ? (
+              <ApplicationFactory
+                defaultSearch={factorySearch[componentType]}
+                defaultAdd={typeof factoryAdd[componentType] === 'string' ? factoryAdd[componentType] : ''}
+                userRole={user.role}
+                readOnly={readOnly}
+                dataColumns={effectiveDataColumns}
+                dataRows={loadedFactories.flatMap((factory) => factory.rows || [])}
+                foreignKeyColumns={loadedFactories.flatMap((factory) => factory.foreignKeyColumns || [])}
+                requestedDetailRequest={requestedApplicationDetail}
+                onNavigateToFactory={(navTab: string, search: string) => {
+                  setFactorySearch((prev) => ({ ...prev, [navTab]: search }));
+                  setActiveDataTab(navTab);
+                }}
+                onDeleteAllComponents={() => handleDeleteDataComponentType(componentType, Array.from(new Set(loadedFactories.map((factory) => String(factory.dataType || factory.componentType || factory.name || '').trim()).filter(Boolean))))}
+                deleteLoading={deleteComponentTypeLoading === componentType}
+              />
+            ) : (
+              <div className="flex min-h-[240px] items-center justify-center">
+                <Spin size="large" tip={`Loading ${getDataTypeDisplayName(componentType)}...`} />
+              </div>
+            )}
+          </div>
         ) : (
           <SystemComponentSummary
             dataType={getDataTypeDisplayName(componentType)}
@@ -2718,6 +2969,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                           <DiagramBrowser
                             frameworks={neighborhoodTabs}
                             selectedDiagramIds={selectedDiagramIds}
+                            externalFilterRequest={diagramBrowserFilterRequest}
                             onToggleDiagram={async (id, neighborhoodName) => {
                               if (neighborhoodName) {
                                 setApiNeighborhoodScope(neighborhoodName);
@@ -2905,7 +3157,6 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
             />
           )}
           <div className="flex flex-col h-full overflow-hidden">
-            {/* Collapse toggle */}
             <div className="flex justify-end p-1">
               <Button
                 size="small"
@@ -2915,85 +3166,78 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                 title="Collapse sidebar"
               />
             </div>
-            {/* ─ Capability Match Card ─ */}
-            <Card
-              size="small"
-              className="sidebar-card !mb-3"
-              title={
-                <span className="flex items-center gap-2 text-sm font-medium">
-                  <ThunderboltOutlined className="text-purple-500" /> Business Capabilties
-                </span>
-              }
-              extra={
-                <Button
-                  size="small"
-                  type="primary"
-                  icon={<ThunderboltOutlined />}
-                  loading={capLoading}
-                  onClick={() => runCapabilityMatch(currentXml)}
-                  disabled={currentXml === EMPTY_DIAGRAM}
-                >
-                  Match
-                </Button>
-              }
-            >
-              <CapabilityMatchPanel
-                matches={capMatches}
-                loading={capLoading}
-                selected={selectedCaps}
-                onSelectionChange={setSelectedCaps}
-                onCapabilityClick={handleCapabilityClick}
-                onDelete={handleDeleteCapability}
-                error={capError}
-                savedCaps={savedCaps}
-              />
-            </Card>
-
-            {/* ─ MongoDB Card ─ */}
-            <Card
-              size="small"
-              className="sidebar-card flex-1 !flex !flex-col overflow-hidden"
-              title={
-                <span className="flex items-center gap-2 text-sm font-medium">
-                  <DatabaseOutlined className="text-blue-500" /> MongoDB Diagrams
-                </span>
-              }
-              extra={
-                <Button
-                  size="small"
-                  type="primary"
-                  icon={<CloudUploadOutlined />}
-                  onClick={() => setShowSaveDb(true)}
-                  disabled={readOnly || !canSaveCurrentDiagramToDb}
-                >
-                  Save
-                </Button>
-              }
-            >
-              <div className="flex flex-col gap-2 flex-1 overflow-hidden">
-                {/* Search by name */}
-                <Input
-                  placeholder="Search diagrams by name…"
-                  prefix={<SearchOutlined className="!text-gray-400" />}
-                  allowClear
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  size="middle"
-                />
-                {/* Diagram List */}
-                <div className="flex-1 overflow-y-auto min-h-0">
-                  <DiagramList
-                    selectedId={activeDiagram?._id ?? null}
-                    onSelect={openDiagramInCanvas}
-                    onRefresh={refresh}
-                    onDelete={handleDiagramDeleted}
-                    refreshTick={refreshTick}
-                    searchQuery={searchQuery}
-                    readOnly={readOnly}
-                  />
-                </div>
-              </div>
-            </Card>
+            {selectedValueStreamEntity && (
+              <Card
+                size="small"
+                className="sidebar-card !mt-3"
+                title={
+                  <span className="flex items-center gap-2 text-sm font-medium">
+                    <ThunderboltOutlined className="text-sky-600" /> Selected Value Stream Item
+                  </span>
+                }
+                extra={
+                  <Button size="small" type="link" onClick={handleOpenCapabilityDiagrams}>
+                    Open in Diagrams
+                  </Button>
+                }
+              >
+                <Spin spinning={selectedValueStreamEntityLoading}>
+                  <div className="flex flex-col gap-3 text-xs text-slate-700">
+                    <div>
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                        {selectedValueStreamEntity.type === 'businessCapability'
+                          ? 'Business Capability'
+                          : selectedValueStreamEntity.type === 'valueStream'
+                            ? 'Value Stream'
+                            : 'Domain / Subdomain'}
+                      </div>
+                      <div className="mt-1 text-sm font-semibold text-slate-900">{selectedValueStreamEntity.title}</div>
+                    </div>
+                    <div>
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Model</div>
+                      <div className="mt-1">{selectedValueStreamEntity.neighborhoodName}</div>
+                    </div>
+                    {selectedValueStreamEntity.valueStreamName ? (
+                      <div>
+                        <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Value Stream</div>
+                        <div className="mt-1">{selectedValueStreamEntity.valueStreamName}</div>
+                      </div>
+                    ) : null}
+                    <div>
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Domain / Subdomain</div>
+                      <div className="mt-1">{selectedValueStreamEntity.domain} | {selectedValueStreamEntity.subdomain}</div>
+                    </div>
+                    <div>
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                        {selectedValueStreamEntity.type === 'rollup' ? 'Related Diagrams' : 'Supporting Diagrams'}
+                      </div>
+                      <div className="mt-1">{selectedValueStreamEntity.relationshipCount}</div>
+                    </div>
+                    {selectedValueStreamEntity.secondaryCountLabel ? (
+                      <div>
+                        <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Summary</div>
+                        <div className="mt-1">{selectedValueStreamEntity.secondaryCountLabel}</div>
+                      </div>
+                    ) : null}
+                    <div>
+                      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Metadata</div>
+                      {selectedValueStreamEntity.metadata.length ? (
+                        <div className="mt-2 max-h-72 overflow-y-auto rounded border border-slate-200 bg-slate-50">
+                          {selectedValueStreamEntity.metadata.map((entry) => (
+                            <div key={entry.label} className="border-b border-slate-200 px-3 py-2 last:border-b-0">
+                              <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">{entry.label}</div>
+                              <div className="mt-1 break-words text-slate-800">{entry.value}</div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="mt-1 text-slate-500">No metadata found for this selected item.</div>
+                      )}
+                    </div>
+                  </div>
+                </Spin>
+              </Card>
+            )}
           </div>
         </Sider>
         {rightCollapsed && (
@@ -3008,17 +3252,14 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
           </div>
         )}
       </Layout>
-
       {/* ─── Modals ───────────────────────────────────────── */}
       <SaveModal
         open={showSaveDb}
-        initial={activeDiagram ?? { name: canvasDiagramName || diagramMeta.businessFlow || activeFileName?.replace(/\.bpmn$/i, '') || '' }}
+        onClose={() => setShowSaveDb(false)}
         isUpdate={!!activeDiagram?._id}
         defaultChangeNote={activeDiagram?._id ? generateChangeNote(savedXmlRef.current, currentXmlRef.current, savedCapsRef.current, selectedCapsRef.current) : undefined}
         onSave={handleSaveDb}
-        onClose={() => setShowSaveDb(false)}
       />
-
       {/* Fuzzy Match Modals */}
       <AppMatchModal
         open={showAppMatch}

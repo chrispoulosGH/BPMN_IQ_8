@@ -14,6 +14,7 @@ const { buildBpmnXmlForFlow } = require('./bpmnXmlBuilder');
 const REQUIRED_TYPES = ['Business Process Flow', 'Task', 'Application'];
 const BUSINESS_FLOW_TYPE = /^business\s*process\s*flow$/i;
 const SOURCED_FROM = 'BPMN Automation';
+const MAX_LINEAGE_HOPS = 12;
 
 function typeMatches(componentType, name) {
   const normalize = (value) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
@@ -21,7 +22,7 @@ function typeMatches(componentType, name) {
 }
 
 async function getFlowLineage(flowDoc) {
-  const lineage = {
+  const emptyLineage = {
     lineOfBusiness: null,
     channel: null,
     product: null,
@@ -31,18 +32,24 @@ async function getFlowLineage(flowDoc) {
     subdomain: null,
     domain: null,
   };
-  const breadcrumbParts = [`Business Flow: ${flowDoc.values?.name || flowDoc.primaryKey}`];
+  const flowName = flowDoc.values?.name || flowDoc.primaryKey;
+  const baseBreadcrumb = `Business Flow: ${flowName}`;
+  const parentCache = new Map();
 
-  let currentRefs = flowDoc.parentRefs || [];
-  const seen = new Set([String(flowDoc._id)]);
-  for (let hop = 0; hop < 6 && currentRefs.length; hop += 1) {
-    const parentId = currentRefs[0];
-    if (!parentId || seen.has(String(parentId))) break;
-    seen.add(String(parentId));
-    const parent = await CanonicalComponent.findById(parentId, { componentType: 1, primaryKey: 1, 'values.name': 1, parentRefs: 1 }).lean();
-    if (!parent) break;
+  const loadParent = async (parentId) => {
+    const key = String(parentId || '').trim();
+    if (!key) return null;
+    if (!parentCache.has(key)) {
+      parentCache.set(
+        key,
+        CanonicalComponent.findById(key, { componentType: 1, primaryKey: 1, 'values.name': 1, parentRefs: 1 }).lean().exec()
+      );
+    }
+    return parentCache.get(key);
+  };
+
+  const applyParentToLineage = (lineage, parent) => {
     const parentName = parent.values?.name || parent.primaryKey;
-    breadcrumbParts.unshift(`${parent.componentType}: ${parentName}`);
     if (typeMatches(parent.componentType, 'Line of Business')) lineage.lineOfBusiness = parentName;
     else if (typeMatches(parent.componentType, 'Channel')) lineage.channel = parentName;
     else if (typeMatches(parent.componentType, 'Product')) lineage.product = parentName;
@@ -51,10 +58,57 @@ async function getFlowLineage(flowDoc) {
     else if (typeMatches(parent.componentType, 'Business Capability')) lineage.businessCapability = parentName;
     else if (typeMatches(parent.componentType, 'Subdomain')) lineage.subdomain = parentName;
     else if (typeMatches(parent.componentType, 'Domain')) lineage.domain = parentName;
-    currentRefs = parent.parentRefs || [];
-  }
+  };
 
-  return { ...lineage, breadcrumb: breadcrumbParts.join(' | ') };
+  const scoreLineage = (lineage) => Object.values(lineage).filter(Boolean).length;
+
+  const walkParents = async (parentRefs, seen = new Set([String(flowDoc._id)]), depth = 0) => {
+    if (!Array.isArray(parentRefs) || !parentRefs.length || depth >= MAX_LINEAGE_HOPS) {
+      return [{ lineage: { ...emptyLineage }, breadcrumbParts: [] }];
+    }
+
+    const results = [];
+    for (const parentRef of parentRefs) {
+      const parentId = String(parentRef || '').trim();
+      if (!parentId || seen.has(parentId)) continue;
+
+      const parent = await loadParent(parentId);
+      if (!parent) continue;
+
+      const nextSeen = new Set(seen);
+      nextSeen.add(parentId);
+      const parentName = parent.values?.name || parent.primaryKey;
+      const parentLabel = `${parent.componentType}: ${parentName}`;
+      const parentPaths = await walkParents(parent.parentRefs || [], nextSeen, depth + 1);
+
+      for (const parentPath of parentPaths) {
+        const lineage = { ...parentPath.lineage };
+        applyParentToLineage(lineage, parent);
+        results.push({
+          lineage,
+          breadcrumbParts: [...parentPath.breadcrumbParts, parentLabel],
+        });
+      }
+    }
+
+    if (!results.length) {
+      return [{ lineage: { ...emptyLineage }, breadcrumbParts: [] }];
+    }
+
+    return results;
+  };
+
+  const lineagePaths = await walkParents(flowDoc.parentRefs || []);
+  const bestPath = lineagePaths.sort((left, right) => {
+    const scoreDiff = scoreLineage(right.lineage) - scoreLineage(left.lineage);
+    if (scoreDiff !== 0) return scoreDiff;
+    return right.breadcrumbParts.length - left.breadcrumbParts.length;
+  })[0] || { lineage: { ...emptyLineage }, breadcrumbParts: [] };
+
+  return {
+    ...bestPath.lineage,
+    breadcrumb: [...bestPath.breadcrumbParts, baseBreadcrumb].join(' | '),
+  };
 }
 
 async function generateDiagramForFlow(neighborhoodName, flow) {

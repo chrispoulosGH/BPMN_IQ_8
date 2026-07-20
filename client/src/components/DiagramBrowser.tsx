@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Alert, Empty, Select, Spin, Tag, Typography } from 'antd';
 import { FolderOpenOutlined, PartitionOutlined } from '@ant-design/icons';
 import type { DiagramMeta, FactoryNeighborhoodSummary } from '../types';
-import { getCanonicalTypes, getDiagramsForNeighborhood } from '../api';
+import { getCanonicalTypes, getDashboardValueStreamRelationships, getDiagramsForNeighborhood } from '../api';
 
 const { Text } = Typography;
 
@@ -83,13 +83,19 @@ interface DiagramBrowserProps {
   frameworks: FactoryNeighborhoodSummary[];
   selectedDiagramIds: string[];
   onToggleDiagram: (id: string, neighborhoodName?: string) => void;
+  externalFilterRequest?: {
+    frameworks?: string[];
+    filters?: Record<string, string[]>;
+    nonce: number;
+  } | null;
 }
 
-export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggleDiagram }: DiagramBrowserProps) {
+export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggleDiagram, externalFilterRequest = null }: DiagramBrowserProps) {
   const [selectedFrameworks, setSelectedFrameworks] = useState<string[]>([]);
   const [filters, setFilters] = useState<Record<string, string[]>>({});
   const [diagrams, setDiagrams] = useState<DiagramMeta[]>([]);
   const [frameworkComponentTypes, setFrameworkComponentTypes] = useState<string[]>([]);
+  const [supplementalFilterOptions, setSupplementalFilterOptions] = useState<Record<string, string[]>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -102,6 +108,16 @@ export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggl
     const availableFrameworks = new Set(frameworks.map((framework) => framework.name));
     setSelectedFrameworks((current) => current.filter((name) => availableFrameworks.has(name)));
   }, [frameworks]);
+
+  useEffect(() => {
+    if (!externalFilterRequest) return;
+
+    const availableFrameworks = new Set(frameworks.map((framework) => framework.name));
+    const requestedFrameworks = (externalFilterRequest.frameworks || []).filter((name) => availableFrameworks.has(name));
+
+    setSelectedFrameworks(requestedFrameworks);
+    setFilters(externalFilterRequest.filters || {});
+  }, [externalFilterRequest, frameworks]);
 
   useEffect(() => {
     let cancelled = false;
@@ -126,6 +142,57 @@ export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggl
     };
 
     void loadTypes();
+    return () => { cancelled = true; };
+  }, [frameworks, selectedFrameworks]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadSupplementalOptions = async () => {
+      try {
+        const targetFrameworks = selectedFrameworks.length
+          ? selectedFrameworks
+          : frameworks.map((framework) => framework.name);
+        if (!targetFrameworks.length) {
+          if (!cancelled) setSupplementalFilterOptions({});
+          return;
+        }
+
+        const responses = await Promise.all(
+          targetFrameworks.map((framework) => getDashboardValueStreamRelationships(framework).catch(() => null)),
+        );
+
+        if (cancelled) return;
+
+        const valueStreamValues = new Set<string>();
+        const domainValues = new Set<string>();
+        const subdomainValues = new Set<string>();
+        const businessCapabilityValues = new Set<string>();
+
+        responses.forEach((response) => {
+          if (!response) return;
+          (response.valueStreams || []).forEach((valueStream) => {
+            if (valueStream.name) valueStreamValues.add(String(valueStream.name).trim());
+            if (valueStream.domain) domainValues.add(String(valueStream.domain).trim());
+            if (valueStream.subdomain) subdomainValues.add(String(valueStream.subdomain).trim());
+          });
+          (response.capabilities || []).forEach((capability) => {
+            if (capability.name) businessCapabilityValues.add(String(capability.name).trim());
+          });
+        });
+
+        setSupplementalFilterOptions({
+          valueStream: [...valueStreamValues].filter(Boolean).sort((left, right) => left.localeCompare(right)),
+          domain: [...domainValues].filter(Boolean).sort((left, right) => left.localeCompare(right)),
+          subdomain: [...subdomainValues].filter(Boolean).sort((left, right) => left.localeCompare(right)),
+          businessCapability: [...businessCapabilityValues].filter(Boolean).sort((left, right) => left.localeCompare(right)),
+        });
+      } catch {
+        if (!cancelled) setSupplementalFilterOptions({});
+      }
+    };
+
+    void loadSupplementalOptions();
+
     return () => { cancelled = true; };
   }, [frameworks, selectedFrameworks]);
 
@@ -182,12 +249,15 @@ export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggl
   const filterOptions = useMemo(() => {
     const options: Record<string, string[]> = {};
     facetDefinitions.forEach((filter) => {
-      options[filter.key] = Array.from(new Set(
-        diagrams.flatMap((diagram) => filter.getValues(diagram)),
-      )).sort((left, right) => left.localeCompare(right));
+      const diagramValues = diagrams.flatMap((diagram) => filter.getValues(diagram));
+      const mergedValues = Array.from(new Set([
+        ...diagramValues,
+        ...(supplementalFilterOptions[filter.key] || []),
+      ].map((value) => String(value || '').trim()).filter(Boolean)));
+      options[filter.key] = mergedValues.sort((left, right) => left.localeCompare(right));
     });
     return options;
-  }, [diagrams, facetDefinitions]);
+  }, [diagrams, facetDefinitions, supplementalFilterOptions]);
 
   const filteredDiagrams = useMemo(() => {
     const selectedValues = new Set(facetDefinitions.flatMap((filter) => filters[filter.key] || []));

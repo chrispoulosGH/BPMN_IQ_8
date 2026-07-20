@@ -6,6 +6,7 @@ const Diagram = require('../models/Diagram');
 const Component = require('../models/Component');
 const Server = require('../models/Server');
 const DatabaseInstance = require('../models/DatabaseInstance');
+const Model = require('../models/Model');
 const { getNeighborhoodName, withNeighborhood } = require('../utils/neighborhoodScope');
 const { loadScopedFlowCostDocumentsFromComponentsAndDiagrams } = require('../utils/flowCostSource');
 const { listApplicationReferences } = require('../utils/applicationReferenceLookup');
@@ -532,55 +533,102 @@ router.get('/capability-flow-relationships', async (req, res) => {
  */
 router.get('/value-stream-relationships', async (req, res) => {
   try {
-    const diagrams = await Diagram.find(
-      withNeighborhood(req),
-      { name: 1, businessFlow: 1, businessCapability: 1, valueStream: 1, capabilities: 1 }
-    ).lean();
+    const neighborhoodName = getNeighborhoodName(req);
+    const model = neighborhoodName && neighborhoodName !== '__all__'
+      ? await Model.findOne({ name: neighborhoodName }, { modelCatalogRows: 1 }).lean()
+      : null;
 
     const valueStreamCounts = new Map();
     const capabilityCounts = new Map();
     const linkCounts = new Map();
-    const valueStreamRollups = new Map();
+    const valueStreamRows = new Map();
+    let totalDiagrams = 0;
 
-    for (const diagram of diagrams) {
-      const valueStream = String(diagram.valueStream || '').trim();
-      if (!valueStream) continue;
+    const addRelationshipRow = ({
+      valueStream,
+      domain,
+      subdomain,
+      capabilityNames = [],
+      domainSequence = null,
+      subdomainSequence = null,
+    }) => {
+      const normalizedValueStream = String(valueStream || '').trim();
+      if (!normalizedValueStream) return;
 
-      const domain = normalizeValue(diagram.domain, 'Unspecified Domain');
-      const subdomain = normalizeValue(diagram.subdomain, 'Unspecified Subdomain');
-      const rollupLabel = `${domain} | ${subdomain}`;
+      const normalizedDomain = normalizeValue(domain, 'Unspecified Domain');
+      const normalizedSubdomain = normalizeValue(subdomain, 'Unspecified Subdomain');
+      const rollupLabel = `${normalizedDomain} | ${normalizedSubdomain}`;
+      const valueStreamKey = `${normalizedValueStream}|||${rollupLabel}`;
 
-      const capabilityNames = Array.from(new Set(
-        (diagram.capabilities || [])
-          .map((capability) => String(capability?.capabilityName || '').trim())
-          .filter(Boolean)
-      ));
+      valueStreamCounts.set(normalizedValueStream, (valueStreamCounts.get(normalizedValueStream) || 0) + 1);
+      valueStreamRows.set(valueStreamKey, {
+        key: valueStreamKey,
+        name: normalizedValueStream,
+        rollupLabel,
+        domain: normalizedDomain,
+        subdomain: normalizedSubdomain,
+        domainSequence: Number.isFinite(Number(domainSequence)) ? Number(domainSequence) : null,
+        subdomainSequence: Number.isFinite(Number(subdomainSequence)) ? Number(subdomainSequence) : null,
+        count: (valueStreamRows.get(valueStreamKey)?.count || 0) + 1,
+      });
 
-      valueStreamCounts.set(valueStream, (valueStreamCounts.get(valueStream) || 0) + 1);
-
-      if (!valueStreamRollups.has(valueStream)) {
-        valueStreamRollups.set(valueStream, new Map());
-      }
-      const rollupCounts = valueStreamRollups.get(valueStream);
-      rollupCounts.set(rollupLabel, (rollupCounts.get(rollupLabel) || 0) + 1);
-
-      if (!capabilityNames.length) continue;
-
-      for (const capabilityName of capabilityNames) {
+      const dedupedCapabilities = Array.from(new Set(capabilityNames.map((name) => String(name || '').trim()).filter(Boolean)));
+      for (const capabilityName of dedupedCapabilities) {
         capabilityCounts.set(capabilityName, (capabilityCounts.get(capabilityName) || 0) + 1);
-        const key = `${capabilityName}|||${valueStream}`;
+        const key = JSON.stringify([capabilityName, valueStreamKey]);
         linkCounts.set(key, (linkCounts.get(key) || 0) + 1);
+      }
+    };
+
+    const modelRows = (model?.modelCatalogRows || []).map((row) => getRowValues(row.values));
+    const hasModelValueStreamData = modelRows.some((row) => String(row?.['Value Stream Component'] || '').trim());
+
+    if (hasModelValueStreamData) {
+      totalDiagrams = modelRows.length;
+      for (const row of modelRows) {
+        addRelationshipRow({
+          valueStream: row['Value Stream Component'],
+          domain: row['domain Component'],
+          subdomain: row['subdomain Component'],
+          capabilityNames: [row['Business Capability Component']],
+          domainSequence: row['domain_sequence Qualifier'],
+          subdomainSequence: row['sub_domain_sequence Qualifier'],
+        });
+      }
+    } else {
+      const diagrams = await Diagram.find(
+        withNeighborhood(req),
+        { name: 1, businessFlow: 1, businessCapability: 1, valueStream: 1, capabilities: 1, domain: 1, subdomain: 1 }
+      ).lean();
+      totalDiagrams = diagrams.length;
+
+      for (const diagram of diagrams) {
+        addRelationshipRow({
+          valueStream: diagram.valueStream,
+          domain: diagram.domain,
+          subdomain: diagram.subdomain,
+          capabilityNames: [
+            ...((diagram.capabilities || [])
+              .map((capability) => String(capability?.capabilityName || '').trim())
+              .filter(Boolean)),
+            String(diagram.businessCapability || '').trim(),
+          ],
+        });
       }
     }
 
-    const valueStreams = [...valueStreamCounts.entries()]
-      .map(([name, count]) => {
-        const rollupCounts = valueStreamRollups.get(name) || new Map();
-        const rollupLabel = [...rollupCounts.entries()]
-          .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))[0]?.[0] || 'Unspecified Domain | Unspecified Subdomain';
-        return { name, count, rollupLabel };
-      })
-      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+    const valueStreams = [...valueStreamRows.values()]
+      .sort((a, b) => {
+        const aDomainSequence = a.domainSequence ?? Number.MAX_SAFE_INTEGER;
+        const bDomainSequence = b.domainSequence ?? Number.MAX_SAFE_INTEGER;
+        if (aDomainSequence !== bDomainSequence) return aDomainSequence - bDomainSequence;
+
+        const aSubdomainSequence = a.subdomainSequence ?? Number.MAX_SAFE_INTEGER;
+        const bSubdomainSequence = b.subdomainSequence ?? Number.MAX_SAFE_INTEGER;
+        if (aSubdomainSequence !== bSubdomainSequence) return aSubdomainSequence - bSubdomainSequence;
+
+        return b.count - a.count || a.name.localeCompare(b.name) || a.rollupLabel.localeCompare(b.rollupLabel);
+      });
 
     const capabilities = [...capabilityCounts.entries()]
       .map(([name, count]) => ({ name, count }))
@@ -588,14 +636,21 @@ router.get('/value-stream-relationships', async (req, res) => {
 
     const links = [...linkCounts.entries()]
       .map(([key, count]) => {
-        const [capability, valueStream] = key.split('|||');
-        return { capability, valueStream, count };
+        const [capability, valueStreamKey] = JSON.parse(key);
+        const row = valueStreamRows.get(valueStreamKey);
+        return {
+          capability,
+          valueStream: row?.name || '',
+          valueStreamKey,
+          rollupLabel: row?.rollupLabel || '',
+          count,
+        };
       })
-      .sort((a, b) => b.count - a.count || a.capability.localeCompare(b.capability) || a.valueStream.localeCompare(b.valueStream));
+      .sort((a, b) => b.count - a.count || a.capability.localeCompare(b.capability) || a.valueStream.localeCompare(b.valueStream) || a.rollupLabel.localeCompare(b.rollupLabel));
 
     res.json({
-      totalDiagrams: diagrams.length,
-      diagramCount: diagrams.length,
+      totalDiagrams,
+      diagramCount: totalDiagrams,
       valueStreamCount: valueStreams.length,
       capabilityCount: capabilities.length,
       linkCount: links.length,

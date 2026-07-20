@@ -55,6 +55,26 @@ function buildTreeFromPaths(paths: { name: string; typeName: string; depth: numb
 const TREE_BG_COLORS = ['#EFF6FF', '#F0FDF4', '#FEF3C7', '#FCE7F3', '#F3E8FF', '#ECFDF5'];
 const TREE_TEXT_COLORS = ['#0C63E4', '#15803D', '#B45309', '#BE185D', '#6D28D9', '#0891B2'];
 
+function renderHighlightedTreeText(text: string, query: string) {
+  const safeText = String(text || '');
+  const safeQuery = String(query || '').trim();
+  if (!safeQuery) return safeText;
+  const lowerText = safeText.toLowerCase();
+  const lowerQuery = safeQuery.toLowerCase();
+  const matchIndex = lowerText.indexOf(lowerQuery);
+  if (matchIndex === -1) return safeText;
+
+  return (
+    <>
+      {safeText.slice(0, matchIndex)}
+      <span style={{ backgroundColor: '#fef08a', borderRadius: 2, padding: '0 1px' }}>
+        {safeText.slice(matchIndex, matchIndex + safeQuery.length)}
+      </span>
+      {safeText.slice(matchIndex + safeQuery.length)}
+    </>
+  );
+}
+
 function makeTreeTitle(typeName: string, name: string, depth: number) {
   const bgColor = TREE_BG_COLORS[depth % TREE_BG_COLORS.length];
   const textColor = TREE_TEXT_COLORS[depth % TREE_TEXT_COLORS.length];
@@ -121,6 +141,8 @@ function ModelCatalog({ modelName, requestedSearch = null }: ModelCatalogProps) 
   const horizontalTreeContainerRef = useRef<HTMLDivElement>(null);
   const horizontalTreeNodeRefMap = useRef<Map<React.Key, HTMLButtonElement>>(new Map());
   const builtTreeDataRef = useRef<DataNode[]>([]);
+  const horizontalPanStateRef = useRef<{ pointerId: number; startX: number; startY: number; startScrollLeft: number; startScrollTop: number; moved: boolean; } | null>(null);
+  const [isHorizontalPanning, setIsHorizontalPanning] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -588,6 +610,11 @@ function ModelCatalog({ modelName, requestedSearch = null }: ModelCatalogProps) 
     return (
       <div
         ref={horizontalTreeContainerRef}
+        onPointerDown={handleHorizontalPointerDown}
+        onPointerMove={handleHorizontalPointerMove}
+        onPointerUp={endHorizontalPointerPan}
+        onPointerCancel={endHorizontalPointerPan}
+        onPointerLeave={endHorizontalPointerPan}
         style={{
           flex: 1,
           overflowX: 'auto',
@@ -599,6 +626,8 @@ function ModelCatalog({ modelName, requestedSearch = null }: ModelCatalogProps) 
           height: '100%',
           minHeight: 0,
           minWidth: 0,
+          cursor: isHorizontalPanning ? 'grabbing' : 'grab',
+          userSelect: isHorizontalPanning ? 'none' : 'auto',
         }}
       >
         <div style={{ position: 'relative', width, height }}>
@@ -636,6 +665,8 @@ function ModelCatalog({ modelName, requestedSearch = null }: ModelCatalogProps) 
           {positioned.map((p) => {
             const pos = positionById.get(p.node.key)!;
             const isSelected = selectedNodeKey === p.node.key;
+            const nodeSearchText = String((p.node as any).nodeName || '').toLowerCase();
+            const isSearchHit = Boolean(treeSearchText.trim()) && nodeSearchText.includes(treeSearchText.trim().toLowerCase());
             const isExpanded = expandedKeys.includes(p.node.key);
             const hasChildren = !(p.node as any).isLeaf;
             
@@ -666,9 +697,9 @@ function ModelCatalog({ modelName, requestedSearch = null }: ModelCatalogProps) 
                   height: p.h,
                   overflow: 'hidden',
                   borderRadius: 8,
-                  border: isSelected ? '2px solid #0284c7' : `2px solid ${textColor}`,
+                  border: isSearchHit ? '3px solid #eab308' : isSelected ? '2px solid #0284c7' : `2px solid ${textColor}`,
                   background: isSelected ? '#ecf0f5' : bgColor,
-                  boxShadow: '0 2px 8px rgba(15, 23, 42, 0.06)',
+                  boxShadow: isSearchHit ? '0 0 0 3px rgba(234, 179, 8, 0.18), 0 2px 8px rgba(15, 23, 42, 0.12)' : '0 2px 8px rgba(15, 23, 42, 0.06)',
                   padding: '8px',
                   cursor: 'pointer',
                   display: 'grid',
@@ -708,7 +739,7 @@ function ModelCatalog({ modelName, requestedSearch = null }: ModelCatalogProps) 
                       width: '100%',
                     }}
                   >
-                    {(p.node as any).nodeName || ''}
+                    {renderHighlightedTreeText(String((p.node as any).nodeName || ''), treeSearchText)}
                   </div>
                 </div>
                 {hasChildren && (
@@ -784,6 +815,49 @@ function ModelCatalog({ modelName, requestedSearch = null }: ModelCatalogProps) 
       setExpandedKeys(typeKeys);
     }
   }, [treeMode, treeData]);
+
+  const handleHorizontalPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    const container = horizontalTreeContainerRef.current;
+    if (!container) return;
+
+    horizontalPanStateRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startScrollLeft: container.scrollLeft,
+      startScrollTop: container.scrollTop,
+      moved: false,
+    };
+    setIsHorizontalPanning(true);
+    container.setPointerCapture?.(event.pointerId);
+  };
+
+  const handleHorizontalPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const state = horizontalPanStateRef.current;
+    const container = horizontalTreeContainerRef.current;
+    if (!state || !container || state.pointerId !== event.pointerId) return;
+
+    const deltaX = event.clientX - state.startX;
+    const deltaY = event.clientY - state.startY;
+    if (!state.moved && (Math.abs(deltaX) > 4 || Math.abs(deltaY) > 4)) {
+      state.moved = true;
+    }
+    if (!state.moved) return;
+
+    container.scrollLeft = state.startScrollLeft - deltaX;
+    container.scrollTop = state.startScrollTop - deltaY;
+  };
+
+  const endHorizontalPointerPan = (event: React.PointerEvent<HTMLDivElement>) => {
+    const state = horizontalPanStateRef.current;
+    const container = horizontalTreeContainerRef.current;
+    if (!state || state.pointerId !== event.pointerId) return;
+
+    container?.releasePointerCapture?.(event.pointerId);
+    horizontalPanStateRef.current = null;
+    setIsHorizontalPanning(false);
+  };
 
   useEffect(() => {
     if (!catalog) return;
@@ -950,7 +1024,9 @@ function ModelCatalog({ modelName, requestedSearch = null }: ModelCatalogProps) 
               </div>
             </div>
           ) : (
-            renderHorizontalTree()
+            <div className="component-search-results horizontal-tree-scroll" style={{ flex: 1, minHeight: 0 }}>
+              {renderHorizontalTree()}
+            </div>
           )}
         </>
       ) : null}

@@ -744,10 +744,12 @@ router.get('/', async (req, res) => {
     const diagrams = await Diagram.find(filter).sort({ updatedAt: -1 }).lean();
     const hydratedDiagrams = diagrams.map((diagram) => {
       const metadata = parseDiagramMetadata(diagram.xml);
+      const lineOfBusiness = diagram.lineOfBusiness || metadata.lineOfBusiness || null;
+      const channel = diagram.channel || metadata.channel || null;
       const hydrated = {
         ...diagram,
-        lineOfBusiness: diagram.lineOfBusiness || metadata.lineOfBusiness || null,
-        channel: diagram.channel || metadata.channel || null,
+        lineOfBusiness,
+        channel,
         product: diagram.product || metadata.product || null,
         domain: diagram.domain || metadata.domain || null,
         subdomain: diagram.subdomain || metadata.subdomain || null,
@@ -756,6 +758,8 @@ router.get('/', async (req, res) => {
         journey: diagram.journey || metadata.journey || null,
         businessFlow: diagram.businessFlow || metadata.businessFlow || null,
       };
+      if (!diagram.lineOfBusiness && lineOfBusiness) hydrated.lineOfBusiness = lineOfBusiness;
+      if (!diagram.channel && channel) hydrated.channel = channel;
       delete hydrated.xml;
       return hydrated;
     });

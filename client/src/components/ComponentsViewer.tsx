@@ -32,6 +32,7 @@ export default function ComponentsViewer({
   const [searchText, setSearchText] = useState('');
   const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
   const [selectedNodeKey, setSelectedNodeKey] = useState<React.Key | null>(null);
+  const [searchHitNodeKey, setSearchHitNodeKey] = useState<React.Key | null>(null);
   const [selectedComponent, setSelectedComponent] = useState<CustomFactory | null>(null);
   const [showMetadataDrawer, setShowMetadataDrawer] = useState(false);
   const [loadingMetadata, setLoadingMetadata] = useState(false);
@@ -47,6 +48,28 @@ export default function ComponentsViewer({
   const horizontalTreeContainerRef = useRef<HTMLDivElement>(null);
   const horizontalTreeNodeRefMap = useRef<Map<React.Key, HTMLButtonElement>>(new Map());
   const pendingHorizontalRevealKeyRef = useRef<React.Key | null>(null);
+  const horizontalPanStateRef = useRef<{ pointerId: number; startX: number; startY: number; startScrollLeft: number; startScrollTop: number; moved: boolean; } | null>(null);
+  const [isHorizontalPanning, setIsHorizontalPanning] = useState(false);
+
+  const renderHighlightedText = (text: string, query: string) => {
+    const safeText = String(text || '');
+    const safeQuery = String(query || '').trim();
+    if (!safeQuery) return safeText;
+    const lowerText = safeText.toLowerCase();
+    const lowerQuery = safeQuery.toLowerCase();
+    const matchIndex = lowerText.indexOf(lowerQuery);
+    if (matchIndex === -1) return safeText;
+
+    return (
+      <>
+        {safeText.slice(0, matchIndex)}
+        <span style={{ backgroundColor: '#fef08a', borderRadius: 2, padding: '0 1px' }}>
+          {safeText.slice(matchIndex, matchIndex + safeQuery.length)}
+        </span>
+        {safeText.slice(matchIndex + safeQuery.length)}
+      </>
+    );
+  };
 
   // Load hierarchies from ComponentSearchIndex
   // Load hierarchies for all component types (not just leaf)
@@ -840,6 +863,49 @@ export default function ComponentsViewer({
     }
   }, [selectedNodeKey, expandedKeys, viewMode]);
 
+  const handleHorizontalPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    const container = horizontalTreeContainerRef.current;
+    if (!container) return;
+
+    horizontalPanStateRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startScrollLeft: container.scrollLeft,
+      startScrollTop: container.scrollTop,
+      moved: false,
+    };
+    setIsHorizontalPanning(true);
+    container.setPointerCapture?.(event.pointerId);
+  };
+
+  const handleHorizontalPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const state = horizontalPanStateRef.current;
+    const container = horizontalTreeContainerRef.current;
+    if (!state || !container || state.pointerId !== event.pointerId) return;
+
+    const deltaX = event.clientX - state.startX;
+    const deltaY = event.clientY - state.startY;
+    if (!state.moved && (Math.abs(deltaX) > 4 || Math.abs(deltaY) > 4)) {
+      state.moved = true;
+    }
+    if (!state.moved) return;
+
+    container.scrollLeft = state.startScrollLeft - deltaX;
+    container.scrollTop = state.startScrollTop - deltaY;
+  };
+
+  const endHorizontalPointerPan = (event: React.PointerEvent<HTMLDivElement>) => {
+    const state = horizontalPanStateRef.current;
+    const container = horizontalTreeContainerRef.current;
+    if (!state || state.pointerId !== event.pointerId) return;
+
+    container?.releasePointerCapture?.(event.pointerId);
+    horizontalPanStateRef.current = null;
+    setIsHorizontalPanning(false);
+  };
+
   // Filter tree data based on search text
   const filteredTreeData = useMemo<DataNode[]>(() => {
     if (!searchText.trim()) return treeData;
@@ -881,6 +947,39 @@ export default function ComponentsViewer({
       .map((node) => filterNode(node))
       .filter((node) => node !== null) as DataNode[];
   }, [treeData, searchText]);
+
+  const firstFilteredNodeKey = useMemo<React.Key | null>(() => {
+    if (!searchText.trim()) return null;
+
+    const normalized = searchText.trim().toLowerCase();
+    const findFirstMatchKey = (nodes: DataNode[]): React.Key | null => {
+      for (const node of nodes) {
+        const nodeData = (node as DataNode & { data?: { rowName?: string } }).data;
+        const nodeText = String(nodeData?.rowName ?? '').toLowerCase();
+        if (nodeText.includes(normalized)) return node.key;
+        if (node.children && node.children.length > 0) {
+          const childMatch = findFirstMatchKey(node.children);
+          if (childMatch) return childMatch;
+        }
+      }
+      return null;
+    };
+
+    return findFirstMatchKey(filteredTreeData);
+  }, [filteredTreeData, searchText]);
+
+  useEffect(() => {
+    if (!searchText.trim()) return;
+    if (!firstFilteredNodeKey) return;
+    setSearchHitNodeKey(firstFilteredNodeKey);
+    setSelectedNodeKey(firstFilteredNodeKey);
+  }, [firstFilteredNodeKey, searchText]);
+
+  useEffect(() => {
+    if (!searchText.trim()) {
+      setSearchHitNodeKey(null);
+    }
+  }, [searchText]);
 
   // Render table view with all components as tabs
   const tableViewContent = (
@@ -1138,6 +1237,11 @@ export default function ComponentsViewer({
     return (
       <div
         ref={horizontalTreeContainerRef}
+        onPointerDown={handleHorizontalPointerDown}
+        onPointerMove={handleHorizontalPointerMove}
+        onPointerUp={endHorizontalPointerPan}
+        onPointerCancel={endHorizontalPointerPan}
+        onPointerLeave={endHorizontalPointerPan}
         style={{
           flex: 1,
           overflowX: 'auto',
@@ -1145,6 +1249,8 @@ export default function ComponentsViewer({
           position: 'relative',
           backgroundColor: '#f8fafc',
           borderRadius: '6px',
+          cursor: isHorizontalPanning ? 'grabbing' : 'grab',
+          userSelect: isHorizontalPanning ? 'none' : 'auto',
         }}
       >
         <div style={{ position: 'relative', width, height }}>
@@ -1182,6 +1288,8 @@ export default function ComponentsViewer({
           {positioned.map((p) => {
             const pos = positionById.get(p.node.key)!;
             const isSelected = selectedNodeKey === p.node.key;
+            const nodeSearchText = String(((p.node as any).data?.rowName || '')).toLowerCase();
+            const isSearchHit = Boolean(searchText.trim()) && nodeSearchText.includes(searchText.trim().toLowerCase());
             const isExpanded = expandedKeys.includes(p.node.key);
             const hasChildren = p.node.children && p.node.children.length > 0;
             const nodeData = (p.node as any).data;
@@ -1203,6 +1311,7 @@ export default function ComponentsViewer({
                 }}
                 type="button"
                 onClick={() => {
+                  if (horizontalPanStateRef.current?.moved) return;
                   handleNodeSelect([p.node.key]);
                   if (hasChildren) {
                     if (!isExpanded) {
@@ -1224,9 +1333,9 @@ export default function ComponentsViewer({
                   height: p.h,
                   overflow: 'hidden',
                   borderRadius: 8,
-                  border: isSelected ? '2px solid #0284c7' : `2px solid ${textColor}`,
+                  border: isSearchHit ? '3px solid #eab308' : isSelected ? '2px solid #0284c7' : `2px solid ${textColor}`,
                   background: isSelected ? '#ecf0f5' : bgColor,
-                  boxShadow: '0 2px 8px rgba(15, 23, 42, 0.06)',
+                  boxShadow: isSearchHit ? '0 0 0 3px rgba(234, 179, 8, 0.18), 0 2px 8px rgba(15, 23, 42, 0.12)' : '0 2px 8px rgba(15, 23, 42, 0.06)',
                   padding: '8px',
                   cursor: 'pointer',
                   display: 'grid',
@@ -1266,13 +1375,14 @@ export default function ComponentsViewer({
                       width: '100%',
                     }}
                   >
-                    {value}
+                    {renderHighlightedText(String(value || ''), searchText)}
                   </div>
                 </div>
                 {hasChildren && (
                   <span
                     onClick={(e) => {
                       e.stopPropagation();
+                      if (horizontalPanStateRef.current?.moved) return;
                       if (!isExpanded) {
                         const firstChildKey = p.node.children?.[0]?.key;
                         pendingHorizontalRevealKeyRef.current = firstChildKey || p.node.key;
@@ -1312,7 +1422,7 @@ export default function ComponentsViewer({
   const treeViewContent = (
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, overflow: 'hidden' }}>
       {hierarchies && hierarchies.length > 0 ? (
-        <div className="component-search-results" style={{ flex: 1, paddingRight: '4px' }}>
+        <div className={`component-search-results${viewMode === 'tree-horizontal' ? ' horizontal-tree-scroll' : ''}`} style={{ flex: 1, paddingRight: '4px' }}>
           {viewMode === 'tree-vertical' ? (
             <Tree
               treeData={filteredTreeData}

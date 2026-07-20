@@ -143,6 +143,8 @@ export const getFlowBreadcrumbs = (names: string[]): Promise<FlowBreadcrumb[]> =
 export interface ValueStreamRelationshipLink {
   capability: string;
   valueStream: string;
+  valueStreamKey: string;
+  rollupLabel: string;
   count: number;
 }
 
@@ -152,7 +154,16 @@ export interface ValueStreamRelationshipData {
   valueStreamCount: number;
   capabilityCount: number;
   linkCount: number;
-  valueStreams: Array<{ name: string; count: number; rollupLabel: string }>;
+  valueStreams: Array<{
+    key: string;
+    name: string;
+    count: number;
+    rollupLabel: string;
+    domain: string;
+    subdomain: string;
+    domainSequence: number | null;
+    subdomainSequence: number | null;
+  }>;
   capabilities: Array<{ name: string; count: number }>;
   links: ValueStreamRelationshipLink[];
 }
