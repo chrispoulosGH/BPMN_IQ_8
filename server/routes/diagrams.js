@@ -4,7 +4,7 @@ const Diagram = require('../models/Diagram');
 const Component = require('../models/Component');
 const Model = require('../models/Model');
 const Actor = require('../models/Actor');
-const { Product, Channel, Domain, Subdomain, LineOfBusiness } = require('../models/ReferenceData');
+const { Product, Domain, Subdomain, LineOfBusiness } = require('../models/ReferenceData');
 const { DEFAULT_NEIGHBORHOOD_NAME, getNeighborhoodName, buildNeighborhoodFilter } = require('../utils/neighborhoodScope');
 const { listApplicationReferences } = require('../utils/applicationReferenceLookup');
 
@@ -268,7 +268,7 @@ function rowMatchesParent(row, parentName) {
 async function getNeighborhoodMetadataMappings(neighborhoodName) {
   const baseMappings = {
     lineOfBusiness: { label: 'Line of Business', kind: 'reference', model: LineOfBusiness },
-    channel: { label: 'Channel', kind: 'reference', model: Channel },
+    channel: { label: 'Channel', kind: 'metadata' },
     product: { label: 'Product', kind: 'reference', model: Product },
     valueStream: { label: 'Value Stream', kind: 'customFactory', factoryName: 'value stream', parentFactoryName: 'product', parentField: 'product' },
     journey: { label: 'Journey', kind: 'customFactory', factoryName: 'journey', parentFactoryName: 'value stream', parentField: 'valueStream' },
@@ -416,6 +416,8 @@ async function validateDiagramMetadataForNeighborhood(meta, neighborhoodName) {
       isValid = await hasMatchingReferenceValue(mapping.model, neighborhoodName, value);
     } else if (mapping.kind === 'customFactory') {
       isValid = await hasMatchingCustomFactoryValue(neighborhoodName, mapping, value, parentValue);
+    } else if (mapping.kind === 'metadata') {
+      isValid = true;
     }
 
     matchedFields.push({ fieldName, label: mapping.label, value, isValid });
@@ -872,25 +874,26 @@ router.post('/', async (req, res) => {
   try {
     const meta = parseDiagramMetadata(xml);
     const hintedNeighborhoodName = getNeighborhoodName(req);
-    const metadataValidationSummary = await validateDiagramMetadataForNeighborhood(meta, hintedNeighborhoodName);
     // Use the caller-supplied name; meta.businessFlow is informational metadata only
     const diagramName = name;
     const cleanXml = stripTitleAnnotations(xml);
     const tasks = extractTasks(xml);
-    const resolvedStatus = await resolveImportedDiagramStatus(
-      status,
-      sourcedFrom,
-      meta.businessFlow || diagramName,
-      hintedNeighborhoodName,
-      metadataValidationSummary,
-      {
-        name: diagramName,
-        businessFlow: meta.businessFlow || diagramName,
-        xml: cleanXml,
-        tasks,
-        capabilities: Array.isArray(capabilities) ? capabilities : [],
-      }
-    );
+    const resolvedStatus = sourcedFrom
+      ? (status || 'staged')
+      : await resolveImportedDiagramStatus(
+          status,
+          sourcedFrom,
+          meta.businessFlow || diagramName,
+          hintedNeighborhoodName,
+          await validateDiagramMetadataForNeighborhood(meta, hintedNeighborhoodName),
+          {
+            name: diagramName,
+            businessFlow: meta.businessFlow || diagramName,
+            xml: cleanXml,
+            tasks,
+            capabilities: Array.isArray(capabilities) ? capabilities : [],
+          }
+        );
     const diagram = await Diagram.create({
       name: diagramName, description, xml: cleanXml, tags, capabilities, tasks,
       status: resolvedStatus,
@@ -1065,26 +1068,12 @@ router.post('/batch', async (req, res) => {
       const name = meta.businessFlow || fileName?.replace(/\.bpmn$/i, '').replace(/\.xml$/i, '') || 'Untitled';
       const cleanXml = stripTitleAnnotations(xml);
       const tasks = extractTasks(xml);
-      const resolvedStatus = await resolveImportedDiagramStatus(
-        'staged',
-        fileName,
-        meta.businessFlow || name,
-        resolvedNeighborhood.neighborhoodName,
-        resolvedNeighborhood,
-        {
-          name,
-          businessFlow: meta.businessFlow || name,
-          xml: cleanXml,
-          tasks,
-          capabilities: [],
-        }
-      );
       const diagram = await Diagram.create({
         neighborhoodName: resolvedNeighborhood.neighborhoodName,
         name,
         xml: cleanXml,
         tasks,
-        status: resolvedStatus,
+        status: 'staged',
         sourcedFrom: fileName || null,
         createdBy: createdBy || null,
         updatedBy: createdBy || null,

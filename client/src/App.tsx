@@ -1746,15 +1746,23 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
     setSelectedDiagramTask(null);
 
     const filters: Record<string, string[]> = {};
-    if (selectedValueStreamEntity.type === 'businessCapability' && selectedValueStreamEntity.capabilityName) {
-      filters.businessCapability = [selectedValueStreamEntity.capabilityName];
-    }
-    if (selectedValueStreamEntity.type === 'valueStream' && selectedValueStreamEntity.valueStreamName) {
-      filters.valueStream = [selectedValueStreamEntity.valueStreamName];
-    }
-    if (selectedValueStreamEntity.type === 'rollup') {
-      filters.domain = [selectedValueStreamEntity.domain];
-      filters.subdomain = [selectedValueStreamEntity.subdomain];
+    const addFilter = (key: string, value?: string | null) => {
+      const trimmed = String(value || '').trim();
+      if (trimmed) filters[key] = [trimmed];
+    };
+
+    if (selectedValueStreamEntity.type === 'businessCapability') {
+      addFilter('businessCapability', selectedValueStreamEntity.capabilityName);
+      addFilter('valueStream', selectedValueStreamEntity.valueStreamName);
+      addFilter('domain', selectedValueStreamEntity.domain);
+      addFilter('subdomain', selectedValueStreamEntity.subdomain);
+    } else if (selectedValueStreamEntity.type === 'valueStream') {
+      addFilter('valueStream', selectedValueStreamEntity.valueStreamName);
+      addFilter('domain', selectedValueStreamEntity.domain);
+      addFilter('subdomain', selectedValueStreamEntity.subdomain);
+    } else {
+      addFilter('domain', selectedValueStreamEntity.domain);
+      addFilter('subdomain', selectedValueStreamEntity.subdomain);
     }
 
     setDiagramBrowserFilterRequest({
@@ -1763,6 +1771,41 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
       nonce: Date.now(),
     });
     setActiveOuterTab('bpmn');
+  }, [rebuildCompositeCanvas, selectedValueStreamEntity]);
+
+  const handleOuterTabChange = useCallback((nextTab: string) => {
+    if (nextTab === 'bpmn' && selectedValueStreamEntity) {
+      const filters: Record<string, string[]> = {};
+      const addFilter = (key: string, value?: string | null) => {
+        const trimmed = String(value || '').trim();
+        if (trimmed) filters[key] = [trimmed];
+      };
+
+      if (selectedValueStreamEntity.type === 'businessCapability') {
+        addFilter('businessCapability', selectedValueStreamEntity.capabilityName);
+        addFilter('valueStream', selectedValueStreamEntity.valueStreamName);
+        addFilter('domain', selectedValueStreamEntity.domain);
+        addFilter('subdomain', selectedValueStreamEntity.subdomain);
+      } else if (selectedValueStreamEntity.type === 'valueStream') {
+        addFilter('valueStream', selectedValueStreamEntity.valueStreamName);
+        addFilter('domain', selectedValueStreamEntity.domain);
+        addFilter('subdomain', selectedValueStreamEntity.subdomain);
+      } else {
+        addFilter('domain', selectedValueStreamEntity.domain);
+        addFilter('subdomain', selectedValueStreamEntity.subdomain);
+      }
+
+      setSelectedDiagramIds([]);
+      void rebuildCompositeCanvas([]);
+      setSelectedDiagramTask(null);
+      setDiagramBrowserFilterRequest({
+        frameworks: [selectedValueStreamEntity.neighborhoodName],
+        filters,
+        nonce: Date.now(),
+      });
+    }
+
+    setActiveOuterTab(nextTab);
   }, [rebuildCompositeCanvas, selectedValueStreamEntity]);
 
   const handleViewCapabilityInCatalog = useCallback((capability: CapabilityMatch) => {
@@ -2366,6 +2409,12 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
             description,
             tags,
             xml: latestXml,
+            lineOfBusiness: diagramMeta.lineOfBusiness,
+            channel: diagramMeta.channel,
+            domain: diagramMeta.domain,
+            subdomain: diagramMeta.subdomain,
+            product: diagramMeta.product,
+            businessFlow: diagramMeta.businessFlow,
             capabilities: selectedCapsRef.current,
             changeNote: { userId: CURRENT_USER, note: autoNote },
             updatedBy: CURRENT_USER,
@@ -2381,7 +2430,21 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
           setSavedCaps(selectedCapsRef.current);
           message.success(`Updated in DB: ${updated.name}`);
         } else {
-          const created = await createDiagram({ name, description, tags, xml: latestXml, capabilities: selectedCapsRef.current, createdBy: CURRENT_USER, sourcedFrom: activeFileName || undefined });
+          const created = await createDiagram({
+            name,
+            description,
+            tags,
+            xml: latestXml,
+            lineOfBusiness: diagramMeta.lineOfBusiness,
+            channel: diagramMeta.channel,
+            domain: diagramMeta.domain,
+            subdomain: diagramMeta.subdomain,
+            product: diagramMeta.product,
+            businessFlow: diagramMeta.businessFlow,
+            capabilities: selectedCapsRef.current,
+            createdBy: CURRENT_USER,
+            sourcedFrom: activeFileName || undefined,
+          });
           setActiveDiagram({
             _id: created._id,
             name: created.name,
@@ -2900,7 +2963,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
         <Content className="bpmn-content">
           <Tabs
             activeKey={activeOuterTab}
-            onChange={setActiveOuterTab}
+            onChange={handleOuterTabChange}
             type="card"
             size="small"
             className="factory-tabs"

@@ -1191,6 +1191,48 @@ async function doesDataComponentExist({ type, value, neighborhoodName, correlati
   return true;
 }
 
+// Maps a hierarchy component column name (e.g. "channel", "Value Stream") to the
+// canonical lineage field key used by diagram generation. Returns null for columns
+// that don't correspond to a known lineage level (e.g. Task, Application).
+const LINEAGE_FIELD_ALIASES = new Map([
+  ['lineofbusiness', 'lineOfBusiness'],
+  ['lob', 'lineOfBusiness'],
+  ['channel', 'channel'],
+  ['product', 'product'],
+  ['domain', 'domain'],
+  ['l0', 'domain'],
+  ['subdomain', 'subdomain'],
+  ['l1', 'subdomain'],
+  ['valuestream', 'valueStream'],
+  ['journey', 'journey'],
+  ['businesscapability', 'businessCapability'],
+  ['businessprocessflow', 'businessFlow'],
+  ['businessflow', 'businessFlow'],
+]);
+
+function mapComponentNameToLineageField(componentName) {
+  const normalized = String(componentName || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+  return LINEAGE_FIELD_ALIASES.get(normalized) || null;
+}
+
+// Captures the literal hierarchy values present on a single source spreadsheet row
+// (line of business, channel, product, domain, subdomain, value stream, journey,
+// business capability) at upload time — before the row is split apart into separate
+// per-component factory rows. This snapshot is the only unambiguous record of which
+// exact branch (e.g. which channel) a given row belonged to, because component nodes
+// like Value Stream/Business Capability are shared across many hierarchy branches and
+// can no longer be traced back to a single source row once merged.
+function buildLineageSnapshot(rowComponentValues) {
+  const snapshot = {};
+  for (const [componentName, value] of rowComponentValues.entries()) {
+    if (!value) continue;
+    const fieldName = mapComponentNameToLineageField(componentName);
+    if (!fieldName) continue;
+    snapshot[fieldName] = value;
+  }
+  return snapshot;
+}
+
 async function buildComponentUploadFactories({ neighborhoodName, rows, componentColumns, sourceFileName, owner, createdBy, rowNumberOffset = 0 }) {
   const factoryRowMaps = new Map(componentColumns.map((column) => [column.name, new Map()]));
   const dataExistenceCache = new Map();
@@ -1199,6 +1241,7 @@ async function buildComponentUploadFactories({ neighborhoodName, rows, component
     const row = rows[rowIndex];
     const rowComponentValues = new Map(componentColumns.map((column) => [column.name, getNormalizedText(getRowValueByColumnName(row, column.sourceColumnName))]));
     const applicationCorrelationId = getApplicationCorrelationIdFromUploadRow(row);
+    const lineageSnapshot = buildLineageSnapshot(rowComponentValues);
 
     for (const column of componentColumns) {
       const componentValue = rowComponentValues.get(column.name) || '';
@@ -1233,6 +1276,15 @@ async function buildComponentUploadFactories({ neighborhoodName, rows, component
 
       if (!existingRow) {
         const rowValues = { [PRIMARY_KEY_COLUMN]: componentValue, ...qualifierValues, ...foreignKeyValues };
+        if (Object.keys(lineageSnapshot).length) {
+          // Keep the original single-snapshot field for backward compatibility, plus a
+          // variants array so rows reused under more than one ancestor branch (e.g. the
+          // same Business Process Flow name under two different Business Capabilities)
+          // can later be matched back to the correct branch instead of only ever using
+          // the first row's snapshot.
+          rowValues.__lineage = lineageSnapshot;
+          rowValues.__lineageVariants = [lineageSnapshot];
+        }
         rowMap.set(primaryKey, {
           values: rowValues,
           foreignKeys: foreignKeysMap,
@@ -1253,6 +1305,14 @@ async function buildComponentUploadFactories({ neighborhoodName, rows, component
       }
       existingRow.updatedBy = createdBy;
       existingRow.sourcedFrom = sourceFileName;
+
+      if (Object.keys(lineageSnapshot).length) {
+        existingRow.values.__lineageVariants = existingRow.values.__lineageVariants || (existingRow.values.__lineage ? [existingRow.values.__lineage] : []);
+        const isDuplicate = existingRow.values.__lineageVariants.some(
+          (variant) => JSON.stringify(variant) === JSON.stringify(lineageSnapshot)
+        );
+        if (!isDuplicate) existingRow.values.__lineageVariants.push(lineageSnapshot);
+      }
 
       Object.entries(qualifierValues).forEach(([fieldName, nextValue]) => {
         const currentValue = getNormalizedText(existingRow.values?.[fieldName]);

@@ -46,6 +46,12 @@ export interface DiagramCreatePayload {
   description?: string;
   xml: string;
   tags?: string[];
+  lineOfBusiness?: string | null;
+  channel?: string | null;
+  domain?: string | null;
+  subdomain?: string | null;
+  product?: string | null;
+  businessFlow?: string | null;
   capabilities?: CapabilityMatch[];
   status?: string;
   sourcedFrom?: string;
@@ -57,6 +63,12 @@ export interface DiagramUpdatePayload {
   description?: string;
   xml?: string;
   tags?: string[];
+  lineOfBusiness?: string | null;
+  channel?: string | null;
+  domain?: string | null;
+  subdomain?: string | null;
+  product?: string | null;
+  businessFlow?: string | null;
   capabilities?: CapabilityMatch[];
   changeNote?: { userId: string; note: string };
   status?: string;

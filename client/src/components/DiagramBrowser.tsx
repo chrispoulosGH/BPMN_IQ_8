@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Empty, Select, Spin, Tag, Typography } from 'antd';
+import { Alert, Button, Empty, Select, Spin, Tag, Typography } from 'antd';
 import { FolderOpenOutlined, PartitionOutlined } from '@ant-design/icons';
 import type { DiagramMeta, FactoryNeighborhoodSummary } from '../types';
 import { getCanonicalTypes, getDashboardValueStreamRelationships, getDiagramsForNeighborhood } from '../api';
@@ -75,8 +75,52 @@ const COMPONENT_FILTERS: FilterDefinition[] = [
 
 const SUPPORTED_COMPONENT_FILTERS = [...COMPONENT_FILTERS, ...HIERARCHY_FILTERS];
 
+const MODEL_HIERARCHY_FILTER_ORDER = [
+  'lineOfBusiness',
+  'channel',
+  'domain',
+  'subdomain',
+  'product',
+  'valueStream',
+  'journey',
+  'businessCapability',
+  'businessFlow',
+  'task',
+  'application',
+];
+
 function normalizeFacetKey(value: string) {
   return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function normalizeFacetValue(value: unknown) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\((s|es)\)/g, '$1')
+    .replace(/&/g, ' and ')
+    .replace(/\//g, ' ')
+    .replace(/[^a-z0-9\s]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeFacetMatchKey(value: unknown) {
+  return normalizeFacetValue(value).replace(/\s+/g, '');
+}
+
+function normalizeFacetMatchVariants(value: unknown) {
+  const normalized = normalizeFacetMatchKey(value);
+  if (!normalized) return [];
+
+  const variants = new Set<string>([normalized]);
+  if (normalized.endsWith('es') && normalized.length > 2) {
+    variants.add(normalized.slice(0, -2));
+  }
+  if (normalized.endsWith('s') && normalized.length > 1) {
+    variants.add(normalized.slice(0, -1));
+  }
+  return [...variants];
 }
 
 interface DiagramBrowserProps {
@@ -93,6 +137,7 @@ interface DiagramBrowserProps {
 export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggleDiagram, externalFilterRequest = null }: DiagramBrowserProps) {
   const [selectedFrameworks, setSelectedFrameworks] = useState<string[]>([]);
   const [filters, setFilters] = useState<Record<string, string[]>>({});
+  const [joinOperators, setJoinOperators] = useState<Record<string, 'AND' | 'OR'>>({});
   const [diagrams, setDiagrams] = useState<DiagramMeta[]>([]);
   const [frameworkComponentTypes, setFrameworkComponentTypes] = useState<string[]>([]);
   const [supplementalFilterOptions, setSupplementalFilterOptions] = useState<Record<string, string[]>>({});
@@ -118,6 +163,36 @@ export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggl
     setSelectedFrameworks(requestedFrameworks);
     setFilters(externalFilterRequest.filters || {});
   }, [externalFilterRequest, frameworks]);
+
+  const facetDefinitions = useMemo(() => {
+    const supportedKeys = new Set(frameworkComponentTypes.map(normalizeFacetKey));
+    const byKey = new Map<string, FilterDefinition>();
+
+    [...SUPPORTED_COMPONENT_FILTERS]
+      .filter((definition) => {
+        if (COMPONENT_FILTERS.includes(definition)) {
+          return supportedKeys.has(normalizeFacetKey(definition.label));
+        }
+        return true;
+      })
+      .forEach((definition) => {
+        byKey.set(definition.key, definition);
+      });
+
+    return MODEL_HIERARCHY_FILTER_ORDER
+      .map((key) => byKey.get(key))
+      .filter((definition): definition is FilterDefinition => Boolean(definition));
+  }, [frameworkComponentTypes]);
+
+  useEffect(() => {
+    setJoinOperators((current) => {
+      const next: Record<string, 'AND' | 'OR'> = {};
+      facetDefinitions.forEach((definition) => {
+        next[definition.key] = current[definition.key] || 'AND';
+      });
+      return next;
+    });
+  }, [facetDefinitions]);
 
   useEffect(() => {
     let cancelled = false;
@@ -225,27 +300,6 @@ export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggl
     return () => { cancelled = true; };
   }, [frameworks, selectedFrameworks]);
 
-  const facetDefinitions = useMemo(() => {
-    const supportedKeys = new Set(frameworkComponentTypes.map(normalizeFacetKey));
-    const orderedDefinitions: FilterDefinition[] = [];
-    const seen = new Set<string>();
-
-    [...SUPPORTED_COMPONENT_FILTERS]
-      .filter((definition) => {
-        if (COMPONENT_FILTERS.includes(definition)) {
-          return supportedKeys.has(normalizeFacetKey(definition.label));
-        }
-        return true;
-      })
-      .forEach((definition) => {
-        if (seen.has(definition.key)) return;
-        seen.add(definition.key);
-        orderedDefinitions.push(definition);
-      });
-
-    return orderedDefinitions;
-  }, [frameworkComponentTypes]);
-
   const filterOptions = useMemo(() => {
     const options: Record<string, string[]> = {};
     facetDefinitions.forEach((filter) => {
@@ -260,11 +314,33 @@ export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggl
   }, [diagrams, facetDefinitions, supplementalFilterOptions]);
 
   const filteredDiagrams = useMemo(() => {
-    const selectedValues = new Set(facetDefinitions.flatMap((filter) => filters[filter.key] || []));
-    if (!selectedValues.size) return diagrams;
+    const activeFilters = facetDefinitions
+      .map((filter) => ({
+        filter,
+        values: filters[filter.key] || [],
+      }))
+      .filter(({ values }) => values.length > 0);
 
-    return diagrams.filter((diagram) => facetDefinitions.some((filter) => filter.getValues(diagram).some((value) => selectedValues.has(value))));
-  }, [diagrams, filters, facetDefinitions]);
+    if (!activeFilters.length) return diagrams;
+
+    const matchesFilter = (diagram: DiagramMeta, definition: FilterDefinition, values: string[]) => {
+      const selectedValues = new Set(values.flatMap((value) => normalizeFacetMatchVariants(value)));
+      return definition.getValues(diagram).some((value) => selectedValues.has(normalizeFacetMatchKey(value)));
+    };
+
+    return diagrams.filter((diagram) => {
+      let result = matchesFilter(diagram, activeFilters[0].filter, activeFilters[0].values);
+
+      for (let index = 1; index < activeFilters.length; index += 1) {
+        const previousKey = activeFilters[index - 1].filter.key;
+        const operator = joinOperators[previousKey] || 'AND';
+        const nextMatches = matchesFilter(diagram, activeFilters[index].filter, activeFilters[index].values);
+        result = operator === 'AND' ? result && nextMatches : result || nextMatches;
+      }
+
+      return result;
+    });
+  }, [diagrams, filters, facetDefinitions, joinOperators]);
 
   const updateFilter = (key: string, values: string[]) => {
     setFilters((current) => ({ ...current, [key]: values }));
@@ -292,18 +368,34 @@ export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggl
             />
           </div>
           {facetDefinitions.map((filter) => (
-            <div key={filter.key}>
-              <Text className="mb-1 block text-xs text-slate-600">{filter.label}</Text>
-              <Select
-                mode="multiple"
-                allowClear
-                className="w-full"
-                placeholder={`All ${filter.label.toLowerCase()} values`}
-                options={(filterOptions[filter.key] || []).map((value) => ({ label: value, value }))}
-                value={filters[filter.key] || []}
-                onChange={(values) => updateFilter(filter.key, values)}
-                maxTagCount="responsive"
-              />
+            <div key={filter.key} className="flex items-end gap-2">
+              <div className="min-w-0 flex-1">
+                <Text className="mb-1 block text-xs text-slate-600">{filter.label}</Text>
+                <Select
+                  mode="multiple"
+                  allowClear
+                  className="w-full"
+                  placeholder={`All ${filter.label.toLowerCase()} values`}
+                  options={(filterOptions[filter.key] || []).map((value) => ({ label: value, value }))}
+                  value={filters[filter.key] || []}
+                  onChange={(values) => updateFilter(filter.key, values)}
+                  maxTagCount="responsive"
+                />
+              </div>
+              <div className="pb-[2px]">
+                <Button
+                  size="small"
+                  type={joinOperators[filter.key] === 'OR' ? 'primary' : 'default'}
+                  disabled={facetDefinitions[facetDefinitions.length - 1]?.key === filter.key}
+                  onClick={() => setJoinOperators((current) => ({
+                    ...current,
+                    [filter.key]: current[filter.key] === 'OR' ? 'AND' : 'OR',
+                  }))}
+                  title={facetDefinitions[facetDefinitions.length - 1]?.key === filter.key ? 'No subsequent term' : `Switch to ${joinOperators[filter.key] === 'OR' ? 'AND' : 'OR'}`}
+                >
+                  {joinOperators[filter.key] || 'AND'}
+                </Button>
+              </div>
             </div>
           ))}
         </div>

@@ -877,7 +877,10 @@ export default function ComponentsViewer({
       moved: false,
     };
     setIsHorizontalPanning(true);
-    container.setPointerCapture?.(event.pointerId);
+    // Don't capture the pointer yet — only do so once real dragging is detected.
+    // Per the Pointer Events spec, click/mouseup events are redirected to the
+    // capturing element while a pointer is captured, so capturing immediately
+    // on pointerdown would break plain clicks (e.g. the expand/collapse arrow).
   };
 
   const handleHorizontalPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -889,6 +892,7 @@ export default function ComponentsViewer({
     const deltaY = event.clientY - state.startY;
     if (!state.moved && (Math.abs(deltaX) > 4 || Math.abs(deltaY) > 4)) {
       state.moved = true;
+      container.setPointerCapture?.(event.pointerId);
     }
     if (!state.moved) return;
 
@@ -901,7 +905,9 @@ export default function ComponentsViewer({
     const container = horizontalTreeContainerRef.current;
     if (!state || state.pointerId !== event.pointerId) return;
 
-    container?.releasePointerCapture?.(event.pointerId);
+    if (container?.hasPointerCapture?.(event.pointerId)) {
+      container.releasePointerCapture(event.pointerId);
+    }
     horizontalPanStateRef.current = null;
     setIsHorizontalPanning(false);
   };

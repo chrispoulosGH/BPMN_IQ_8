@@ -21,7 +21,7 @@ function typeMatches(componentType, name) {
   return normalize(componentType) === normalize(name);
 }
 
-async function getFlowLineage(flowDoc) {
+async function getFlowLineageBranches(flowDoc) {
   const emptyLineage = {
     lineOfBusiness: null,
     channel: null,
@@ -60,66 +60,97 @@ async function getFlowLineage(flowDoc) {
     else if (typeMatches(parent.componentType, 'Domain')) lineage.domain = parentName;
   };
 
-  const scoreLineage = (lineage) => Object.values(lineage).filter(Boolean).length;
+  // Walks a SINGLE path upward from `startParent`, always taking the first
+  // not-yet-visited parent at each subsequent level. This intentionally does not
+  // branch on shared ancestor nodes (Value Stream/Journey/Product/Channel/etc.)
+  // to avoid the combinatorial explosion those shared nodes would otherwise cause.
+  const walkSinglePath = async (startParent, seen) => {
+    const lineage = { ...emptyLineage };
+    const breadcrumbParts = [];
+    let current = startParent;
+    let currentSeen = seen;
+    let depth = 0;
 
-  const walkParents = async (parentRefs, seen = new Set([String(flowDoc._id)]), depth = 0) => {
-    if (!Array.isArray(parentRefs) || !parentRefs.length || depth >= MAX_LINEAGE_HOPS) {
-      return [{ lineage: { ...emptyLineage }, breadcrumbParts: [] }];
+    while (current && depth < MAX_LINEAGE_HOPS) {
+      applyParentToLineage(lineage, current);
+      const parentName = current.values?.name || current.primaryKey;
+      breadcrumbParts.unshift(`${current.componentType}: ${parentName}`);
+
+      const nextParentId = (current.parentRefs || [])
+        .map((ref) => String(ref || '').trim())
+        .find((id) => id && !currentSeen.has(id));
+      if (!nextParentId) break;
+
+      currentSeen = new Set(currentSeen);
+      currentSeen.add(nextParentId);
+      current = await loadParent(nextParentId);
+      depth += 1;
     }
 
-    const results = [];
-    for (const parentRef of parentRefs) {
-      const parentId = String(parentRef || '').trim();
-      if (!parentId || seen.has(parentId)) continue;
+    return { lineage, breadcrumbParts };
+  };
 
-      const parent = await loadParent(parentId);
-      if (!parent) continue;
+  // Branch only on the flow's OWN direct parents. In practice this is almost
+  // always exactly one (Business Capability); a handful of flow names are
+  // legitimately reused under more than one Business Capability, and those get
+  // one branch per direct parent — bounded by the flow's own parent count, not
+  // by the size of the shared ancestor graph above it.
+  const directParentIds = Array.from(new Set((flowDoc.parentRefs || []).map((ref) => String(ref || '').trim()).filter(Boolean)));
+  const rootSeen = new Set([String(flowDoc._id)]);
 
-      const nextSeen = new Set(seen);
-      nextSeen.add(parentId);
-      const parentName = parent.values?.name || parent.primaryKey;
-      const parentLabel = `${parent.componentType}: ${parentName}`;
-      const parentPaths = await walkParents(parent.parentRefs || [], nextSeen, depth + 1);
+  const branches = [];
+  for (const parentId of directParentIds) {
+    const parent = await loadParent(parentId);
+    if (!parent) continue;
+    const nextSeen = new Set(rootSeen);
+    nextSeen.add(parentId);
+    const { lineage, breadcrumbParts } = await walkSinglePath(parent, nextSeen);
+    branches.push({ lineage, breadcrumb: [...breadcrumbParts, baseBreadcrumb].join(' | ') });
+  }
+  if (!branches.length) {
+    branches.push({ lineage: { ...emptyLineage }, breadcrumb: baseBreadcrumb });
+  }
 
-      for (const parentPath of parentPaths) {
-        const lineage = { ...parentPath.lineage };
-        applyParentToLineage(lineage, parent);
-        results.push({
-          lineage,
-          breadcrumbParts: [...parentPath.breadcrumbParts, parentLabel],
-        });
+  // If the flow's own row(s) captured literal per-row lineage snapshots at upload
+  // time (see buildLineageSnapshot in customFactories.js), those snapshots are the
+  // unambiguous ground truth for whichever branch they came from. Match each
+  // branch to the variant with the same businessCapability (falling back to the
+  // single legacy `__lineage` field for data materialized before variants existed),
+  // and apply it as a full override so that branch's journey/valueStream/domain/etc.
+  // are corrected too, not just its businessCapability.
+  const values = flowDoc.values && typeof flowDoc.values === 'object' ? flowDoc.values : null;
+  const lineageVariants = Array.isArray(values?.__lineageVariants) && values.__lineageVariants.length
+    ? values.__lineageVariants
+    : (values?.__lineage ? [values.__lineage] : []);
+  const usedVariantIndexes = new Set();
+  return branches.map((branch) => {
+    const resolvedLineage = { ...branch.lineage };
+    let variantIndex = lineageVariants.findIndex(
+      (variant, idx) => !usedVariantIndexes.has(idx) && variant?.businessCapability && variant.businessCapability === branch.lineage.businessCapability
+    );
+    if (variantIndex === -1 && branches.length === 1) {
+      variantIndex = lineageVariants.findIndex((_variant, idx) => !usedVariantIndexes.has(idx));
+    }
+    if (variantIndex !== -1) {
+      usedVariantIndexes.add(variantIndex);
+      const variant = lineageVariants[variantIndex];
+      for (const key of Object.keys(emptyLineage)) {
+        if (variant[key]) resolvedLineage[key] = variant[key];
       }
     }
-
-    if (!results.length) {
-      return [{ lineage: { ...emptyLineage }, breadcrumbParts: [] }];
-    }
-
-    return results;
-  };
-
-  const lineagePaths = await walkParents(flowDoc.parentRefs || []);
-  const bestPath = lineagePaths.sort((left, right) => {
-    const scoreDiff = scoreLineage(right.lineage) - scoreLineage(left.lineage);
-    if (scoreDiff !== 0) return scoreDiff;
-    return right.breadcrumbParts.length - left.breadcrumbParts.length;
-  })[0] || { lineage: { ...emptyLineage }, breadcrumbParts: [] };
-
-  return {
-    ...bestPath.lineage,
-    breadcrumb: [...bestPath.breadcrumbParts, baseBreadcrumb].join(' | '),
-  };
+    return { lineage: resolvedLineage, breadcrumb: branch.breadcrumb };
+  });
 }
 
 async function generateDiagramForFlow(neighborhoodName, flow) {
   const flowName = flow.values?.name || flow.primaryKey;
   const taskIds = flow.childrenRefs || [];
-  if (!taskIds.length) return { status: 'skipped', flowName, reason: 'no tasks' };
+  if (!taskIds.length) return [{ status: 'skipped', flowName, reason: 'no tasks' }];
 
   const taskDocs = await CanonicalComponent.find({ _id: { $in: taskIds } }).lean();
   const taskById = new Map(taskDocs.map((t) => [String(t._id), t]));
   const orderedTasks = taskIds.map((id) => taskById.get(String(id))).filter(Boolean);
-  if (!orderedTasks.length) return { status: 'skipped', flowName, reason: 'no tasks' };
+  if (!orderedTasks.length) return [{ status: 'skipped', flowName, reason: 'no tasks' }];
 
   const allAppIds = Array.from(new Set(orderedTasks.flatMap((t) => (t.childrenRefs || []).map(String))));
   const appDocs = allAppIds.length ? await CanonicalComponent.find({ _id: { $in: allAppIds } }).lean() : [];
@@ -132,9 +163,6 @@ async function generateDiagramForFlow(neighborhoodName, flow) {
     applications: (t.childrenRefs || []).map((id) => appNameById.get(String(id))).filter(Boolean),
   }));
 
-  const { breadcrumb, lineOfBusiness, channel, product, valueStream, journey, businessCapability, domain, subdomain } = await getFlowLineage(flow);
-  const { xml } = buildBpmnXmlForFlow({ flowName, breadcrumb, tasks });
-
   const diagramTasks = tasks.map((t, i) => ({
     name: t.name,
     source: i > 0 ? tasks[i - 1].name : null,
@@ -143,41 +171,57 @@ async function generateDiagramForFlow(neighborhoodName, flow) {
     applications: t.applications.map((name) => ({ name })),
   }));
 
-  const existing = await Diagram.findOne({ neighborhoodName, name: flowName }, { sourcedFrom: 1 }).lean();
-  if (existing && existing.sourcedFrom !== SOURCED_FROM) {
-    // A manually-created (or differently-sourced) diagram already owns this name — don't clobber it.
-    return { status: 'conflict', flowName };
+  const branches = await getFlowLineageBranches(flow);
+  const results = [];
+
+  for (let index = 0; index < branches.length; index += 1) {
+    const { breadcrumb, lineage } = branches[index];
+    const { lineOfBusiness, channel, product, valueStream, journey, businessCapability, domain, subdomain } = lineage;
+    const diagramName = branches.length === 1
+      ? flowName
+      : `${flowName} (${businessCapability || journey || valueStream || `Variant ${index + 1}`})`;
+
+    const { xml } = buildBpmnXmlForFlow({ flowName: diagramName, breadcrumb, tasks });
+
+    const existing = await Diagram.findOne({ neighborhoodName, name: diagramName }, { sourcedFrom: 1 }).lean();
+    if (existing && existing.sourcedFrom !== SOURCED_FROM) {
+      // A manually-created (or differently-sourced) diagram already owns this name — don't clobber it.
+      results.push({ status: 'conflict', flowName: diagramName });
+      continue;
+    }
+
+    await Diagram.findOneAndUpdate(
+      { neighborhoodName, name: diagramName },
+      {
+        $set: {
+          neighborhoodName,
+          name: diagramName,
+          description: `Auto-generated from Business Process Flow "${flowName}".`,
+          xml,
+          tags: Array.from(new Set(['BPMN Automation', businessCapability].filter(Boolean))),
+          tasks: diagramTasks,
+          lineOfBusiness: lineOfBusiness || null,
+          channel: channel || null,
+          product: product || null,
+          valueStream: valueStream || null,
+          journey: journey || null,
+          domain: domain || null,
+          subdomain: subdomain || null,
+          businessFlow: flowName,
+          businessCapability: businessCapability || null,
+          sourcedFrom: SOURCED_FROM,
+          updatedBy: SOURCED_FROM,
+          status: 'published',
+        },
+        $setOnInsert: { createdBy: SOURCED_FROM, version: 1 },
+      },
+      { upsert: true }
+    );
+
+    results.push({ status: existing ? 'updated' : 'created', flowName: diagramName });
   }
 
-  await Diagram.findOneAndUpdate(
-    { neighborhoodName, name: flowName },
-    {
-      $set: {
-        neighborhoodName,
-        name: flowName,
-        description: `Auto-generated from Business Process Flow "${flowName}".`,
-        xml,
-        tags: Array.from(new Set(['BPMN Automation', businessCapability].filter(Boolean))),
-        tasks: diagramTasks,
-        lineOfBusiness: lineOfBusiness || null,
-        channel: channel || null,
-        product: product || null,
-        valueStream: valueStream || null,
-        journey: journey || null,
-        domain: domain || null,
-        subdomain: subdomain || null,
-        businessFlow: flowName,
-        businessCapability: businessCapability || null,
-        sourcedFrom: SOURCED_FROM,
-        updatedBy: SOURCED_FROM,
-        status: 'published',
-      },
-      $setOnInsert: { createdBy: SOURCED_FROM, version: 1 },
-    },
-    { upsert: true }
-  );
-
-  return { status: existing ? 'updated' : 'created', flowName };
+  return results;
 }
 
 /**
@@ -204,12 +248,14 @@ async function generateFlowDiagramsForNeighborhood({ neighborhoodName } = {}) {
 
   for (const flow of flows) {
     try {
-      const result = await generateDiagramForFlow(neighborhoodName, flow);
-      if (result.status === 'created') created += 1;
-      else if (result.status === 'updated') updated += 1;
-      else if (result.status === 'conflict') {
-        conflicts += 1;
-        console.warn(`[BPMN AUTOMATION] Skipped "${result.flowName}" — a non-automated diagram already uses that name in "${neighborhoodName}"`);
+      const flowResults = await generateDiagramForFlow(neighborhoodName, flow);
+      for (const result of flowResults) {
+        if (result.status === 'created') created += 1;
+        else if (result.status === 'updated') updated += 1;
+        else if (result.status === 'conflict') {
+          conflicts += 1;
+          console.warn(`[BPMN AUTOMATION] Skipped "${result.flowName}" — a non-automated diagram already uses that name in "${neighborhoodName}"`);
+        }
       }
     } catch (err) {
       failed += 1;
