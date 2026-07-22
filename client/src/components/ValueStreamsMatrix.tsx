@@ -494,7 +494,9 @@ export default function ValueStreamsMatrix({
                         </div>
 
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 16, width: '100%', alignItems: 'center' }}>
-                          {subdomainGroup.valueStreams.map((valueStream) => (
+                          {subdomainGroup.valueStreams.map((valueStream) => {
+                            const connectorMarkerId = valueStream.key.replace(/[^a-zA-Z0-9_-]/g, '-');
+                            return (
                             <div
                               key={valueStream.key}
                               style={{
@@ -569,11 +571,11 @@ export default function ValueStreamsMatrix({
                                   height={connectorHeight}
                                   viewBox={`0 0 ${capabilityRowWidth} ${connectorHeight}`}
                                   preserveAspectRatio="none"
-                                  style={{ position: 'absolute', left: 0, top: 0, overflow: 'visible', pointerEvents: 'none' }}
+                                  style={{ position: 'absolute', left: 0, top: 0, zIndex: 2, overflow: 'visible', pointerEvents: 'none' }}
                                 >
                                   <defs>
                                     <marker
-                                      id="value-stream-connector-arrow"
+                                      id={`value-stream-connector-arrow-${connectorMarkerId}`}
                                       markerWidth="8"
                                       markerHeight="8"
                                       refX="0"
@@ -599,7 +601,7 @@ export default function ValueStreamsMatrix({
                                           strokeWidth="3"
                                           strokeLinecap="round"
                                           strokeLinejoin="round"
-                                          markerEnd="url(#value-stream-connector-arrow)"
+                                          markerEnd={`url(#value-stream-connector-arrow-${connectorMarkerId})`}
                                         />
                                       </g>
                                     );
@@ -617,7 +619,7 @@ export default function ValueStreamsMatrix({
                                   </text>
                                 </svg>
 
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: capabilityTileGap, alignItems: 'stretch', justifyContent: 'center', width: '100%', maxWidth: '100%' }}>
+                                <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexWrap: 'wrap', gap: capabilityTileGap, alignItems: 'stretch', justifyContent: 'center', width: '100%', maxWidth: '100%' }}>
                                   {(capabilitiesByValueStream.get(valueStream.key) || []).map((capability) => {
                                     const isSelected = selectedCapabilityName === capability.name && selectedValueStreamName === valueStream.name;
                                     return (
@@ -680,7 +682,8 @@ export default function ValueStreamsMatrix({
                                 Business Capabilities
                               </div>
                             </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
                     );
