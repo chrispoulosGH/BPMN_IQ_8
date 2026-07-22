@@ -583,38 +583,54 @@ router.get('/value-stream-relationships', async (req, res) => {
     const modelRows = (model?.modelCatalogRows || []).map((row) => getRowValues(row.values));
     const hasModelValueStreamData = modelRows.some((row) => String(row?.['Value Stream Component'] || '').trim());
 
-    if (hasModelValueStreamData) {
-      totalDiagrams = modelRows.length;
-      for (const row of modelRows) {
-        addRelationshipRow({
-          valueStream: row['Value Stream Component'],
-          domain: row['domain Component'],
-          subdomain: row['subdomain Component'],
-          capabilityNames: [row['Business Capability Component']],
-          domainSequence: row['domain_sequence Qualifier'],
-          subdomainSequence: row['sub_domain_sequence Qualifier'],
-        });
-      }
-    } else {
-      const diagrams = await Diagram.find(
-        withNeighborhood(req),
-        { name: 1, businessFlow: 1, businessCapability: 1, valueStream: 1, capabilities: 1, domain: 1, subdomain: 1 }
-      ).lean();
-      totalDiagrams = diagrams.length;
+    // The Value Streams tab must always reflect actual diagrams (the same source
+    // the Diagrams tab search counts from), so both tabs stay in sync. Model
+    // catalog rows are only used as a best-effort lookup for domain/subdomain
+    // sequence ordering — a row with no match must NOT prevent a diagram from
+    // being shown, otherwise any hierarchy/combo mismatch would blank the tab.
+    const comboKey = (capability, valueStream, domain, subdomain) => [capability, valueStream, domain, subdomain]
+      .map((value) => String(value || '').trim().toLowerCase())
+      .join('\u001F');
 
-      for (const diagram of diagrams) {
-        addRelationshipRow({
-          valueStream: diagram.valueStream,
-          domain: diagram.domain,
-          subdomain: diagram.subdomain,
-          capabilityNames: [
-            ...((diagram.capabilities || [])
-              .map((capability) => String(capability?.capabilityName || '').trim())
-              .filter(Boolean)),
-            String(diagram.businessCapability || '').trim(),
-          ],
-        });
+    const sequenceByCombo = new Map();
+    if (hasModelValueStreamData) {
+      for (const row of modelRows) {
+        const key = comboKey(
+          row['Business Capability Component'],
+          row['Value Stream Component'],
+          row['domain Component'],
+          row['subdomain Component'],
+        );
+        if (!sequenceByCombo.has(key)) {
+          sequenceByCombo.set(key, {
+            domainSequence: row['domain_sequence Qualifier'],
+            subdomainSequence: row['sub_domain_sequence Qualifier'],
+          });
+        }
       }
+    }
+
+    const diagrams = await Diagram.find(
+      withNeighborhood(req),
+      { name: 1, businessFlow: 1, businessCapability: 1, valueStream: 1, capabilities: 1, domain: 1, subdomain: 1 }
+    ).lean();
+    totalDiagrams = diagrams.length;
+
+    for (const diagram of diagrams) {
+      const sequence = sequenceByCombo.get(comboKey(diagram.businessCapability, diagram.valueStream, diagram.domain, diagram.subdomain));
+      addRelationshipRow({
+        valueStream: diagram.valueStream,
+        domain: diagram.domain,
+        subdomain: diagram.subdomain,
+        capabilityNames: [
+          ...((diagram.capabilities || [])
+            .map((capability) => String(capability?.capabilityName || '').trim())
+            .filter(Boolean)),
+          String(diagram.businessCapability || '').trim(),
+        ],
+        domainSequence: sequence?.domainSequence,
+        subdomainSequence: sequence?.subdomainSequence,
+      });
     }
 
     const valueStreams = [...valueStreamRows.values()]
