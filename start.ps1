@@ -2,9 +2,10 @@
 $ErrorActionPreference = "Stop"
 
 Write-Host "=== BPMN IQ 2.0 Startup ===" -ForegroundColor Cyan
-Write-Host "[OK] Using MongoDB connection from server/.env (MONGO_URI)." -ForegroundColor Green
+Write-Host "[OK] Using MongoDB connection on port 27018." -ForegroundColor Green
 
 $env:NODE_OPTIONS = ""
+$env:MONGO_URI = "mongodb://127.0.0.1:27018/bpmn_iq"
 
 function Stop-ProcessOnPort {
 	param(

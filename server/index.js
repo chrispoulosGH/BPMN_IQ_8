@@ -33,7 +33,7 @@ const { DEFAULT_NEIGHBORHOOD_NAME } = require('./utils/neighborhoodScope');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
-const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/bpmn_iq';
+const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27018/bpmn_iq';
 
 // Middleware
 app.use(cors({ origin: 'http://localhost:5173', credentials: true }));

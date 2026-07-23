@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Alert, Card, Empty, Spin, Typography } from 'antd';
-import { getComponentHierarchies, getDashboardValueStreamRelationships, type ValueStreamRelationshipData } from '../api';
+import { getComponentHierarchies, getDashboardFlowRelationships, type FlowMatrixMode, type ValueStreamRelationshipData } from '../api';
 import type { HierarchyPath } from '../types';
 
 const { Text } = Typography;
@@ -22,6 +22,21 @@ export interface ValueStreamRollupSelection {
   valueStreamCount: number;
 }
 
+export interface DomainSelection {
+  neighborhoodName: string;
+  domain: string;
+  relationshipCount: number;
+  subdomainCount: number;
+}
+
+export interface SubdomainSelection {
+  neighborhoodName: string;
+  domain: string;
+  subdomain: string;
+  relationshipCount: number;
+  businessFlowCount: number;
+}
+
 export interface ValueStreamFlowSelection {
   neighborhoodName: string;
   domain: string;
@@ -32,6 +47,10 @@ export interface ValueStreamFlowSelection {
 
 interface ValueStreamsMatrixProps {
   neighborhoodName: string;
+  mode?: FlowMatrixMode;
+  onModeChange?: (mode: FlowMatrixMode) => void;
+  onDomainSelect?: (selection: DomainSelection) => void;
+  onSubdomainSelect?: (selection: SubdomainSelection) => void;
   onCapabilitySelect?: (selection: ValueStreamCapabilitySelection) => void;
   onRollupSelect?: (selection: ValueStreamRollupSelection) => void;
   onValueStreamSelect?: (selection: ValueStreamFlowSelection) => void;
@@ -42,7 +61,6 @@ interface ValueStreamsMatrixProps {
 }
 
 type ColorScheme = 'current' | 'att';
-
 type ValueStreamsTheme = {
   sectionLabel: string;
   controlBorder: string;
@@ -80,6 +98,10 @@ type ValueStreamsTheme = {
 
 export default function ValueStreamsMatrix({
   neighborhoodName,
+  mode = 'valueStream',
+  onModeChange,
+  onDomainSelect,
+  onSubdomainSelect,
   onCapabilitySelect,
   onRollupSelect,
   onValueStreamSelect,
@@ -93,42 +115,6 @@ export default function ValueStreamsMatrix({
   const capabilityRowWidth = 520;
   const flowBarHeight = 56;
   const connectorHeight = 54;
-  const [colorScheme, setColorScheme] = useState<ColorScheme>('current');
-
-  const currentTheme: ValueStreamsTheme = {
-    sectionLabel: '#64748b',
-    controlBorder: '#c6d5ea',
-    controlBackground: 'linear-gradient(180deg, #f4f7fb 0%, #e6edf6 100%)',
-    controlBackgroundSelected: 'linear-gradient(180deg, #dfeafb 0%, #cfddf1 100%)',
-    controlText: '#475569',
-    controlTextSelected: '#1d4ed8',
-    panelBorder: '#d7e3f3',
-    panelBackground: 'linear-gradient(180deg, #161616 0%, #0f1114 48%, #1a1a1a 100%)',
-    panelShadow: '0 4px 12px rgba(71, 85, 105, 0.08)',
-    domainLabel: '#64748b',
-    domainValue: '#1d4ed8',
-    summaryText: '#475569',
-    countText: '#475569',
-    subdomainBorder: '#c6d5ea',
-    subdomainBackground: 'rgba(255, 255, 255, 0.58)',
-    subdomainShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.45)',
-    subdomainHeader: '#64748b',
-    subdomainValue: '#1d4ed8',
-    flowBorder: '#c6d5ea',
-    flowBackground: 'rgba(255, 255, 255, 0.5)',
-    flowBackgroundSelected: 'linear-gradient(90deg, #dfeafb 0%, #cfddf1 55%, #dce9f9 100%)',
-    flowBorderSelected: '#5b7ea6',
-    flowName: '#1d4ed8',
-    flowCount: '#475569',
-    connectorStroke: '#7e9ab8',
-    connectorArrow: '#5b7ea6',
-    capabilityBorder: '#c8d6e5',
-    capabilityBackground: 'linear-gradient(180deg, #f4f7fb 0%, #e6edf6 100%)',
-    capabilityBackgroundSelected: 'linear-gradient(180deg, #dfeafb 0%, #cfddf1 100%)',
-    capabilityText: '#0f172a',
-    capabilityTextMuted: '#3f556f',
-    capabilityCount: '#0f172a',
-  };
 
   const attTheme: ValueStreamsTheme = {
     sectionLabel: '#d7f7ff',
@@ -165,13 +151,18 @@ export default function ValueStreamsMatrix({
     capabilityCount: '#ffffff',
   };
 
-  const theme = colorScheme === 'att' ? attTheme : currentTheme;
+  const theme = attTheme;
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<ValueStreamRelationshipData | null>(null);
   const [hierarchyPaths, setHierarchyPaths] = useState<HierarchyPath[]>([]);
   const [visibleDomains, setVisibleDomains] = useState<string[]>([]);
+  const isJourneyMode = mode === 'journey';
+  const flowLabel = isJourneyMode ? 'Journey Experience' : 'Value Stream Flow';
+  const flowEntityLabel = isJourneyMode ? 'Journey' : 'Value Stream';
+  const flowPluralLabel = isJourneyMode ? 'Journeys' : 'Value Streams';
+  const flowCountLabel = 'Business Flow';
 
   useEffect(() => {
     let cancelled = false;
@@ -181,8 +172,8 @@ export default function ValueStreamsMatrix({
     setHierarchyPaths([]);
 
     Promise.all([
-      getDashboardValueStreamRelationships(neighborhoodName),
-      getComponentHierarchies(neighborhoodName, 'Value Stream', neighborhoodName),
+      getDashboardFlowRelationships(neighborhoodName, mode),
+      getComponentHierarchies(neighborhoodName, isJourneyMode ? 'Journey' : 'Value Stream', neighborhoodName),
     ])
       .then(([result, hierarchies]) => {
         if (!cancelled) {
@@ -191,14 +182,14 @@ export default function ValueStreamsMatrix({
         }
       })
       .catch((err: any) => {
-        if (!cancelled) setError(err?.response?.data?.error || err?.message || 'Failed to load value streams');
+        if (!cancelled) setError(err?.response?.data?.error || err?.message || `Failed to load ${flowPluralLabel.toLowerCase()}`);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
 
     return () => { cancelled = true; };
-  }, [neighborhoodName]);
+  }, [flowPluralLabel, isJourneyMode, mode, neighborhoodName]);
 
   const valueStreams = data?.valueStreams || [];
   const capabilities = data?.capabilities || [];
@@ -215,21 +206,22 @@ export default function ValueStreamsMatrix({
   const labelMap = useMemo(() => {
     const map = new Map<string, { domain: string; subdomain: string }>();
     const normalize = (value: unknown) => String(value || '').trim().toLowerCase();
+    const targetNodeName = isJourneyMode ? 'journey' : 'value stream';
 
     for (const path of hierarchyPaths) {
-      const valueStreamNode = path.nodes?.find((node) => normalize(node.componentName) === 'value stream');
-      if (!valueStreamNode?.rowName) continue;
+      const flowNode = path.nodes?.find((node) => normalize(node.componentName) === targetNodeName);
+      if (!flowNode?.rowName) continue;
 
       const domainNode = path.nodes?.find((node) => normalize(node.componentName) === 'domain');
       const subdomainNode = path.nodes?.find((node) => normalize(node.componentName) === 'subdomain');
 
-      map.set(valueStreamNode.rowName, {
+      map.set(flowNode.rowName, {
         domain: domainNode?.rowName || '',
         subdomain: subdomainNode?.rowName || '',
       });
     }
     return map;
-  }, [hierarchyPaths]);
+  }, [hierarchyPaths, isJourneyMode]);
 
   const capabilitiesByValueStream = useMemo(() => {
     const map = new Map<string, Array<{ name: string; count: number }>>();
@@ -259,9 +251,29 @@ export default function ValueStreamsMatrix({
       domain: string;
       totalCount: number;
       subdomains: Map<string, SubdomainGroup>;
+      sortSequence: number;
     };
 
     const domainMap = new Map<string, DomainGroup>();
+
+    const getSequenceQualifier = (valueStream: typeof valueStreams[number]) => {
+      const candidateValues = [
+        valueStream.domainSequence,
+        (valueStream as any).l0_sequence_qualifier,
+        (valueStream as any)['L0 sequence Qualifier'],
+        (valueStream as any).sequence_qualifier,
+        (valueStream as any)['sequence Qualifier'],
+        (valueStream as any).sequence,
+      ];
+
+      for (const candidate of candidateValues) {
+        if (candidate === null || candidate === undefined || candidate === '') continue;
+        const parsed = Number(candidate);
+        if (Number.isFinite(parsed)) return parsed;
+      }
+
+      return Number.MAX_SAFE_INTEGER;
+    };
 
     for (const valueStream of valueStreams) {
       const labels = labelMap.get(valueStream.name);
@@ -270,6 +282,7 @@ export default function ValueStreamsMatrix({
       const subdomain = valueStream.subdomain || labels?.subdomain || rollupParts[1] || 'Unspecified Subdomain';
       const domainKey = domain;
       const subdomainKey = `${domain}|||${subdomain}`;
+      const sequenceQualifier = getSequenceQualifier(valueStream);
 
       if (!domainMap.has(domainKey)) {
         domainMap.set(domainKey, {
@@ -277,11 +290,13 @@ export default function ValueStreamsMatrix({
           domain,
           totalCount: 0,
           subdomains: new Map(),
+          sortSequence: sequenceQualifier,
         });
       }
 
       const domainGroup = domainMap.get(domainKey)!;
       domainGroup.totalCount += valueStream.count;
+      domainGroup.sortSequence = Math.min(domainGroup.sortSequence, sequenceQualifier);
 
       if (!domainGroup.subdomains.has(subdomainKey)) {
         domainGroup.subdomains.set(subdomainKey, {
@@ -297,14 +312,19 @@ export default function ValueStreamsMatrix({
       subdomainGroup.valueStreams.push(valueStream);
     }
 
-    return Array.from(domainMap.values()).map((domainGroup) => ({
+    return Array.from(domainMap.values())
+      .sort((left, right) => {
+        if (left.sortSequence !== right.sortSequence) return left.sortSequence - right.sortSequence;
+        return left.domain.localeCompare(right.domain);
+      })
+      .map((domainGroup) => ({
       ...domainGroup,
       subdomains: Array.from(domainGroup.subdomains.values()),
     }));
   }, [labelMap, valueStreams]);
 
   useEffect(() => {
-    setVisibleDomains(groupedDomains.map((domainGroup) => domainGroup.key));
+    setVisibleDomains(groupedDomains.length ? [groupedDomains[0].key] : []);
   }, [groupedDomains]);
 
   const visibleGroupedDomains = useMemo(
@@ -321,37 +341,34 @@ export default function ValueStreamsMatrix({
   }
 
   if (!valueStreams.length) {
-    return <Empty description={`No value streams found for ${neighborhoodName}`} />;
+    return <Empty description={`No ${flowPluralLabel.toLowerCase()} found for ${neighborhoodName}`} />;
   }
 
   const toggleDomainVisibility = (domainKey: string) => {
-    setVisibleDomains((current) => (
-      current.includes(domainKey)
-        ? current.filter((key) => key !== domainKey)
-        : [...current, domainKey]
-    ));
+    setVisibleDomains([domainKey]);
   };
 
-  const schemeButtons = [
-    { key: 'current' as const, label: 'Current Colors' },
-    { key: 'att' as const, label: 'AT&T Colors' },
+  const modeButtons = [
+    { key: 'valueStream' as const, label: 'Value Stream View' },
+    { key: 'journey' as const, label: 'Journey View' },
   ];
+  const connectorLabel = isJourneyMode ? 'Consumed by' : 'enables';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, height: '100%', minHeight: 0, overflowY: 'auto', overflowX: 'hidden', paddingRight: 4 }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <div style={{ color: theme.sectionLabel, fontSize: 11, fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase' }}>
-          Color Scheme
+          View Mode
         </div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          {schemeButtons.map((button) => {
-            const isSelected = colorScheme === button.key;
+          {modeButtons.map((button) => {
+            const isSelected = mode === button.key;
 
             return (
               <button
                 key={button.key}
                 type="button"
-                onClick={() => setColorScheme(button.key)}
+                onClick={() => onModeChange?.(button.key)}
                 style={{
                   border: `1px solid ${isSelected ? theme.toggleBorderActive : theme.controlBorder}`,
                   borderRadius: 999,
@@ -402,7 +419,7 @@ export default function ValueStreamsMatrix({
           })}
         </div>
       </div>
-      <Card size="small" title={`Value Streams for ${neighborhoodName}`} style={{ minHeight: 0 }}>
+      <Card size="small" title={`${flowPluralLabel} for ${neighborhoodName}`} style={{ minHeight: 0 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 60, minHeight: 0 }}>
           {visibleGroupedDomains.length ? (
             visibleGroupedDomains.map((domainGroup) => (
@@ -418,7 +435,36 @@ export default function ValueStreamsMatrix({
               >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 16 }}>
                   <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center' }}>
-                    <div style={{ fontWeight: 900, color: theme.domainValue, fontSize: 43, lineHeight: 1 }}>
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => onDomainSelect?.({
+                        neighborhoodName,
+                        domain: domainGroup.domain,
+                        relationshipCount: domainGroup.totalCount,
+                        subdomainCount: domainGroup.subdomains.length,
+                      })}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          onDomainSelect?.({
+                            neighborhoodName,
+                            domain: domainGroup.domain,
+                            relationshipCount: domainGroup.totalCount,
+                            subdomainCount: domainGroup.subdomains.length,
+                          });
+                        }
+                      }}
+                      style={{
+                        fontWeight: 900,
+                        color: theme.domainValue,
+                        fontSize: 43,
+                        lineHeight: 1,
+                        cursor: onDomainSelect ? 'pointer' : 'default',
+                        textDecoration: onDomainSelect ? 'underline' : 'none',
+                        textUnderlineOffset: '6px',
+                      }}
+                    >
                       {domainGroup.domain}
                     </div>
                     <div style={{ color: theme.sectionLabel, fontSize: 26, fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase', marginTop: 16, lineHeight: 1 }}>
@@ -437,7 +483,7 @@ export default function ValueStreamsMatrix({
 
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(560px, 1fr))', gap: 16, alignItems: 'start' }}>
                   {domainGroup.subdomains.map((subdomainGroup) => {
-                    const isRollupSelected = selectedRollupKey === subdomainGroup.key;
+                    const isRollupSelected = !isJourneyMode && selectedRollupKey === subdomainGroup.key;
 
                     return (
                       <div
@@ -457,18 +503,45 @@ export default function ValueStreamsMatrix({
                             display: 'flex',
                             flexDirection: 'column',
                             gap: 10,
-                            cursor: onRollupSelect ? 'pointer' : 'default',
+                            cursor: onSubdomainSelect ? 'pointer' : (!isJourneyMode && onRollupSelect ? 'pointer' : 'default'),
                             transform: isRollupSelected ? 'translateY(-1px)' : 'none',
                             marginBottom: 14,
                           }}
-                          onClick={() => onRollupSelect?.({
-                            neighborhoodName,
-                            domain: domainGroup.domain,
-                            subdomain: subdomainGroup.subdomain,
-                            relationshipCount: subdomainGroup.totalCount,
-                            valueStreamCount: subdomainGroup.valueStreams.length,
-                          })}
+                          onClick={() => {
+                            if (onSubdomainSelect) {
+                              onSubdomainSelect({
+                                neighborhoodName,
+                                domain: domainGroup.domain,
+                                subdomain: subdomainGroup.subdomain,
+                                relationshipCount: subdomainGroup.totalCount,
+                                businessFlowCount: subdomainGroup.totalCount,
+                              });
+                              return;
+                            }
+                            if (isJourneyMode) return;
+                            onRollupSelect?.({
+                              neighborhoodName,
+                              domain: domainGroup.domain,
+                              subdomain: subdomainGroup.subdomain,
+                              relationshipCount: subdomainGroup.totalCount,
+                              valueStreamCount: subdomainGroup.valueStreams.length,
+                            });
+                          }}
                           onKeyDown={(event) => {
+                            if (onSubdomainSelect) {
+                              if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault();
+                                onSubdomainSelect?.({
+                                  neighborhoodName,
+                                  domain: domainGroup.domain,
+                                  subdomain: subdomainGroup.subdomain,
+                                  relationshipCount: subdomainGroup.totalCount,
+                                  businessFlowCount: subdomainGroup.totalCount,
+                                });
+                              }
+                              return;
+                            }
+                            if (isJourneyMode) return;
                             if (event.key === 'Enter' || event.key === ' ') {
                               event.preventDefault();
                               onRollupSelect?.({
@@ -487,10 +560,9 @@ export default function ValueStreamsMatrix({
                           <div style={{ color: theme.sectionLabel, fontSize: 22, fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase', marginTop: 8, marginBottom: 4, lineHeight: 1, textAlign: 'center' }}>
                             Subdomain
                           </div>
-                          <div style={{ color: theme.subdomainValue, fontSize: 24, fontWeight: 700, marginBottom: 2, lineHeight: 1, textAlign: 'center' }}>
-                            {subdomainGroup.valueStreams.length} value stream{subdomainGroup.valueStreams.length === 1 ? '' : 's'}
+                          <div style={{ color: theme.countText, fontSize: 22, fontWeight: 800, lineHeight: 1, textAlign: 'center' }}>
+                            {subdomainGroup.totalCount}
                           </div>
-                          <div style={{ color: theme.summaryText, fontSize: 20, marginTop: 'auto', textAlign: 'center' }}>{subdomainGroup.totalCount} Business Flow{subdomainGroup.totalCount === 1 ? '' : 's'}</div>
                         </div>
 
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 16, width: '100%', alignItems: 'center' }}>
@@ -512,7 +584,21 @@ export default function ValueStreamsMatrix({
                               }}
                             >
                               <div style={{ color: theme.sectionLabel, fontSize: 11, fontWeight: 800, letterSpacing: 0.6, textTransform: 'uppercase' }}>
-                                Value Stream Flow
+                                <span
+                                  style={{
+                                    display: 'inline-block',
+                                    color: isJourneyMode ? '#d7f7ff' : '#d4af37',
+                                    fontSize: 11,
+                                    fontWeight: 900,
+                                    letterSpacing: 1,
+                                    textTransform: 'uppercase',
+                                    textShadow: isJourneyMode
+                                      ? '0 0 8px rgba(183, 243, 255, 0.24)'
+                                      : '0 0 8px rgba(212, 175, 55, 0.35)',
+                                  }}
+                                >
+                                  {flowLabel}
+                                </span>
                               </div>
                               <div style={{ display: 'flex', justifyContent: 'center', width: '100%' }}>
                                 <div
@@ -557,7 +643,7 @@ export default function ValueStreamsMatrix({
                                     </span>
                                     <span style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                                       <span style={{ color: theme.flowCount, fontSize: 12, fontWeight: 700 }}>
-                                        {valueStream.count} Business Flow{valueStream.count === 1 ? '' : 's'}
+                                        {valueStream.count} {flowCountLabel}{valueStream.count === 1 ? '' : 's'}
                                       </span>
                                     </span>
                                   </div>
@@ -615,7 +701,7 @@ export default function ValueStreamsMatrix({
                                     fontWeight="700"
                                     style={{ letterSpacing: '0.4px', textTransform: 'uppercase' }}
                                   >
-                                    enables
+                                    {connectorLabel}
                                   </text>
                                 </svg>
 
@@ -671,7 +757,16 @@ export default function ValueStreamsMatrix({
                                           <Text style={{ fontSize: 12, color: isSelected ? theme.capabilityTextMuted : theme.capabilityTextMuted, fontWeight: 700, lineHeight: 1.25 }}>
                                             {capability.name}
                                           </Text>
-                                          <div style={{ fontSize: 18, fontWeight: 900, color: theme.capabilityCount }}>{capability.count}</div>
+                                          <div
+                                            style={{
+                                              fontSize: 24,
+                                              fontWeight: 900,
+                                              color: theme.capabilityCount,
+                                              lineHeight: 1,
+                                            }}
+                                          >
+                                            {capability.count}
+                                          </div>
                                         </div>
                                       </div>
                                     );

@@ -404,15 +404,45 @@ export default function ComponentsViewer({
     for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
     return modelColors[h % modelColors.length];
   };
+
+  const getSequenceQualifier = (component: CustomFactory): number => {
+    const candidateValues = [
+      component.rows?.[0]?.values?.l0_sequence_qualifier,
+      component.rows?.[0]?.values?.['L0 sequence Qualifier'],
+      component.rows?.[0]?.values?.l1_sequence_qualifier,
+      component.rows?.[0]?.values?.['L1 sequence Qualifier'],
+      component.rows?.[0]?.values?.sequence_qualifier,
+      component.rows?.[0]?.values?.['sequence Qualifier'],
+      component.rows?.[0]?.values?.sequence,
+    ];
+
+    for (const candidate of candidateValues) {
+      if (candidate === null || candidate === undefined || candidate === '') continue;
+      const parsed = Number(candidate);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+
+    return Number.MAX_SAFE_INTEGER;
+  };
+
+  const orderedComponents = useMemo(() => {
+    return [...components].sort((left, right) => {
+      const leftSequence = getSequenceQualifier(left);
+      const rightSequence = getSequenceQualifier(right);
+      if (leftSequence !== rightSequence) return leftSequence - rightSequence;
+      return String(left.name || '').localeCompare(String(right.name || ''));
+    });
+  }, [components]);
+
   const filteredComponents = useMemo(() => {
     if (!searchText.trim()) return components;
     const normalized = searchText.toLowerCase();
-    return components.filter(
+    return orderedComponents.filter(
       (c) =>
         c.name.toLowerCase().includes(normalized) ||
         c.sourceColumnName?.toLowerCase().includes(normalized)
     );
-  }, [components, searchText]);
+  }, [orderedComponents, searchText]);
 
   // Controlled active tab: ensure active tab follows components list
   useEffect(() => {
@@ -1060,7 +1090,7 @@ export default function ComponentsViewer({
             setHighlightedComponentId(null);
             setHighlightedRowName(null);
           }}
-          items={components.map((component) => ({
+          items={orderedComponents.map((component) => ({
           key: component._id,
           label: (
             <div

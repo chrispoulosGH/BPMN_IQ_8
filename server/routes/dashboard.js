@@ -68,6 +68,16 @@ function getFirstRowValue(values, keys, fallback = '') {
   return fallback;
 }
 
+function getFirstFiniteNumber(values, keys) {
+  for (const key of keys) {
+    const rawValue = values?.[key];
+    if (rawValue === null || rawValue === undefined || rawValue === '') continue;
+    const parsed = Number(rawValue);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
 const APP_ENRICHMENT_FIELDS = [
   'businessCriticality',
   'applicationType',
@@ -529,31 +539,49 @@ router.get('/capability-flow-relationships', async (req, res) => {
 
 /**
  * GET /api/dashboard/value-stream-relationships
- * Returns value streams and capability intersections for the current neighborhood.
+ * Returns value streams or journeys and capability intersections for the current neighborhood.
  */
 router.get('/value-stream-relationships', async (req, res) => {
   try {
+    const mode = String(req.query?.mode || 'valueStream').trim().toLowerCase();
+    const isJourneyMode = mode === 'journey';
     const neighborhoodName = getNeighborhoodName(req);
     const model = neighborhoodName && neighborhoodName !== '__all__'
       ? await Model.findOne({ name: neighborhoodName }, { modelCatalogRows: 1 }).lean()
       : null;
 
     const valueStreamCounts = new Map();
+    const diagramCounts = new Map();
     const capabilityCounts = new Map();
     const linkCounts = new Map();
     const valueStreamRows = new Map();
+    const businessFlowsByFlowKey = new Map();
+    const businessFlowsByCapability = new Map();
+    const businessFlowsByCapabilityFlow = new Map();
     let totalDiagrams = 0;
+
+    const normalizeFlowName = (value) => {
+      const normalized = String(value || '').trim();
+      if (!normalized) return '';
+      const lowered = normalized.toLowerCase();
+      if (lowered === 'undefined' || lowered === 'null') return '';
+      return normalized;
+    };
 
     const addRelationshipRow = ({
       valueStream,
+      journey,
+      businessFlow,
+      rowOrder,
       domain,
       subdomain,
       capabilityNames = [],
       domainSequence = null,
       subdomainSequence = null,
     }) => {
-      const normalizedValueStream = String(valueStream || '').trim();
+      const normalizedValueStream = normalizeFlowName(isJourneyMode ? journey : valueStream);
       if (!normalizedValueStream) return;
+      const normalizedBusinessFlow = normalizeValue(businessFlow, '');
 
       const normalizedDomain = normalizeValue(domain, 'Unspecified Domain');
       const normalizedSubdomain = normalizeValue(subdomain, 'Unspecified Subdomain');
@@ -561,27 +589,47 @@ router.get('/value-stream-relationships', async (req, res) => {
       const valueStreamKey = `${normalizedValueStream}|||${rollupLabel}`;
 
       valueStreamCounts.set(normalizedValueStream, (valueStreamCounts.get(normalizedValueStream) || 0) + 1);
+      diagramCounts.set(valueStreamKey, (diagramCounts.get(valueStreamKey) || 0) + 1);
+      if (!businessFlowsByFlowKey.has(valueStreamKey)) {
+        businessFlowsByFlowKey.set(valueStreamKey, new Set());
+      }
+      if (normalizedBusinessFlow) {
+        businessFlowsByFlowKey.get(valueStreamKey).add(normalizedBusinessFlow);
+      }
       valueStreamRows.set(valueStreamKey, {
         key: valueStreamKey,
         name: normalizedValueStream,
         rollupLabel,
         domain: normalizedDomain,
         subdomain: normalizedSubdomain,
+        rowOrder: Number.isFinite(Number(rowOrder)) ? Number(rowOrder) : null,
         domainSequence: Number.isFinite(Number(domainSequence)) ? Number(domainSequence) : null,
         subdomainSequence: Number.isFinite(Number(subdomainSequence)) ? Number(subdomainSequence) : null,
-        count: (valueStreamRows.get(valueStreamKey)?.count || 0) + 1,
+        count: (valueStreamRows.get(valueStreamKey)?.count || 0),
       });
 
       const dedupedCapabilities = Array.from(new Set(capabilityNames.map((name) => String(name || '').trim()).filter(Boolean)));
       for (const capabilityName of dedupedCapabilities) {
-        capabilityCounts.set(capabilityName, (capabilityCounts.get(capabilityName) || 0) + 1);
+        if (!businessFlowsByCapability.has(capabilityName)) {
+          businessFlowsByCapability.set(capabilityName, new Set());
+        }
+        if (normalizedBusinessFlow) {
+          businessFlowsByCapability.get(capabilityName).add(normalizedBusinessFlow);
+        }
+
         const key = JSON.stringify([capabilityName, valueStreamKey]);
-        linkCounts.set(key, (linkCounts.get(key) || 0) + 1);
+        if (!businessFlowsByCapabilityFlow.has(key)) {
+          businessFlowsByCapabilityFlow.set(key, new Set());
+        }
+        if (normalizedBusinessFlow) {
+          businessFlowsByCapabilityFlow.get(key).add(normalizedBusinessFlow);
+        }
       }
     };
 
     const modelRows = (model?.modelCatalogRows || []).map((row) => getRowValues(row.values));
-    const hasModelValueStreamData = modelRows.some((row) => String(row?.['Value Stream Component'] || '').trim());
+    const modelFieldName = isJourneyMode ? 'Journey Component' : 'Value Stream Component';
+    const hasModelValueStreamData = modelRows.some((row) => String(row?.[modelFieldName] || '').trim());
 
     // The Value Streams tab must always reflect actual diagrams (the same source
     // the Diagrams tab search counts from), so both tabs stay in sync. Model
@@ -593,18 +641,41 @@ router.get('/value-stream-relationships', async (req, res) => {
       .join('\u001F');
 
     const sequenceByCombo = new Map();
+    const domainSequenceByName = new Map();
     if (hasModelValueStreamData) {
-      for (const row of modelRows) {
+      for (const [rowIndex, row] of modelRows.entries()) {
+        const normalizedL0Name = normalizeValue(row['domain Component'] || row['L0 Component'], '');
+        const normalizedL1Name = normalizeValue(row['subdomain Component'] || row['L1 Component'], '');
+        const l0Sequence = getFirstFiniteNumber(row, [
+          'domain_sequence Qualifier',
+          'domain_sequence_qualifier',
+          'L0 sequence Qualifier',
+          'L0 sequence qualifier',
+          'l0_sequence_qualifier',
+        ]);
+        const l1Sequence = getFirstFiniteNumber(row, [
+          'sub_domain_sequence Qualifier',
+          'sub_domain_sequence_qualifier',
+          'L1 sequence Qualifier',
+          'L1 sequence qualifier',
+          'l1_sequence_qualifier',
+        ]);
+
+        if (normalizedL0Name && !domainSequenceByName.has(normalizedL0Name)) {
+          domainSequenceByName.set(normalizedL0Name, l0Sequence);
+        }
+
         const key = comboKey(
           row['Business Capability Component'],
-          row['Value Stream Component'],
-          row['domain Component'],
-          row['subdomain Component'],
+          row[modelFieldName],
+          normalizedL0Name,
+          normalizedL1Name,
         );
         if (!sequenceByCombo.has(key)) {
           sequenceByCombo.set(key, {
-            domainSequence: row['domain_sequence Qualifier'],
-            subdomainSequence: row['sub_domain_sequence Qualifier'],
+            domainSequence: l0Sequence,
+            subdomainSequence: l1Sequence,
+            rowOrder: rowIndex,
           });
         }
       }
@@ -612,14 +683,19 @@ router.get('/value-stream-relationships', async (req, res) => {
 
     const diagrams = await Diagram.find(
       withNeighborhood(req),
-      { name: 1, businessFlow: 1, businessCapability: 1, valueStream: 1, capabilities: 1, domain: 1, subdomain: 1 }
+      { name: 1, businessFlow: 1, businessCapability: 1, valueStream: 1, journey: 1, capabilities: 1, domain: 1, subdomain: 1 }
     ).lean();
     totalDiagrams = diagrams.length;
 
     for (const diagram of diagrams) {
-      const sequence = sequenceByCombo.get(comboKey(diagram.businessCapability, diagram.valueStream, diagram.domain, diagram.subdomain));
+      const flowValue = isJourneyMode ? diagram.journey : diagram.valueStream;
+      const sequence = sequenceByCombo.get(comboKey(diagram.businessCapability, flowValue, diagram.domain, diagram.subdomain));
+      const normalizedDomain = normalizeValue(diagram.domain, '');
       addRelationshipRow({
         valueStream: diagram.valueStream,
+        journey: diagram.journey,
+        businessFlow: diagram.businessFlow,
+        rowOrder: sequence?.rowOrder,
         domain: diagram.domain,
         subdomain: diagram.subdomain,
         capabilityNames: [
@@ -628,13 +704,28 @@ router.get('/value-stream-relationships', async (req, res) => {
             .filter(Boolean)),
           String(diagram.businessCapability || '').trim(),
         ],
-        domainSequence: sequence?.domainSequence,
+        domainSequence: sequence?.domainSequence ?? domainSequenceByName.get(normalizedDomain),
         subdomainSequence: sequence?.subdomainSequence,
       });
     }
 
+    for (const [flowKey, row] of valueStreamRows.entries()) {
+      const flowCount = diagramCounts.get(flowKey) || 0;
+      row.count = flowCount;
+    }
+    for (const [capability, flowSet] of businessFlowsByCapability.entries()) {
+      capabilityCounts.set(capability, flowSet.size);
+    }
+    for (const [key, flowSet] of businessFlowsByCapabilityFlow.entries()) {
+      linkCounts.set(key, flowSet.size);
+    }
+
     const valueStreams = [...valueStreamRows.values()]
       .sort((a, b) => {
+        const aRowOrder = a.rowOrder ?? Number.MAX_SAFE_INTEGER;
+        const bRowOrder = b.rowOrder ?? Number.MAX_SAFE_INTEGER;
+        if (aRowOrder !== bRowOrder) return aRowOrder - bRowOrder;
+
         const aDomainSequence = a.domainSequence ?? Number.MAX_SAFE_INTEGER;
         const bDomainSequence = b.domainSequence ?? Number.MAX_SAFE_INTEGER;
         if (aDomainSequence !== bDomainSequence) return aDomainSequence - bDomainSequence;

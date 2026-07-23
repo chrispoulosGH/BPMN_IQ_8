@@ -148,6 +148,8 @@ export interface ValueStreamRelationshipLink {
   count: number;
 }
 
+export type FlowMatrixMode = 'valueStream' | 'journey';
+
 export interface ValueStreamRelationshipData {
   totalDiagrams: number;
   diagramCount: number;
@@ -170,6 +172,14 @@ export interface ValueStreamRelationshipData {
 
 export const getDashboardValueStreamRelationships = (neighborhoodName?: string): Promise<ValueStreamRelationshipData> =>
   api.get('/dashboard/value-stream-relationships', scopedRequestConfig(neighborhoodName)).then((r) => r.data);
+
+export const getDashboardFlowRelationships = (neighborhoodName?: string, mode: FlowMatrixMode = 'valueStream'): Promise<ValueStreamRelationshipData> => {
+  const config = scopedRequestConfig(neighborhoodName) || {};
+  return api.get('/dashboard/value-stream-relationships', {
+    ...config,
+    params: { mode },
+  }).then((r) => r.data);
+};
 
 // ── Reference Data CRUD (for ReferenceFactory) ──────────────
 export const getRefItems = (collection: string): Promise<RefItem[]> =>

@@ -69,7 +69,7 @@ import CapabilitiesFactory from './components/CapabilitiesFactory';
 import ActorFactory from './components/ActorFactory';
 import BpmnFactory from './components/BpmnFactory';
 import Dashboard from './components/Dashboard';
-import ValueStreamsMatrix, { type ValueStreamCapabilitySelection, type ValueStreamFlowSelection, type ValueStreamRollupSelection } from './components/ValueStreamsMatrix';
+import ValueStreamsMatrix, { type DomainSelection, type SubdomainSelection, type ValueStreamCapabilitySelection, type ValueStreamFlowSelection, type ValueStreamRollupSelection } from './components/ValueStreamsMatrix';
 import ReportsPanel from './components/ReportsPanel';
 import Login from './components/Login';
 import AdminPanel from './components/AdminPanel';
@@ -94,7 +94,8 @@ interface ActiveDiagram {
 }
 
 interface SelectedValueStreamEntity {
-  type: 'businessCapability' | 'valueStream' | 'rollup';
+  type: 'businessCapability' | 'valueStream' | 'rollup' | 'domain' | 'subdomain';
+  flowMode: 'valueStream' | 'journey';
   title: string;
   neighborhoodName: string;
   domain: string;
@@ -103,6 +104,7 @@ interface SelectedValueStreamEntity {
   capabilityName?: string;
   relationshipCount: number;
   secondaryCountLabel?: string;
+  tertiaryCountLabel?: string;
   metadata: Array<{ label: string; value: string }>;
 }
 
@@ -608,6 +610,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   const [activeAnalyticsModel, setActiveAnalyticsModel] = useState<string>('');
   const [activeAnalyticsTabsByModel, setActiveAnalyticsTabsByModel] = useState<Record<string, string>>({});
   const [activeValueStreamsModel, setActiveValueStreamsModel] = useState<string>('');
+  const [activeValueStreamsModeByModel, setActiveValueStreamsModeByModel] = useState<Record<string, 'valueStream' | 'journey'>>({});
   const [activeDiagramNeighborhoodName, setActiveDiagramNeighborhoodName] = useState<string | null>(null);
   const [activeDataTab, setActiveDataTab] = useState<string>('databases');
   const [deleteAllComponentsLoading, setDeleteAllComponentsLoading] = useState(false);
@@ -1600,10 +1603,12 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   }, []);
 
   const handleValueStreamCapabilitySelect = useCallback(async (selection: ValueStreamCapabilitySelection) => {
+    const flowMode = activeValueStreamsModeByModel[selection.neighborhoodName] || 'valueStream';
     setSelectedCapability(null);
     setSelectedValueStreamEntityLoading(true);
     setSelectedValueStreamEntity({
       type: 'businessCapability',
+      flowMode,
       title: selection.capabilityName,
       neighborhoodName: selection.neighborhoodName,
       domain: selection.domain,
@@ -1617,9 +1622,14 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
     try {
       const factories = await getCustomFactories(selection.neighborhoodName, selection.neighborhoodName);
       const capabilityFactory = factories.find(isBusinessCapabilityFactory) || null;
-      const metadata = getCapabilityMetadata(capabilityFactory, selection.capabilityName);
+      const flowFactory = factories.find((factory) => normalizeLookupToken(factory.name) === (flowMode === 'journey' ? 'journey' : 'valuestream')) || null;
+      const metadata = [
+        ...getFactoryMetadata(flowFactory, selection.valueStreamName),
+        ...getCapabilityMetadata(capabilityFactory, selection.capabilityName),
+      ];
       setSelectedValueStreamEntity({
         type: 'businessCapability',
+        flowMode,
         title: selection.capabilityName,
         neighborhoodName: selection.neighborhoodName,
         domain: selection.domain,
@@ -1632,6 +1642,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
     } catch {
       setSelectedValueStreamEntity({
         type: 'businessCapability',
+        flowMode,
         title: selection.capabilityName,
         neighborhoodName: selection.neighborhoodName,
         domain: selection.domain,
@@ -1644,19 +1655,22 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
     } finally {
       setSelectedValueStreamEntityLoading(false);
     }
-  }, []);
+  }, [activeValueStreamsModeByModel]);
 
   const handleValueStreamRollupSelect = useCallback(async (selection: ValueStreamRollupSelection) => {
+    const flowMode = activeValueStreamsModeByModel[selection.neighborhoodName] || 'valueStream';
+    const flowLabel = flowMode === 'journey' ? 'journey' : 'value stream';
     setSelectedCapability(null);
     setSelectedValueStreamEntityLoading(true);
     setSelectedValueStreamEntity({
       type: 'rollup',
+      flowMode,
       title: `${selection.domain} | ${selection.subdomain}`,
       neighborhoodName: selection.neighborhoodName,
       domain: selection.domain,
       subdomain: selection.subdomain,
       relationshipCount: selection.relationshipCount,
-      secondaryCountLabel: `${selection.valueStreamCount} value stream${selection.valueStreamCount === 1 ? '' : 's'}`,
+      secondaryCountLabel: `${selection.valueStreamCount} ${flowLabel}${selection.valueStreamCount === 1 ? '' : 's'}`,
       metadata: [],
     });
 
@@ -1670,35 +1684,140 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
       ];
       setSelectedValueStreamEntity({
         type: 'rollup',
+        flowMode,
         title: `${selection.domain} | ${selection.subdomain}`,
         neighborhoodName: selection.neighborhoodName,
         domain: selection.domain,
         subdomain: selection.subdomain,
         relationshipCount: selection.relationshipCount,
-        secondaryCountLabel: `${selection.valueStreamCount} value stream${selection.valueStreamCount === 1 ? '' : 's'}`,
+        secondaryCountLabel: `${selection.valueStreamCount} ${flowLabel}${selection.valueStreamCount === 1 ? '' : 's'}`,
         metadata,
       });
     } catch {
       setSelectedValueStreamEntity({
         type: 'rollup',
+        flowMode,
         title: `${selection.domain} | ${selection.subdomain}`,
         neighborhoodName: selection.neighborhoodName,
         domain: selection.domain,
         subdomain: selection.subdomain,
         relationshipCount: selection.relationshipCount,
-        secondaryCountLabel: `${selection.valueStreamCount} value stream${selection.valueStreamCount === 1 ? '' : 's'}`,
+        secondaryCountLabel: `${selection.valueStreamCount} ${flowLabel}${selection.valueStreamCount === 1 ? '' : 's'}`,
         metadata: [],
       });
     } finally {
       setSelectedValueStreamEntityLoading(false);
     }
-  }, []);
+  }, [activeValueStreamsModeByModel]);
+
+  const handleValueStreamDomainSelect = useCallback(async (selection: DomainSelection) => {
+    const flowMode = activeValueStreamsModeByModel[selection.neighborhoodName] || 'valueStream';
+    setSelectedCapability(null);
+    setSelectedValueStreamEntityLoading(true);
+    setSelectedValueStreamEntity({
+      type: 'domain',
+      flowMode,
+      title: selection.domain,
+      neighborhoodName: selection.neighborhoodName,
+      domain: selection.domain,
+      subdomain: '',
+      relationshipCount: selection.relationshipCount,
+      secondaryCountLabel: `${selection.subdomainCount} subdomain${selection.subdomainCount === 1 ? '' : 's'}`,
+      metadata: [],
+    });
+
+    try {
+      const factories = await getCustomFactories(selection.neighborhoodName, selection.neighborhoodName);
+      const domainFactory = factories.find((factory) => normalizeLookupToken(factory.name) === 'domain') || null;
+      const metadata = getFactoryMetadata(domainFactory, selection.domain);
+      setSelectedValueStreamEntity((current) => ({
+        ...current,
+        type: 'domain',
+        flowMode,
+        title: selection.domain,
+        neighborhoodName: selection.neighborhoodName,
+        domain: selection.domain,
+        subdomain: '',
+        relationshipCount: selection.relationshipCount,
+        secondaryCountLabel: `${selection.subdomainCount} subdomain${selection.subdomainCount === 1 ? '' : 's'}`,
+        metadata,
+      }));
+    } catch {
+      setSelectedValueStreamEntity((current) => ({
+        ...current,
+        type: 'domain',
+        flowMode,
+        title: selection.domain,
+        neighborhoodName: selection.neighborhoodName,
+        domain: selection.domain,
+        subdomain: '',
+        relationshipCount: selection.relationshipCount,
+        secondaryCountLabel: `${selection.subdomainCount} subdomain${selection.subdomainCount === 1 ? '' : 's'}`,
+        metadata: [],
+      }));
+    } finally {
+      setSelectedValueStreamEntityLoading(false);
+    }
+  }, [activeValueStreamsModeByModel]);
+
+  const handleValueStreamSubdomainSelect = useCallback(async (selection: SubdomainSelection) => {
+    const flowMode = activeValueStreamsModeByModel[selection.neighborhoodName] || 'valueStream';
+    setSelectedCapability(null);
+    setSelectedValueStreamEntityLoading(true);
+    setSelectedValueStreamEntity({
+      type: 'subdomain',
+      flowMode,
+      title: selection.subdomain,
+      neighborhoodName: selection.neighborhoodName,
+      domain: selection.domain,
+      subdomain: selection.subdomain,
+      relationshipCount: selection.relationshipCount,
+      secondaryCountLabel: `${selection.businessFlowCount} business flow${selection.businessFlowCount === 1 ? '' : 's'}`,
+      metadata: [],
+    });
+
+    try {
+      const factories = await getCustomFactories(selection.neighborhoodName, selection.neighborhoodName);
+      const subdomainFactory = factories.find((factory) => normalizeLookupToken(factory.name) === 'subdomain') || null;
+      const metadata = getFactoryMetadata(subdomainFactory, selection.subdomain);
+      setSelectedValueStreamEntity((current) => ({
+        ...current,
+        type: 'subdomain',
+        flowMode,
+        title: selection.subdomain,
+        neighborhoodName: selection.neighborhoodName,
+        domain: selection.domain,
+        subdomain: selection.subdomain,
+        relationshipCount: selection.relationshipCount,
+        secondaryCountLabel: `${selection.businessFlowCount} business flow${selection.businessFlowCount === 1 ? '' : 's'}`,
+        metadata,
+      }));
+    } catch {
+      setSelectedValueStreamEntity((current) => ({
+        ...current,
+        type: 'subdomain',
+        flowMode,
+        title: selection.subdomain,
+        neighborhoodName: selection.neighborhoodName,
+        domain: selection.domain,
+        subdomain: selection.subdomain,
+        relationshipCount: selection.relationshipCount,
+        secondaryCountLabel: `${selection.businessFlowCount} business flow${selection.businessFlowCount === 1 ? '' : 's'}`,
+        metadata: [],
+      }));
+    } finally {
+      setSelectedValueStreamEntityLoading(false);
+    }
+  }, [activeValueStreamsModeByModel]);
 
   const handleValueStreamFlowSelect = useCallback(async (selection: ValueStreamFlowSelection) => {
+    const flowMode = activeValueStreamsModeByModel[selection.neighborhoodName] || 'valueStream';
+    const flowLookup = flowMode === 'journey' ? 'journey' : 'valuestream';
     setSelectedCapability(null);
     setSelectedValueStreamEntityLoading(true);
     setSelectedValueStreamEntity({
       type: 'valueStream',
+      flowMode,
       title: selection.valueStreamName,
       neighborhoodName: selection.neighborhoodName,
       domain: selection.domain,
@@ -1710,10 +1829,11 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
 
     try {
       const factories = await getCustomFactories(selection.neighborhoodName, selection.neighborhoodName);
-      const valueStreamFactory = factories.find((factory) => normalizeLookupToken(factory.name) === 'valuestream') || null;
+      const valueStreamFactory = factories.find((factory) => normalizeLookupToken(factory.name) === flowLookup) || null;
       const metadata = getFactoryMetadata(valueStreamFactory, selection.valueStreamName);
       setSelectedValueStreamEntity({
         type: 'valueStream',
+        flowMode,
         title: selection.valueStreamName,
         neighborhoodName: selection.neighborhoodName,
         domain: selection.domain,
@@ -1725,6 +1845,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
     } catch {
       setSelectedValueStreamEntity({
         type: 'valueStream',
+        flowMode,
         title: selection.valueStreamName,
         neighborhoodName: selection.neighborhoodName,
         domain: selection.domain,
@@ -1736,10 +1857,11 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
     } finally {
       setSelectedValueStreamEntityLoading(false);
     }
-  }, []);
+  }, [activeValueStreamsModeByModel]);
 
   const handleOpenCapabilityDiagrams = useCallback(() => {
     if (!selectedValueStreamEntity) return;
+    const flowFilterKey = selectedValueStreamEntity.flowMode === 'journey' ? 'journey' : 'valueStream';
 
     setSelectedDiagramIds([]);
     void rebuildCompositeCanvas([]);
@@ -1753,11 +1875,11 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
 
     if (selectedValueStreamEntity.type === 'businessCapability') {
       addFilter('businessCapability', selectedValueStreamEntity.capabilityName);
-      addFilter('valueStream', selectedValueStreamEntity.valueStreamName);
+      addFilter(flowFilterKey, selectedValueStreamEntity.valueStreamName);
       addFilter('domain', selectedValueStreamEntity.domain);
       addFilter('subdomain', selectedValueStreamEntity.subdomain);
     } else if (selectedValueStreamEntity.type === 'valueStream') {
-      addFilter('valueStream', selectedValueStreamEntity.valueStreamName);
+      addFilter(flowFilterKey, selectedValueStreamEntity.valueStreamName);
       addFilter('domain', selectedValueStreamEntity.domain);
       addFilter('subdomain', selectedValueStreamEntity.subdomain);
     } else {
@@ -1775,6 +1897,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
 
   const handleOuterTabChange = useCallback((nextTab: string) => {
     if (nextTab === 'bpmn' && selectedValueStreamEntity) {
+      const flowFilterKey = selectedValueStreamEntity.flowMode === 'journey' ? 'journey' : 'valueStream';
       const filters: Record<string, string[]> = {};
       const addFilter = (key: string, value?: string | null) => {
         const trimmed = String(value || '').trim();
@@ -1783,11 +1906,11 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
 
       if (selectedValueStreamEntity.type === 'businessCapability') {
         addFilter('businessCapability', selectedValueStreamEntity.capabilityName);
-        addFilter('valueStream', selectedValueStreamEntity.valueStreamName);
+        addFilter(flowFilterKey, selectedValueStreamEntity.valueStreamName);
         addFilter('domain', selectedValueStreamEntity.domain);
         addFilter('subdomain', selectedValueStreamEntity.subdomain);
       } else if (selectedValueStreamEntity.type === 'valueStream') {
-        addFilter('valueStream', selectedValueStreamEntity.valueStreamName);
+        addFilter(flowFilterKey, selectedValueStreamEntity.valueStreamName);
         addFilter('domain', selectedValueStreamEntity.domain);
         addFilter('subdomain', selectedValueStreamEntity.subdomain);
       } else {
@@ -2573,6 +2696,10 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
     children: (
       <ValueStreamsMatrix
         neighborhoodName={model.name}
+        mode={activeValueStreamsModeByModel[model.name] || 'valueStream'}
+        onModeChange={(mode) => setActiveValueStreamsModeByModel((current) => ({ ...current, [model.name]: mode }))}
+        onDomainSelect={handleValueStreamDomainSelect}
+        onSubdomainSelect={handleValueStreamSubdomainSelect}
         onCapabilitySelect={handleValueStreamCapabilitySelect}
         onRollupSelect={handleValueStreamRollupSelect}
         onValueStreamSelect={handleValueStreamFlowSelect}
@@ -2582,7 +2709,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
         selectedValueStreamKey={selectedValueStreamEntity?.type === 'valueStream' && selectedValueStreamEntity.valueStreamName ? `${selectedValueStreamEntity.valueStreamName}|||${selectedValueStreamEntity.domain} | ${selectedValueStreamEntity.subdomain}` : null}
       />
     ),
-  })), [handleValueStreamCapabilitySelect, handleValueStreamFlowSelect, handleValueStreamRollupSelect, neighborhoodTabLabel, selectedValueStreamEntity, sortedValueStreamModels]);
+  })), [activeValueStreamsModeByModel, handleValueStreamCapabilitySelect, handleValueStreamFlowSelect, handleValueStreamRollupSelect, neighborhoodTabLabel, selectedValueStreamEntity, sortedValueStreamModels]);
 
   const analyticsModelTabItems = useMemo(() => sortedAnalyticsModels.map((model) => ({
     key: model.name,
@@ -2988,7 +3115,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
               },
               {
                 key: 'valueStreams',
-                label: outerTabLabel('valueStreams', <span><BranchesOutlined /> Value Streams</span>),
+                label: outerTabLabel('valueStreams', <span><BranchesOutlined /> Value Streams/Journeys</span>),
                 children: (
                   <Tabs
                     className="factory-tabs"
@@ -3235,7 +3362,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                 className="sidebar-card !mt-3"
                 title={
                   <span className="flex items-center gap-2 text-sm font-medium">
-                    <ThunderboltOutlined className="text-sky-600" /> Selected Value Stream Item
+                    <ThunderboltOutlined className="text-sky-600" /> Selected {selectedValueStreamEntity.flowMode === 'journey' ? 'Journey' : 'Value Stream'} Item
                   </span>
                 }
                 extra={
@@ -3251,8 +3378,12 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                         {selectedValueStreamEntity.type === 'businessCapability'
                           ? 'Business Capability'
                           : selectedValueStreamEntity.type === 'valueStream'
-                            ? 'Value Stream'
-                            : 'Domain / Subdomain'}
+                            ? (selectedValueStreamEntity.flowMode === 'journey' ? 'Journey' : 'Value Stream')
+                            : selectedValueStreamEntity.type === 'rollup'
+                              ? 'Domain / Subdomain'
+                              : selectedValueStreamEntity.type === 'domain'
+                                ? 'Domain'
+                                : 'Subdomain'}
                       </div>
                       <div className="mt-1 text-sm font-semibold text-slate-900">{selectedValueStreamEntity.title}</div>
                     </div>
@@ -3262,14 +3393,26 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                     </div>
                     {selectedValueStreamEntity.valueStreamName ? (
                       <div>
-                        <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Value Stream</div>
+                        <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{selectedValueStreamEntity.flowMode === 'journey' ? 'Journey' : 'Value Stream'}</div>
                         <div className="mt-1">{selectedValueStreamEntity.valueStreamName}</div>
                       </div>
                     ) : null}
-                    <div>
-                      <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Domain / Subdomain</div>
-                      <div className="mt-1">{selectedValueStreamEntity.domain} | {selectedValueStreamEntity.subdomain}</div>
-                    </div>
+                    {selectedValueStreamEntity.type === 'domain' ? (
+                      <div>
+                        <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Subdomains</div>
+                        <div className="mt-1">{selectedValueStreamEntity.secondaryCountLabel}</div>
+                      </div>
+                    ) : selectedValueStreamEntity.type === 'subdomain' ? (
+                      <div>
+                        <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Business Flows</div>
+                        <div className="mt-1">{selectedValueStreamEntity.domain}</div>
+                      </div>
+                    ) : (
+                      <div>
+                        <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Domain / Subdomain</div>
+                        <div className="mt-1">{selectedValueStreamEntity.domain} | {selectedValueStreamEntity.subdomain}</div>
+                      </div>
+                    )}
                     <div>
                       <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                         {selectedValueStreamEntity.type === 'rollup' ? 'Related Diagrams' : 'Supporting Diagrams'}

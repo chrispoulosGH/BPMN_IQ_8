@@ -20,6 +20,7 @@ const fkResolver = require('../services/ForeignKeyResolver');
 const { materializeFromBatches } = require('../lib/materializer');
 const CanonicalComponent = require('../models/CanonicalComponent');
 const CanonicalData = require('../models/CanonicalData');
+const Diagram = require('../models/Diagram');
 const { DEFAULT_NEIGHBORHOOD_NAME } = require('../utils/neighborhoodScope');
 const { findApplicationByAcronym, findApplicationByCorrelationId } = require('../utils/applicationReferenceLookup');
 
@@ -2459,12 +2460,31 @@ router.delete('/neighborhoods/:name/components', requireAdminWrite, async (req, 
   if (!name) return res.status(400).json({ error: 'Model name is required' });
   try {
     const db = mongoose.connection.db;
+    const componentDocs = await Component.find({ neighborhoodName: name }, { name: 1, componentType: 1, dataType: 1, sourceColumnName: 1 }).lean();
+    const deleteTokens = [...new Set(componentDocs.flatMap((doc) => [doc?.name, doc?.componentType, doc?.dataType, doc?.sourceColumnName]).map((value) => String(value || '').trim()).filter(Boolean))];
+    const diagramFilter = deleteTokens.length ? {
+      neighborhoodName: name,
+      $or: deleteTokens.flatMap((token) => {
+        const exact = new RegExp(`^${escapeRegExp(token)}$`, 'i');
+        return [
+          { businessCapability: exact },
+          { valueStream: exact },
+          { journey: exact },
+          { domain: exact },
+          { subdomain: exact },
+          { businessFlow: exact },
+          { name: exact },
+        ];
+      }),
+    } : { neighborhoodName: name };
     const [deletedFactories, deletedBatches, deletedCanonical, deletedIndex] = await Promise.all([
       Component.deleteMany({ neighborhoodName: name }),
       db.collection('dataComponentBatches').deleteMany({ neighborhoodName: name }),
       db.collection('canonicalcomponents').deleteMany({ neighborhoodName: name }),
       ComponentSearchIndex.deleteMany({ neighborhoodName: name }),
     ]);
+
+    const deletedDiagrams = await Diagram.deleteMany(diagramFilter);
 
     return res.json({
       success: true,
@@ -2473,6 +2493,7 @@ router.delete('/neighborhoods/:name/components', requireAdminWrite, async (req, 
       deletedBatchCount: deletedBatches.deletedCount || 0,
       deletedCanonicalCount: deletedCanonical.deletedCount || 0,
       deletedIndexCount: deletedIndex.deletedCount || 0,
+      deletedDiagramCount: deletedDiagrams.deletedCount || 0,
     });
   } catch (err) {
     console.error('[DELETE ALL COMPONENTS] error', err && err.message);

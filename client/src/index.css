@@ -165,8 +165,54 @@ html, body, #root {
 .factory-tabs .ant-tabs-nav {
   margin-bottom: 0 !important;
   padding: 4px 8px 0;
-  background: #f1f5f9;
-  border-bottom: 1px solid #e2e8f0;
+  background: linear-gradient(180deg, rgba(9, 12, 16, 0.98) 0%, rgba(14, 19, 25, 0.98) 52%, rgba(23, 28, 34, 0.98) 100%);
+  border-bottom: 1px solid rgba(125, 225, 255, 0.22);
+}
+
+.factory-tabs .ant-tabs-tab {
+  margin: 0 8px 0 0 !important;
+  border: 1px solid rgba(125, 225, 255, 0.28) !important;
+  border-bottom: 1px solid rgba(8, 15, 26, 0.55) !important;
+  background: linear-gradient(180deg, rgba(10, 30, 50, 0.94) 0%, rgba(18, 52, 82, 0.94) 100%) !important;
+  border-radius: 999px !important;
+  padding: 10px 16px !important;
+  position: relative !important;
+  transition: all 0.2s ease !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 2px 8px rgba(0, 18, 36, 0.18) !important;
+}
+
+.factory-tabs .ant-tabs-tab .ant-tabs-tab-btn {
+  color: #effcff !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.2px;
+}
+
+.factory-tabs .ant-tabs-tab:hover {
+  background: linear-gradient(180deg, rgba(20, 46, 74, 0.96) 0%, rgba(30, 72, 108, 0.96) 100%) !important;
+  border-color: rgba(154, 234, 255, 0.42) !important;
+  transform: translateY(-1px);
+}
+
+.factory-tabs .ant-tabs-tab-active {
+  background: linear-gradient(180deg, rgba(0, 110, 200, 0.98) 0%, rgba(66, 192, 245, 0.98) 100%) !important;
+  border-color: rgba(154, 234, 255, 0.72) !important;
+  box-shadow:
+    0 0 0 3px rgba(147, 171, 201, 0.20),
+    0 6px 16px rgba(71, 85, 105, 0.18) !important;
+}
+
+.factory-tabs .ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: #ffffff !important;
+}
+
+.factory-tabs .ant-tabs-ink-bar {
+  display: none !important;
+}
+
+.factory-tabs .ant-tabs-nav::before {
+  border-bottom: none !important;
 }
 
 /* Prevent table rows from being clipped in nested tabs/cards.
@@ -378,48 +424,48 @@ html, body, #root {
 
 /* BASE: Factory tabs — AT&T light blue */
 .factory-tabs .ant-tabs-tab {
-  margin: 0 !important;
-  margin-right: -1px !important;
-  border: 1px solid #c9e6f5 !important;
-  border-bottom: none !important;
-  background: #d1e9f4 !important;
-  border-radius: 6px 6px 0 0 !important;
-  padding: 8px 16px !important;
+  margin: 0 8px 0 0 !important;
+  border: 1px solid rgba(125, 225, 255, 0.28) !important;
+  border-bottom: 1px solid rgba(8, 15, 26, 0.55) !important;
+  background: linear-gradient(180deg, rgba(10, 30, 50, 0.94) 0%, rgba(18, 52, 82, 0.94) 100%) !important;
+  border-radius: 999px !important;
+  padding: 10px 16px !important;
   position: relative !important;
   transition: all 0.2s ease !important;
   z-index: 1 !important;
-  color: #000 !important;
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1) !important;
+  color: #effcff !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 2px 8px rgba(0, 18, 36, 0.18) !important;
 }
 
 .factory-tabs .ant-tabs-tab:hover {
-  background: #d7ecf8 !important;
+  background: linear-gradient(180deg, rgba(20, 46, 74, 0.96) 0%, rgba(30, 72, 108, 0.96) 100%) !important;
   z-index: 2 !important;
 }
 
 .factory-tabs .ant-tabs-tab-active {
-  background: #a8d8f0 !important;
-  border-color: #7bc4e8 !important;
+  background: linear-gradient(180deg, rgba(0, 110, 200, 0.98) 0%, rgba(66, 192, 245, 0.98) 100%) !important;
+  border-color: rgba(154, 234, 255, 0.72) !important;
   z-index: 10 !important;
   font-weight: 700 !important;
-  color: #1e40af !important;
+  color: #ffffff !important;
+  box-shadow:
+    0 0 0 3px rgba(147, 171, 201, 0.20),
+    0 6px 16px rgba(71, 85, 105, 0.18) !important;
 }
 
 .factory-tabs .ant-tabs-tab-active .ant-tabs-tab-btn {
-  color: #1e40af !important;
+  color: #ffffff !important;
 }
 
-/* GROUP: Canvas — cyan */
-.factory-tabs .ant-tabs-tab[data-node-key="bpmn"] {
-  border-top: 3px solid #0891b2 !important;
-}
 .factory-tabs .ant-tabs-tab-active[data-node-key="bpmn"] {
-  background: #a8d8f0 !important;
-  color: #1e40af !important;
+  background: linear-gradient(180deg, rgba(0, 110, 200, 0.98) 0%, rgba(66, 192, 245, 0.98) 100%) !important;
+  color: #ffffff !important;
   font-weight: 700 !important;
 }
 .factory-tabs .ant-tabs-tab[data-node-key="bpmn"]:not(.ant-tabs-tab-active):hover {
-  background: #d7ecf8 !important;
+  background: linear-gradient(180deg, rgba(20, 46, 74, 0.96) 0%, rgba(30, 72, 108, 0.96) 100%) !important;
 }
 
 /* GROUP: Factories — indigo */
@@ -436,7 +482,7 @@ html, body, #root {
 .factory-tabs .ant-tabs-tab[data-node-key="channels"],
 .factory-tabs .ant-tabs-tab[data-node-key="domains"],
 .factory-tabs .ant-tabs-tab[data-node-key="subdomains"] {
-  border-top: 3px solid #4f46e5 !important;
+  border-top: 3px solid rgba(125, 225, 255, 0.42) !important;
 }
 .factory-tabs .ant-tabs-tab-active[data-node-key="diagramFactory"],
 .factory-tabs .ant-tabs-tab-active[data-node-key="tasks"],
@@ -451,8 +497,8 @@ html, body, #root {
 .factory-tabs .ant-tabs-tab-active[data-node-key="channels"],
 .factory-tabs .ant-tabs-tab-active[data-node-key="domains"],
 .factory-tabs .ant-tabs-tab-active[data-node-key="subdomains"] {
-  background: #a8d8f0 !important;
-  color: #1e40af !important;
+  background: linear-gradient(180deg, rgba(0, 110, 200, 0.98) 0%, rgba(66, 192, 245, 0.98) 100%) !important;
+  color: #ffffff !important;
   font-weight: 700 !important;
 }
 .factory-tabs .ant-tabs-tab[data-node-key="diagramFactory"]:not(.ant-tabs-tab-active):hover,
@@ -468,7 +514,7 @@ html, body, #root {
 .factory-tabs .ant-tabs-tab[data-node-key="channels"]:not(.ant-tabs-tab-active):hover,
 .factory-tabs .ant-tabs-tab[data-node-key="domains"]:not(.ant-tabs-tab-active):hover,
 .factory-tabs .ant-tabs-tab[data-node-key="subdomains"]:not(.ant-tabs-tab-active):hover {
-  background: #d7ecf8 !important;
+  background: linear-gradient(180deg, rgba(20, 46, 74, 0.96) 0%, rgba(30, 72, 108, 0.96) 100%) !important;
 }
 
 /* GROUP: Analytics — amber */
