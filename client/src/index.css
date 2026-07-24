@@ -728,38 +728,125 @@ html, body, #root {
   flex: 1;
 }
 
-/* ─── Model Panel Action Buttons ───────────────────────────── */
-.btn-create-model {
-  background: #1890ff !important;
-  color: white !important;
-  border: none !important;
-  font-size: 10px !important;
-  padding: 2px 8px !important;
-  height: 20px !important;
-  line-height: 20px !important;
-}
-.btn-create-model:hover {
-  background: #0050b3 !important;
-}
-.btn-import-framework {
-  background: #106ebe !important;
-  font-size: 14px !important;
-  padding: 0 7px !important;
-  height: 24px !important;
-  line-height: 22px !important;
+/* ─── Frameworks Tab Toolbar Buttons (ribbon style) ─────────
+   Mirrors .bpmn-ribbon-btn's gradient/shadow language so the
+   Frameworks tab matches the BPMN editor's toolbar look. ─── */
+.framework-toolbar-btn {
+  color: #334155 !important;
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.96) 0%, rgba(226, 232, 240, 0.96) 100%) !important;
+  border: 1px solid #cbd5e1 !important;
+  border-radius: 6px !important;
+  font-size: 12.5px !important;
+  font-weight: 600 !important;
+  height: 28px !important;
+  padding: 0 12px !important;
+  line-height: 26px !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 1px 2px rgba(15, 23, 42, 0.08) !important;
+  transition: all 0.15s ease !important;
 }
 
-.btn-bulk-import {
-  background: #10b981 !important;
-  color: white !important;
-  border: none !important;
-  font-size: 10px !important;
-  padding: 2px 8px !important;
-  height: 20px !important;
-  line-height: 20px !important;
+.framework-toolbar-btn:hover,
+.framework-toolbar-btn:focus {
+  color: #0f172a !important;
+  background: linear-gradient(180deg, rgba(219, 234, 254, 0.98) 0%, rgba(191, 219, 254, 0.98) 100%) !important;
+  border-color: #93c5fd !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.85),
+    0 3px 8px rgba(59, 130, 246, 0.2) !important;
 }
-.btn-bulk-import:hover {
-  background: #059669 !important;
+
+.framework-toolbar-btn.ant-btn-primary {
+  color: #eff6ff !important;
+  background: linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%) !important;
+  border-color: #1d4ed8 !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 4px 10px rgba(37, 99, 235, 0.3) !important;
+}
+
+.framework-toolbar-btn.ant-btn-primary:hover,
+.framework-toolbar-btn.ant-btn-primary:focus {
+  color: #ffffff !important;
+  background: linear-gradient(180deg, #1d4ed8 0%, #1e40af 100%) !important;
+  border-color: #1e40af !important;
+}
+
+.framework-toolbar-btn.ant-btn-dangerous {
+  color: #b91c1c !important;
+  background: linear-gradient(180deg, #fff1f1 0%, #fecaca 100%) !important;
+  border-color: #fca5a5 !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.6),
+    0 1px 2px rgba(153, 27, 27, 0.12) !important;
+}
+
+.framework-toolbar-btn.ant-btn-dangerous:hover,
+.framework-toolbar-btn.ant-btn-dangerous:focus {
+  color: #ffffff !important;
+  background: linear-gradient(180deg, #ef4444 0%, #dc2626 100%) !important;
+  border-color: #dc2626 !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 4px 10px rgba(220, 38, 38, 0.3) !important;
+}
+
+.framework-toolbar-btn[disabled],
+.framework-toolbar-btn[disabled]:hover {
+  color: #94a3b8 !important;
+  background: rgba(226, 232, 240, 0.65) !important;
+  border-color: #e2e8f0 !important;
+  box-shadow: none !important;
+}
+
+/* ─── Diagram Search Panel (Diagrams tab) ────────────────────
+   Mirrors the .bpmn-ribbon / .bpmn-ribbon-group gradient-card
+   language so the search panel matches the ribbon beside it. */
+.diagram-search-panel {
+  background: linear-gradient(180deg, rgba(226, 232, 240, 0.95) 0%, rgba(241, 245, 249, 0.98) 100%);
+}
+
+.diagram-search-card {
+  border: 1px solid #cbd5e1;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(226, 232, 240, 0.92) 100%);
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.75);
+}
+
+.diagram-search-card .ant-select-selector {
+  border-radius: 8px !important;
+}
+
+.diagram-tile {
+  border-radius: 10px !important;
+  border: 1px solid #cbd5e1 !important;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(248, 250, 252, 0.96) 100%) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 1px 2px rgba(15, 23, 42, 0.06) !important;
+  transition: all 0.15s ease !important;
+}
+
+.diagram-tile:hover {
+  border-color: #93c5fd !important;
+  background: linear-gradient(180deg, rgba(239, 246, 255, 0.98) 0%, rgba(219, 234, 254, 0.9) 100%) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.85),
+    0 3px 8px rgba(59, 130, 246, 0.18) !important;
+  transform: translateY(-1px);
+}
+
+.diagram-tile-selected,
+.diagram-tile-selected:hover {
+  border-color: #2563eb !important;
+  background: linear-gradient(180deg, #eff6ff 0%, #dbeafe 100%) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.7),
+    0 3px 10px rgba(37, 99, 235, 0.25) !important;
+  transform: none;
 }
 
 /* ─── Model Panel Small Button Sizing (30% reduction) ─────── */

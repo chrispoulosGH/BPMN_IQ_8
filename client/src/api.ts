@@ -165,6 +165,7 @@ export interface ValueStreamRelationshipData {
     subdomain: string;
     domainSequence: number | null;
     subdomainSequence: number | null;
+    actors?: string[];
   }>;
   capabilities: Array<{ name: string; count: number }>;
   links: ValueStreamRelationshipLink[];

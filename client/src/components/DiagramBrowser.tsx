@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Empty, Select, Spin, Tag, Typography } from 'antd';
+import { Alert, Empty, Select, Spin, Tag, Tooltip, Typography } from 'antd';
 import { FolderOpenOutlined, PartitionOutlined } from '@ant-design/icons';
 import type { DiagramMeta, FactoryNeighborhoodSummary } from '../types';
 import { getCanonicalTypes, getDashboardValueStreamRelationships, getDiagramsForNeighborhood } from '../api';
@@ -137,7 +137,6 @@ interface DiagramBrowserProps {
 export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggleDiagram, externalFilterRequest = null }: DiagramBrowserProps) {
   const [selectedFrameworks, setSelectedFrameworks] = useState<string[]>([]);
   const [filters, setFilters] = useState<Record<string, string[]>>({});
-  const [joinOperators, setJoinOperators] = useState<Record<string, 'AND' | 'OR'>>({});
   const [diagrams, setDiagrams] = useState<DiagramMeta[]>([]);
   const [frameworkComponentTypes, setFrameworkComponentTypes] = useState<string[]>([]);
   const [supplementalFilterOptions, setSupplementalFilterOptions] = useState<Record<string, string[]>>({});
@@ -183,16 +182,6 @@ export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggl
       .map((key) => byKey.get(key))
       .filter((definition): definition is FilterDefinition => Boolean(definition));
   }, [frameworkComponentTypes]);
-
-  useEffect(() => {
-    setJoinOperators((current) => {
-      const next: Record<string, 'AND' | 'OR'> = {};
-      facetDefinitions.forEach((definition) => {
-        next[definition.key] = current[definition.key] || 'AND';
-      });
-      return next;
-    });
-  }, [facetDefinitions]);
 
   useEffect(() => {
     let cancelled = false;
@@ -328,34 +317,23 @@ export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggl
       return definition.getValues(diagram).some((value) => selectedValues.has(normalizeFacetMatchKey(value)));
     };
 
-    return diagrams.filter((diagram) => {
-      let result = matchesFilter(diagram, activeFilters[0].filter, activeFilters[0].values);
-
-      for (let index = 1; index < activeFilters.length; index += 1) {
-        const previousKey = activeFilters[index - 1].filter.key;
-        const operator = joinOperators[previousKey] || 'AND';
-        const nextMatches = matchesFilter(diagram, activeFilters[index].filter, activeFilters[index].values);
-        result = operator === 'AND' ? result && nextMatches : result || nextMatches;
-      }
-
-      return result;
-    });
-  }, [diagrams, filters, facetDefinitions, joinOperators]);
+    return diagrams.filter((diagram) => activeFilters.every(({ filter, values }) => matchesFilter(diagram, filter, values)));
+  }, [diagrams, filters, facetDefinitions]);
 
   const updateFilter = (key: string, values: string[]) => {
     setFilters((current) => ({ ...current, [key]: values }));
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col border-r border-slate-200 bg-slate-50">
-      <div className="border-b border-slate-200 bg-white px-4 py-3">
+    <div className="diagram-search-panel flex h-full min-h-0 flex-col border-r border-slate-300">
+      <div className="diagram-search-card m-3 mb-2 px-4 py-3">
         <div className="mb-3 flex items-center gap-2">
-          <FolderOpenOutlined className="text-teal-700" />
-          <Text strong>Diagram Search</Text>
+          <FolderOpenOutlined className="text-blue-700" />
+          <Text strong className="font-semibold text-slate-700">Diagram Search</Text>
         </div>
         <div className="grid gap-2">
           <div>
-            <Text className="mb-1 block text-xs text-slate-600">Frameworks</Text>
+            <Text className="mb-1 block text-xs font-medium text-slate-600">Frameworks</Text>
             <Select
               mode="multiple"
               allowClear
@@ -368,34 +346,18 @@ export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggl
             />
           </div>
           {facetDefinitions.map((filter) => (
-            <div key={filter.key} className="flex items-end gap-2">
-              <div className="min-w-0 flex-1">
-                <Text className="mb-1 block text-xs text-slate-600">{filter.label}</Text>
-                <Select
-                  mode="multiple"
-                  allowClear
-                  className="w-full"
-                  placeholder={`All ${filter.label.toLowerCase()} values`}
-                  options={(filterOptions[filter.key] || []).map((value) => ({ label: value, value }))}
-                  value={filters[filter.key] || []}
-                  onChange={(values) => updateFilter(filter.key, values)}
-                  maxTagCount="responsive"
-                />
-              </div>
-              <div className="pb-[2px]">
-                <Button
-                  size="small"
-                  type={joinOperators[filter.key] === 'OR' ? 'primary' : 'default'}
-                  disabled={facetDefinitions[facetDefinitions.length - 1]?.key === filter.key}
-                  onClick={() => setJoinOperators((current) => ({
-                    ...current,
-                    [filter.key]: current[filter.key] === 'OR' ? 'AND' : 'OR',
-                  }))}
-                  title={facetDefinitions[facetDefinitions.length - 1]?.key === filter.key ? 'No subsequent term' : `Switch to ${joinOperators[filter.key] === 'OR' ? 'AND' : 'OR'}`}
-                >
-                  {joinOperators[filter.key] || 'AND'}
-                </Button>
-              </div>
+            <div key={filter.key} className="min-w-0">
+              <Text className="mb-1 block text-xs font-medium text-slate-600">{filter.label}</Text>
+              <Select
+                mode="multiple"
+                allowClear
+                className="w-full"
+                placeholder={`All ${filter.label.toLowerCase()} values`}
+                options={(filterOptions[filter.key] || []).map((value) => ({ label: value, value }))}
+                value={filters[filter.key] || []}
+                onChange={(values) => updateFilter(filter.key, values)}
+                maxTagCount="responsive"
+              />
             </div>
           ))}
         </div>
@@ -432,16 +394,20 @@ export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggl
                 key={diagram._id}
                 type="button"
                 onClick={() => onToggleDiagram(diagram._id, diagram.neighborhoodName || undefined)}
-                className={`min-h-[118px] border p-3 text-left transition-colors ${selected
-                  ? 'border-teal-700 bg-teal-100 shadow-sm'
-                  : 'border-slate-200 bg-white hover:border-teal-400 hover:bg-teal-50'}`}
+                className={`diagram-tile min-h-[118px] w-full min-w-0 p-3 text-left ${selected ? 'diagram-tile-selected' : ''}`}
               >
-                <div className="mb-2 flex items-start gap-2">
-                  <PartitionOutlined className={selected ? 'mt-0.5 text-teal-800' : 'mt-0.5 text-slate-500'} />
-                  <Text strong className="leading-snug">{diagram.businessFlow || diagram.name}</Text>
+                <div className="mb-2 flex min-w-0 items-start gap-2">
+                  <PartitionOutlined className={selected ? 'mt-0.5 shrink-0 text-blue-700' : 'mt-0.5 shrink-0 text-slate-500'} />
+                  <Text strong className="min-w-0 flex-1 break-words font-semibold leading-snug">{diagram.businessFlow || diagram.name}</Text>
                 </div>
-                <Tag className="mb-2 mr-0 max-w-full truncate" color="cyan">{framework}</Tag>
-                {hierarchy ? <div className="line-clamp-3 text-xs leading-relaxed text-slate-600">{hierarchy}</div> : null}
+                <Tag className="mb-2 mr-0 max-w-full truncate" color="blue">{framework}</Tag>
+                {hierarchy ? (
+                  <Tooltip title={hierarchy} placement="bottom" mouseEnterDelay={0.3}>
+                    <div className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-xs leading-relaxed text-slate-600">
+                      {hierarchy}
+                    </div>
+                  </Tooltip>
+                ) : null}
               </button>
             );
           })}

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Card, Empty, Spin, Typography } from 'antd';
+import { Alert, Card, Empty, Spin, Tooltip, Typography } from 'antd';
 import { getComponentHierarchies, getDashboardFlowRelationships, type FlowMatrixMode, type ValueStreamRelationshipData } from '../api';
 import type { HierarchyPath } from '../types';
 
@@ -568,6 +568,12 @@ export default function ValueStreamsMatrix({
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 16, width: '100%', alignItems: 'center' }}>
                           {subdomainGroup.valueStreams.map((valueStream) => {
                             const connectorMarkerId = valueStream.key.replace(/[^a-zA-Z0-9_-]/g, '-');
+                            const journeyActors = isJourneyMode ? (valueStream.actors || []) : [];
+                            const hasJourneyActors = journeyActors.length > 0;
+                            const actorsText = journeyActors.length > 3
+                              ? `${journeyActors.slice(0, 3).join(', ')} +${journeyActors.length - 3} more`
+                              : journeyActors.join(', ');
+                            const itemFlowBarHeight = hasJourneyActors ? flowBarHeight + 20 : flowBarHeight;
                             return (
                             <div
                               key={valueStream.key}
@@ -608,7 +614,7 @@ export default function ValueStreamsMatrix({
                                     position: 'relative',
                                     width: '100%',
                                     minWidth: capabilityRowWidth,
-                                    height: flowBarHeight,
+                                    height: itemFlowBarHeight,
                                     borderRadius: 999,
                                     background: selectedValueStreamKey === valueStream.key ? theme.flowBackgroundSelected : theme.flowBackground,
                                     border: selectedValueStreamKey === valueStream.key ? `2px solid ${theme.flowBorderSelected}` : `2px solid ${theme.flowBorder}`,
@@ -637,15 +643,38 @@ export default function ValueStreamsMatrix({
                                     }
                                   }}
                                 >
-                                  <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 22px', color: theme.flowName, fontWeight: 900 }}>
-                                    <span style={{ maxWidth: 'calc(100% - 50px)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: theme.flowName }}>
-                                      {valueStream.name}
-                                    </span>
-                                    <span style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                                      <span style={{ color: theme.flowCount, fontSize: 12, fontWeight: 700 }}>
-                                        {valueStream.count} {flowCountLabel}{valueStream.count === 1 ? '' : 's'}
+                                  <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '0 22px', color: theme.flowName, fontWeight: 900 }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                                      <span style={{ maxWidth: 'calc(100% - 50px)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: theme.flowName }}>
+                                        {valueStream.name}
                                       </span>
-                                    </span>
+                                      <span style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                                        <span style={{ color: theme.flowCount, fontSize: 12, fontWeight: 700 }}>
+                                          {valueStream.count} {flowCountLabel}{valueStream.count === 1 ? '' : 's'}
+                                        </span>
+                                      </span>
+                                    </div>
+                                    {hasJourneyActors ? (
+                                      <Tooltip title={journeyActors.join(', ')} placement="bottom">
+                                        <div
+                                          style={{
+                                            maxWidth: '100%',
+                                            whiteSpace: 'nowrap',
+                                            overflow: 'hidden',
+                                            textOverflow: 'ellipsis',
+                                            marginTop: 2,
+                                            fontSize: 11,
+                                            fontWeight: 600,
+                                            fontStyle: 'italic',
+                                            letterSpacing: 0.2,
+                                            color: theme.flowCount,
+                                            opacity: 0.85,
+                                          }}
+                                        >
+                                          {actorsText}
+                                        </div>
+                                      </Tooltip>
+                                    ) : null}
                                   </div>
                                 </div>
                               </div>

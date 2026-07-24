@@ -746,9 +746,10 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
             {showCreateNeighborhood ? (
               <Button
                 size="small"
+                type="primary"
                 icon={<FolderAddOutlined />}
                 onClick={openNeighborhoodModal}
-                className="btn-create-model btn-import-framework"
+                className="framework-toolbar-btn"
               >
                 Import Framework
               </Button>
@@ -762,7 +763,7 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
                   uploadForm.setFieldsValue({ neighborhoodName: fixedNeighborhoodName || selectedNeighborhood || undefined });
                   setShowUploadModal(true);
                 }}
-                style={{ fontSize: '10px', padding: '2px 8px', height: '20px', lineHeight: '20px' }}
+                className="framework-toolbar-btn"
               >
                 Add Model
               </Button>
@@ -773,7 +774,7 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
                 danger
                 icon={<DeleteOutlined />}
                 onClick={() => handleDeleteNeighborhood(fixedNeighborhoodName)}
-                style={{ fontSize: '10px', padding: '2px 8px', height: '20px', lineHeight: '20px' }}
+                className="framework-toolbar-btn"
               >
                 Delete Framework
               </Button>
@@ -803,7 +804,7 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
                     },
                   });
                 }}
-                style={{ fontSize: '10px', padding: '2px 8px', height: '20px', lineHeight: '20px' }}
+                className="framework-toolbar-btn"
               >
                 Delete Model
               </Button>
@@ -962,11 +963,12 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
         bodyStyle={{ display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, height: '100%' }}
         extra={canManageFactories ? (
           <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-            <Button 
-              size="large" 
-              icon={<FolderAddOutlined />} 
+            <Button
+              size="small"
+              type="primary"
+              icon={<FolderAddOutlined />}
               onClick={openNeighborhoodModal}
-              className="btn-create-model"
+              className="framework-toolbar-btn"
             >
               Create Model
             </Button>
@@ -977,22 +979,24 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
               okButtonProps={{ danger: true }}
               onConfirm={() => handleDeleteAllComponents(selectedNeighborhood || '')}
             >
-              <Button 
-                size="large" 
-                danger 
+              <Button
+                size="small"
+                danger
                 disabled={!selectedNeighborhood}
+                className="framework-toolbar-btn"
               >
                 Delete All
               </Button>
             </Popconfirm>
-            <Button 
-              size="large" 
-              icon={<PlusOutlined />} 
+            <Button
+              size="small"
+              type="primary"
+              icon={<PlusOutlined />}
               onClick={() => {
                 uploadForm.setFieldsValue({ neighborhoodName: selectedNeighborhood || undefined });
                 setShowUploadModal(true);
               }}
-              className="btn-bulk-import"
+              className="framework-toolbar-btn"
             >
               Bulk Import BPMN 2.0 XML
             </Button>

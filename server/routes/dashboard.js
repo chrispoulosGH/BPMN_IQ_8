@@ -558,6 +558,7 @@ router.get('/value-stream-relationships', async (req, res) => {
     const businessFlowsByFlowKey = new Map();
     const businessFlowsByCapability = new Map();
     const businessFlowsByCapabilityFlow = new Map();
+    const actorsByFlowKey = new Map();
     let totalDiagrams = 0;
 
     const normalizeFlowName = (value) => {
@@ -578,6 +579,7 @@ router.get('/value-stream-relationships', async (req, res) => {
       capabilityNames = [],
       domainSequence = null,
       subdomainSequence = null,
+      actorNames = [],
     }) => {
       const normalizedValueStream = normalizeFlowName(isJourneyMode ? journey : valueStream);
       if (!normalizedValueStream) return;
@@ -595,6 +597,16 @@ router.get('/value-stream-relationships', async (req, res) => {
       }
       if (normalizedBusinessFlow) {
         businessFlowsByFlowKey.get(valueStreamKey).add(normalizedBusinessFlow);
+      }
+      if (isJourneyMode && actorNames.length) {
+        if (!actorsByFlowKey.has(valueStreamKey)) {
+          actorsByFlowKey.set(valueStreamKey, new Set());
+        }
+        const actorSet = actorsByFlowKey.get(valueStreamKey);
+        for (const actorName of actorNames) {
+          const trimmed = String(actorName || '').trim();
+          if (trimmed) actorSet.add(trimmed);
+        }
       }
       valueStreamRows.set(valueStreamKey, {
         key: valueStreamKey,
@@ -683,7 +695,7 @@ router.get('/value-stream-relationships', async (req, res) => {
 
     const diagrams = await Diagram.find(
       withNeighborhood(req),
-      { name: 1, businessFlow: 1, businessCapability: 1, valueStream: 1, journey: 1, capabilities: 1, domain: 1, subdomain: 1 }
+      { name: 1, businessFlow: 1, businessCapability: 1, valueStream: 1, journey: 1, capabilities: 1, domain: 1, subdomain: 1, 'tasks.actor': 1 }
     ).lean();
     totalDiagrams = diagrams.length;
 
@@ -706,6 +718,7 @@ router.get('/value-stream-relationships', async (req, res) => {
         ],
         domainSequence: sequence?.domainSequence ?? domainSequenceByName.get(normalizedDomain),
         subdomainSequence: sequence?.subdomainSequence,
+        actorNames: (diagram.tasks || []).map((task) => task?.actor).filter(Boolean),
       });
     }
 
@@ -735,7 +748,12 @@ router.get('/value-stream-relationships', async (req, res) => {
         if (aSubdomainSequence !== bSubdomainSequence) return aSubdomainSequence - bSubdomainSequence;
 
         return b.count - a.count || a.name.localeCompare(b.name) || a.rollupLabel.localeCompare(b.rollupLabel);
-      });
+      })
+      .map((row) => (
+        isJourneyMode
+          ? { ...row, actors: Array.from(actorsByFlowKey.get(row.key) || []).sort((a, b) => a.localeCompare(b)) }
+          : row
+      ));
 
     const capabilities = [...capabilityCounts.entries()]
       .map(([name, count]) => ({ name, count }))

@@ -2880,9 +2880,10 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
           <div style={{ marginLeft: 'auto' }}>
             <Button
               size="small"
+              type="primary"
               icon={<UploadOutlined />}
               onClick={() => handleImportModelBpmn(neighborhood.name)}
-              className="btn-bulk-import"
+              className="framework-toolbar-btn"
             >
               Bulk Import BPMN 2.0 XML
             </Button>
