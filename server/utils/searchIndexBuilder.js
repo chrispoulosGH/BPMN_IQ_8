@@ -28,6 +28,7 @@ async function rebuildSearchIndex(neighborhoodName, options = {}) {
     // Stream canonical rows and group them into synthesized "components" by componentType.
     const rowProjection = {
       _id: 1,
+      primaryKey: 1,
       componentType: 1,
       component_type: 1,
       values: 1,
@@ -58,6 +59,7 @@ async function rebuildSearchIndex(neighborhoodName, options = {}) {
 
       const compactRow = {
         _id: row._id,
+        primaryKey: row.primaryKey,
         componentType: type,
         values: rowValues,
         parentName: (rowValues && (rowValues.parentName || rowValues.parent)) || row.parentName || null,
@@ -104,6 +106,11 @@ async function rebuildSearchIndex(neighborhoodName, options = {}) {
       return { ...row };
     }
 
+    function getRowName(row, rowValues = getRowValues(row)) {
+      const componentKey = Object.keys(rowValues).find((key) => /(?:^|\s)component$/i.test(String(key).trim()));
+      return String(rowValues.name || row.name || row.primaryKey || (componentKey && rowValues[componentKey]) || 'unnamed').trim();
+    }
+
     // Helper to build ALL hierarchy paths for a row (recursively handling multiple parents)
     // Returns array of hierarchies, where each hierarchy is an array of {componentName, rowName, componentId, rowId}
     const hierarchyPathCache = new Map();
@@ -111,7 +118,7 @@ async function rebuildSearchIndex(neighborhoodName, options = {}) {
 
     const buildAllHierarchyPaths = async (component, row, visitedRowKeys = new Set()) => {
       const rowValues = getRowValues(row);
-      const rowName = String(rowValues.name || row.name || 'unnamed').trim();
+      const rowName = getRowName(row, rowValues);
       const currentRowKey = `${component.name}:${String(row._id)}`;
 
       if (visitedRowKeys.size === 0 && hierarchyPathCache.has(currentRowKey)) {
@@ -252,7 +259,7 @@ async function rebuildSearchIndex(neighborhoodName, options = {}) {
 
       for (const row of rows) {
         const rowValues = getRowValues(row);
-        const rowName = String(rowValues.name || row.name || 'unnamed').trim();
+        const rowName = getRowName(row, rowValues);
 
         // Build searchable text from all values
         const allValuesStr = Object.values(rowValues)

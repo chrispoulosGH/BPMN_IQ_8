@@ -25,6 +25,16 @@
           "name": "name",
           "type": "String",
           "isAttr": true
+        },
+        {
+          "name": "correlationId",
+          "type": "String",
+          "isAttr": true
+        },
+        {
+          "name": "acronym",
+          "type": "String",
+          "isAttr": true
         }
       ]
     }

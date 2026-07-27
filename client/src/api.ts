@@ -104,6 +104,9 @@ export const getTaskReference = (): Promise<ReferenceData> =>
 export const getTaskReferenceForNeighborhood = (neighborhoodName?: string): Promise<ReferenceData> =>
   api.get('/tasks/reference', scopedRequestConfig(neighborhoodName)).then((r) => r.data);
 
+export const getApplicationReferenceForNeighborhood = (neighborhoodName?: string): Promise<ApplicationItem[]> =>
+  api.get('/tasks/reference/applications', scopedRequestConfig(neighborhoodName)).then((r) => r.data);
+
 export const getTasks = (params?: Record<string, string>): Promise<TaskRecord[]> =>
   api.get('/tasks', { params }).then((r) => r.data);
 

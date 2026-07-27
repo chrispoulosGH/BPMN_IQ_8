@@ -1,6 +1,6 @@
 // Builds a complete BPMN 2.0 XML document (process + diagram interchange) for a single
 // Business Process Flow, from an ordered list of tasks (each with an actor and a list of
-// application names). Structure mirrors data/TechFast_BPMN2.0_di.xml: one bpmn:lane per
+// application records). Structure mirrors data/TechFast_BPMN2.0_di.xml: one bpmn:lane per
 // actor, tasks in a straight sequence, and a bpmn:textAnnotation + bpmn:association per
 // task listing its applications (BpmnEditor.tsx auto-migrates this into bpmniq:TaskApplications
 // extension elements on load).
@@ -63,7 +63,7 @@ function splitIntoColumns(items) {
  * @param {Object} params
  * @param {string} params.flowName - Business Process Flow name.
  * @param {string} [params.breadcrumb] - e.g. "Domain: X | Subdomain: Y | Business Capability: Z | Business Flow: FlowName"
- * @param {Array<{ name: string, bpmnType?: string, actor?: string, applications?: string[] }>} params.tasks - ordered tasks.
+ * @param {Array<{ name: string, bpmnType?: string, actor?: string, applications?: Array<{ name: string, correlationId?: string | null, acronym?: string | null }> }>} params.tasks - ordered tasks.
  * @returns {{ xml: string, definitionsId: string, processId: string }}
  */
 function buildBpmnXmlForFlow({ flowName, breadcrumb, tasks }) {
@@ -95,7 +95,19 @@ function buildBpmnXmlForFlow({ flowName, breadcrumb, tasks }) {
     const actor = String(task.actor || '').trim() || 'Unassigned';
     const laneId = laneIdByActor.get(actor);
     const applications = Array.isArray(task.applications)
-      ? task.applications.map((a) => String(a || '').trim()).filter(Boolean)
+      ? task.applications.map((a) => {
+          if (typeof a === 'string') {
+            const name = String(a || '').trim();
+            return name ? { name, correlationId: null, acronym: null } : null;
+          }
+          const name = String(a?.name || '').trim();
+          if (!name) return null;
+          return {
+            name,
+            correlationId: String(a?.correlationId || '').trim() || null,
+            acronym: String(a?.acronym || '').trim() || null,
+          };
+        }).filter(Boolean)
       : [];
     return {
       id: toId('Task', task.name, usedIds),
@@ -185,10 +197,14 @@ function buildBpmnXmlForFlow({ flowName, breadcrumb, tasks }) {
       if (!column.length) return;
       const annotationId = toId('TextAnnotation', `${t.name}_column_${index + 1}`, usedIds);
       const associationId = toId('Association', `${t.name}_column_${index + 1}`, usedIds);
+      const text = column.map((application) => {
+        const parts = [application.correlationId, application.acronym, application.name].filter(Boolean);
+        return parts.length > 1 ? parts.join(' | ') : application.name;
+      }).join('\n');
       annotations.push({
         id: annotationId,
         associationId,
-        text: column.join('\n'),
+        text,
         targetId: t.id,
         x: startX + index * (APP_COLUMN_WIDTH + APP_COLUMN_GAP),
         y: annotationY,

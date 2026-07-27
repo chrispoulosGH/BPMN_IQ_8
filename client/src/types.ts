@@ -28,6 +28,8 @@ export interface DiagramMeta {
 
 export interface DiagramTaskApplication {
   name: string;
+  correlationId?: string | null;
+  acronym?: string | null;
 }
 
 export interface DiagramTask {

@@ -486,36 +486,90 @@ function decodeXmlValue(value) {
     .trim();
 }
 
-function extractApplicationIdentifiersFromXml(xml) {
+function normalizeNameForFuzzyMatch(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function levenshteinDistance(left, right) {
+  const a = normalizeNameForFuzzyMatch(left);
+  const b = normalizeNameForFuzzyMatch(right);
+  if (!a) return b.length;
+  if (!b) return a.length;
+
+  const matrix = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+  for (let i = 0; i <= a.length; i += 1) matrix[i][0] = i;
+  for (let j = 0; j <= b.length; j += 1) matrix[0][j] = j;
+
+  for (let i = 1; i <= a.length; i += 1) {
+    for (let j = 1; j <= b.length; j += 1) {
+      const substitutionCost = a[i - 1] === b[j - 1] ? 0 : 1;
+      matrix[i][j] = Math.min(
+        matrix[i - 1][j] + 1,
+        matrix[i][j - 1] + 1,
+        matrix[i - 1][j - 1] + substitutionCost
+      );
+    }
+  }
+
+  return matrix[a.length][b.length];
+}
+
+function similarityScore(left, right) {
+  const a = normalizeNameForFuzzyMatch(left);
+  const b = normalizeNameForFuzzyMatch(right);
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const maxLength = Math.max(a.length, b.length);
+  if (!maxLength) return 0;
+  return 1 - (levenshteinDistance(a, b) / maxLength);
+}
+
+function parseApplicationEntriesFromXml(xml) {
   if (!xml) return [];
 
-  const identifiers = [];
+  const entries = [];
   const taskBlockRegex = /<bpmn:(?:task|userTask|serviceTask|sendTask|receiveTask|manualTask|businessRuleTask|scriptTask|subProcess)\s+id="([^"]+)"[^>]*>([\s\S]*?)<\/bpmn:(?:task|userTask|serviceTask|sendTask|receiveTask|manualTask|businessRuleTask|scriptTask|subProcess)>/gi;
   let taskMatch;
 
   while ((taskMatch = taskBlockRegex.exec(xml)) !== null) {
     const [, , body] = taskMatch;
 
-    const appAttrRegex = /<(?:bpmniq|ns\d+):(?:A|a)pplication[^>]+name="([^"]+)"/gi;
+    const appAttrRegex = /<(?:bpmniq|ns\d+):(?:A|a)pplication\b([^>]*)\/?>(?:<\/\s*(?:bpmniq|ns\d+):(?:A|a)pplication>)?/gi;
     let attrMatch;
     while ((attrMatch = appAttrRegex.exec(body)) !== null) {
-      const identifier = decodeXmlValue(attrMatch[1]);
-      if (identifier) identifiers.push(identifier);
+      const attrs = attrMatch[1] || '';
+      const correlationId = decodeXmlValue((attrs.match(/\bcorrelationId="([^"]+)"/i) || [])[1]);
+      const acronym = decodeXmlValue((attrs.match(/\bacronym="([^"]+)"/i) || [])[1]);
+      const name = decodeXmlValue((attrs.match(/\bname="([^"]+)"/i) || [])[1]);
+      if (correlationId || acronym || name) {
+        entries.push({ correlationId: correlationId || null, acronym: acronym || null, name: name || correlationId || acronym || '' });
+      }
     }
 
     const appElementRegex = /<(?:bpmniq|ns\d+):application\b[^>]*>([\s\S]*?)<\/(?:bpmniq|ns\d+):application>/gi;
     let appElementMatch;
     while ((appElementMatch = appElementRegex.exec(body)) !== null) {
       const appBody = appElementMatch[1];
-      const correlationId = decodeXmlValue((appBody.match(/<(?:bpmniq|ns\d+):correlationIds\b[^>]*>[\s\S]*?<(?:bpmniq|ns\d+):id>([\s\S]*?)<\/(?:bpmniq|ns\d+):id>/i) || [])[1]);
+      const correlationId = decodeXmlValue((appBody.match(/<(?:bpmniq|ns\d+):correlationId>([\s\S]*?)<\/(?:bpmniq|ns\d+):correlationId>/i) || [])[1])
+        || decodeXmlValue((appBody.match(/<(?:bpmniq|ns\d+):correlationIds\b[^>]*>[\s\S]*?<(?:bpmniq|ns\d+):id>([\s\S]*?)<\/(?:bpmniq|ns\d+):id>/i) || [])[1]);
       const acronym = decodeXmlValue((appBody.match(/<(?:bpmniq|ns\d+):acronym>([\s\S]*?)<\/(?:bpmniq|ns\d+):acronym>/i) || [])[1]);
       const name = decodeXmlValue((appBody.match(/<(?:bpmniq|ns\d+):name>([\s\S]*?)<\/(?:bpmniq|ns\d+):name>/i) || [])[1]);
-      const identifier = correlationId || acronym || name;
-      if (identifier) identifiers.push(identifier);
+      if (correlationId || acronym || name) {
+        entries.push({ correlationId: correlationId || null, acronym: acronym || null, name: name || correlationId || acronym || '' });
+      }
     }
   }
 
-  return [...new Set(identifiers)];
+  return entries;
+}
+
+function extractApplicationIdentifiersFromXml(xml) {
+  return [...new Set(parseApplicationEntriesFromXml(xml).flatMap((entry) => [entry.correlationId, entry.acronym, entry.name].filter(Boolean)))];
 }
 
 function combineFilters(left, right) {
@@ -533,12 +587,16 @@ async function validateDiagramObjectIntegrity(diagramLike, neighborhoodName = DE
   )];
   const businessFlow = String(diagramLike.name || diagramLike.businessFlow || '').trim();
   const taskNames = [...new Set((diagramLike.tasks || []).map((task) => String(task?.name || '').trim()).filter(Boolean))];
-  const xmlApplicationNames = extractApplicationIdentifiersFromXml(diagramLike.xml || '');
-  const applicationNames = xmlApplicationNames.length
-    ? xmlApplicationNames
+  const xmlApplicationEntries = parseApplicationEntriesFromXml(diagramLike.xml || '');
+  const applicationEntries = xmlApplicationEntries.length
+    ? xmlApplicationEntries
     : [...new Set(
         (diagramLike.tasks || []).flatMap((task) =>
-          (task.applications || []).map((app) => String(app?.name || '').trim()).filter(Boolean)
+          (task.applications || []).map((app) => ({
+            correlationId: String(app?.correlationId || '').trim(),
+            acronym: String(app?.acronym || '').trim(),
+            name: String(app?.name || '').trim(),
+          })).filter((app) => app.name || app.correlationId || app.acronym)
         )
       )];
   const laneNames = extractLaneNames(diagramLike.xml || '');
@@ -558,15 +616,41 @@ async function validateDiagramObjectIntegrity(diagramLike, neighborhoodName = DE
     .filter(Boolean);
 
   const taskSet = new Set(knownTaskNames.map((name) => normalizeObjectMatchValue(name)));
-  const applicationSet = new Set(
-    knownApplications.flatMap((application) => [application.correlationId, application.acronym, application.name]
-      .map((value) => normalizeObjectMatchValue(value))
-      .filter(Boolean))
+  const knownByCorrelationId = new Map(
+    knownApplications
+      .map((application) => [normalizeObjectMatchValue(application.correlationId), application])
+      .filter(([key]) => key)
+  );
+  const knownByName = new Map(
+    knownApplications
+      .map((application) => [normalizeObjectMatchValue(application.name), application])
+      .filter(([key]) => key)
   );
   const actorSet = new Set(knownActorNames.map((name) => normalizeObjectMatchValue(name)));
 
   const invalidTasks = taskNames.filter((name) => !taskSet.has(normalizeObjectMatchValue(name)));
-  const invalidApplications = applicationNames.filter((name) => !applicationSet.has(normalizeObjectMatchValue(name)));
+  const invalidApplications = [];
+  for (const application of applicationEntries) {
+    const correlationId = normalizeObjectMatchValue(application.correlationId);
+    const name = normalizeObjectMatchValue(application.name);
+
+    if (correlationId && knownByCorrelationId.has(correlationId)) {
+      continue;
+    }
+
+    if (name && knownByName.has(name)) {
+      continue;
+    }
+
+    if (name) {
+      const bestMatch = knownApplications
+        .map((candidate) => ({ candidate, score: similarityScore(candidate.name, application.name) }))
+        .sort((left, right) => right.score - left.score)[0];
+      if (bestMatch && bestMatch.score >= 0.55) continue;
+    }
+
+    invalidApplications.push(application.name || application.correlationId || 'Unknown application');
+  }
   const invalidActors = laneNames.filter((name) => !actorSet.has(normalizeObjectMatchValue(name)));
   const hasCapabilities = capabilityNames.length > 0;
 

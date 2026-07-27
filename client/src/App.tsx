@@ -57,10 +57,7 @@ import AppMatchModal, { computeAppMatches, type AppMatchResult } from './compone
 import CapabilityMatchPanel from './components/CapabilityMatchPanel';
 import TaskFactory from './components/TaskFactory';
 import ReferenceFactory from './components/ReferenceFactory';
-import ApplicationFactory from './components/ApplicationFactory';
 import SystemComponentSummary from './components/SystemComponentSummary';
-import ServerFactory from './components/ServerFactory';
-import DatabaseFactory from './components/DatabaseFactory';
 import NeighborhoodFactory from './components/NeighborhoodFactory';
 import ModelCatalog from './components/ModelCatalog';
 import ComponentsViewer from './components/ComponentsViewer';
@@ -76,7 +73,7 @@ import AdminPanel from './components/AdminPanel';
 import GlobalComponentSearch from './components/GlobalComponentSearch';
 import ComponentSearch from './components/ComponentSearch';
 import { encodeExactFactorySearch } from './utils/factorySearch';
-import { api, getDiagram, getDiagrams, searchDiagrams, createDiagram, updateDiagram, deleteDiagram, saveFile, matchCapabilities, batchImportDiagrams, getTaskReferenceForNeighborhood, getTaskNames, getTaskNamesForNeighborhood, getActorsForNeighborhood, checkSession, logout, setSessionExpiredHandler, getBusinessFlowMap, getFactoryNeighborhoods, getCustomFactories, getDataFactoryTypes, getDataFactories, getCanonicalFactories, setApiNeighborhoodScope, validateDiagramReport, deleteCustomFactory, deleteDataComponentType } from './api';
+import { api, getDiagram, getDiagrams, searchDiagrams, createDiagram, updateDiagram, deleteDiagram, saveFile, matchCapabilities, batchImportDiagrams, getTaskReferenceForNeighborhood, getApplicationReferenceForNeighborhood, getTaskNames, getTaskNamesForNeighborhood, getActorsForNeighborhood, checkSession, logout, setSessionExpiredHandler, getBusinessFlowMap, getFactoryNeighborhoods, getCustomFactories, getDataFactoryTypes, getDataFactories, getCanonicalFactories, setApiNeighborhoodScope, validateDiagramReport, deleteCustomFactory, deleteDataComponentType } from './api';
 import type { CapabilityMatch, TaskAddData, DiagramMetadata, ApplicationItem, CustomFactory, FactoryNeighborhoodSummary } from './types';
 
 const { Header, Sider, Content } = Layout;
@@ -177,14 +174,65 @@ function extractTaskNames(xml: string): string[] {
   return tasks;
 }
 
+function decodeXmlEntities(value: string): string {
+  const namedEntities: Record<string, string> = {
+    amp: '&',
+    lt: '<',
+    gt: '>',
+    quot: '"',
+    apos: "'",
+  };
+
+  return String(value || '')
+    .replace(/&#(\d+);/g, (_, dec) => {
+      const code = Number(dec);
+      return Number.isFinite(code) ? String.fromCharCode(code) : _;
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => {
+      const code = parseInt(hex, 16);
+      return Number.isFinite(code) ? String.fromCharCode(code) : _;
+    })
+    .replace(/&([a-z]+);/gi, (match, name) => namedEntities[name.toLowerCase()] ?? match);
+}
+
+function normalizeExtractedApplicationName(value: string): string {
+  let next = String(value || '');
+  // Handle single-encoded and double-encoded content (&amp;#10; -> &#10; -> newline)
+  for (let i = 0; i < 2; i += 1) {
+    const decoded = decodeXmlEntities(next);
+    if (decoded === next) break;
+    next = decoded;
+  }
+  return next.replace(/\s+/g, ' ').trim();
+}
+
+function splitExtractedApplicationNames(value: string): string[] {
+  let next = String(value || '');
+  // Decode before splitting so encoded separators such as &#10; become real delimiters.
+  for (let i = 0; i < 2; i += 1) {
+    const decoded = decodeXmlEntities(next);
+    if (decoded === next) break;
+    next = decoded;
+  }
+
+  return next
+    .split(/[\r\n,;]+/)
+    .map((token) => normalizeExtractedApplicationName(token))
+    .filter(Boolean);
+}
+
 function extractApplicationsFromXml(xml: string): string[] {
   const apps: string[] = [];
   const addApp = (name: string) => {
-    const trimmed = name.trim();
-    if (trimmed && !apps.includes(trimmed)) apps.push(trimmed);
+    const candidates = splitExtractedApplicationNames(name);
+    for (const candidate of candidates) {
+      if (!apps.some((entry) => entry.toLowerCase() === candidate.toLowerCase())) {
+        apps.push(candidate);
+      }
+    }
   };
 
-  const taskBlockRegex = /<bpmn:(?:task|userTask|serviceTask|sendTask|receiveTask|manualTask|businessRuleTask|scriptTask|subProcess)\b[^>]*>[\s\S]*?<\/bpmn:(?:task|userTask|serviceTask|sendTask|receiveTask|manualTask|businessRuleTask|scriptTask|subProcess)>/gi;
+  const taskBlockRegex = /<bpmn2?:(?:task|userTask|serviceTask|sendTask|receiveTask|manualTask|businessRuleTask|scriptTask|subProcess)\b[^>]*>[\s\S]*?<\/bpmn2?:(?:task|userTask|serviceTask|sendTask|receiveTask|manualTask|businessRuleTask|scriptTask|subProcess)>/gi;
   let taskMatch;
   while ((taskMatch = taskBlockRegex.exec(xml)) !== null) {
     const body = taskMatch[0];
@@ -1152,6 +1200,13 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
     await loadNeighborhoodTabs();
     await loadDataTypeSummaries();
     await loadDataFactoriesForType(dataType);
+    getApplicationReferenceForNeighborhood(REFERENCE_DATA_NEIGHBORHOOD_NAME).then((applications) => {
+      setAllApplications(applications || []);
+      setAllAppNames((applications || []).map((a: ApplicationItem) => a.name).filter(Boolean).sort());
+    }).catch(() => {
+      setAllApplications([]);
+      setAllAppNames([]);
+    });
   }, [loadDataFactoriesForType, loadDataTypeSummaries, loadNeighborhoodTabs]);
 
   const handleActiveDataTabChange = useCallback((key: string) => {
@@ -1446,9 +1501,9 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
 
   // Load validation reference data: tasks/actors from current model scope, applications from Data scope.
   const refreshReferenceData = useCallback((neighborhoodName: string) => {
-    getTaskReferenceForNeighborhood(REFERENCE_DATA_NEIGHBORHOOD_NAME).then((ref) => {
-      setAllApplications(ref.applications || []);
-      setAllAppNames((ref.applications || []).map((a: ApplicationItem) => a.name).filter(Boolean).sort());
+    getApplicationReferenceForNeighborhood(REFERENCE_DATA_NEIGHBORHOOD_NAME).then((applications) => {
+      setAllApplications(applications || []);
+      setAllAppNames((applications || []).map((a: ApplicationItem) => a.name).filter(Boolean).sort());
     }).catch(() => {
       setAllApplications([]);
       setAllAppNames([]);
@@ -1965,38 +2020,57 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
 
   /** Trigger fuzzy match on current diagram's applications */
   const runAppFuzzyMatch = useCallback(async () => {
-    const xml = await editorRef.current?.getXml() || currentXmlRef.current;
-    const apps = extractApplicationsFromXml(xml);
-    if (!apps.length) {
-      message.info('No applications found in the current diagram');
-      return;
-    }
-    let referenceApplications = allApplications;
+    const feedbackKey = 'app-match-feedback';
+    message.open({
+      key: feedbackKey,
+      type: 'loading',
+      content: 'Matching applications to reference data...',
+      duration: 0,
+    });
+
     try {
-      const reference = await getTaskReferenceForNeighborhood(REFERENCE_DATA_NEIGHBORHOOD_NAME);
-      referenceApplications = reference.applications || [];
-      setAllApplications(referenceApplications);
-      setAllAppNames(referenceApplications.map((app: ApplicationItem) => app.name).filter(Boolean).sort());
-    } catch {
-      if (!referenceApplications.length) {
-        message.warning('Application reference data not loaded');
+      const xml = await editorRef.current?.getXml() || currentXmlRef.current;
+      const apps = extractApplicationsFromXml(xml);
+      if (!apps.length) {
+        message.open({ key: feedbackKey, type: 'info', content: 'No applications found in the current diagram metadata', duration: 3 });
         return;
       }
-    }
 
-    if (!referenceApplications.length) {
-      message.warning('Application reference data not loaded');
-      return;
-    }
+      let referenceApplications = allApplications;
+      try {
+        referenceApplications = await getApplicationReferenceForNeighborhood(REFERENCE_DATA_NEIGHBORHOOD_NAME);
+        setAllApplications(referenceApplications);
+        setAllAppNames(referenceApplications.map((app: ApplicationItem) => app.name).filter(Boolean).sort());
+      } catch {
+        if (!referenceApplications.length) {
+          message.open({ key: feedbackKey, type: 'warning', content: 'Application reference data not loaded', duration: 4 });
+          return;
+        }
+      }
 
-    const results = computeAppMatches(apps, referenceApplications);
-    const fuzzy = results.filter((r) => !r.exact);
-    if (!fuzzy.length) {
-      message.success('All applications already match reference data');
-      return;
+      if (!referenceApplications.length) {
+        message.open({ key: feedbackKey, type: 'warning', content: 'Application reference data not loaded', duration: 4 });
+        return;
+      }
+
+      const results = computeAppMatches(apps, referenceApplications);
+      if (!results.length) {
+        message.open({ key: feedbackKey, type: 'info', content: 'No application names were parsed for matching', duration: 3 });
+        return;
+      }
+
+      const fuzzy = results.filter((r) => !r.exact);
+      if (!fuzzy.length) {
+        message.open({ key: feedbackKey, type: 'success', content: `All ${results.length} applications already match reference data`, duration: 3 });
+        return;
+      }
+
+      setAppMatchResults(fuzzy);
+      setShowAppMatch(true);
+      message.open({ key: feedbackKey, type: 'success', content: `Found ${fuzzy.length} application names to review`, duration: 2 });
+    } catch {
+      message.open({ key: feedbackKey, type: 'error', content: 'Application matching failed. Please try again.', duration: 4 });
     }
-    setAppMatchResults(fuzzy);
-    setShowAppMatch(true);
   }, [allApplications, message, DEFAULT_NEIGHBORHOOD_NAME]);
 
   /** Handle approved application matches */
@@ -2741,80 +2815,36 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
 
   const dataTabItems = useMemo(() => visibleDataTabs.map((tab) => {
     const componentType = tab.key;
-    const effectiveDataColumns = tab.dataColumns.length ? tab.dataColumns : ['name', 'correlation_id'];
     const isLoaded = dataFactoriesByType[componentType] !== undefined;
     const loadedFactories = dataFactoriesByType[componentType] || [];
-
-    const isApplicationsTab = componentType === 'applications';
     return {
       key: componentType,
       label: dataTabLabel(componentType, <span>{getDataTypeDisplayName(componentType)}</span>),
       children: renderScrollablePane(
-        isApplicationsTab ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <SystemComponentSummary
-              dataType={getDataTypeDisplayName(componentType)}
-              batchCount={tab.batchCount}
-              dataRows={loadedFactories.flatMap((factory) => factory.rows || [])}
-              dataColumns={tab.dataColumns}
-              isLoaded={isLoaded}
-              neighborhoodName={REFERENCE_DATA_NEIGHBORHOOD_NAME}
-              readOnly
-            />
-            {isLoaded ? (
-              <ApplicationFactory
-                defaultSearch={factorySearch[componentType]}
-                defaultAdd={typeof factoryAdd[componentType] === 'string' ? factoryAdd[componentType] : ''}
-                userRole={user.role}
-                readOnly={readOnly}
-                dataColumns={effectiveDataColumns}
-                dataRows={loadedFactories.flatMap((factory) => factory.rows || [])}
-                foreignKeyColumns={loadedFactories.flatMap((factory) => factory.foreignKeyColumns || [])}
-                requestedDetailRequest={requestedApplicationDetail}
-                onNavigateToFactory={(navTab: string, search: string) => {
-                  setFactorySearch((prev) => ({ ...prev, [navTab]: search }));
-                  setActiveDataTab(navTab);
-                }}
-                onDeleteAllComponents={() => handleDeleteDataComponentType(componentType, Array.from(new Set(loadedFactories.map((factory) => String(factory.dataType || factory.componentType || factory.name || '').trim()).filter(Boolean))))}
-                deleteLoading={deleteComponentTypeLoading === componentType}
-              />
-            ) : (
-              <div className="flex min-h-[240px] items-center justify-center">
-                <Spin size="large" tip={`Loading ${getDataTypeDisplayName(componentType)}...`} />
-              </div>
-            )}
-          </div>
-        ) : (
-          <SystemComponentSummary
-            dataType={getDataTypeDisplayName(componentType)}
-            batchCount={tab.batchCount}
-            dataRows={loadedFactories.flatMap((factory) => factory.rows || [])}
-            dataColumns={tab.dataColumns}
-            isLoaded={isLoaded}
-            neighborhoodName={REFERENCE_DATA_NEIGHBORHOOD_NAME}
-            readOnly={readOnly}
-            onDeleteAllComponents={() => handleDeleteDataComponentType(
-              componentType,
-              tab.dataTypeValues.length ? tab.dataTypeValues : [tab.dataType],
-            )}
-            deleteLoading={deleteComponentTypeLoading === componentType}
-          />
-        ),
+        <SystemComponentSummary
+          dataType={getDataTypeDisplayName(componentType)}
+          batchCount={tab.batchCount}
+          dataRows={loadedFactories.flatMap((factory) => factory.rows || [])}
+          dataColumns={tab.dataColumns}
+          isLoaded={isLoaded}
+          neighborhoodName={REFERENCE_DATA_NEIGHBORHOOD_NAME}
+          readOnly={readOnly}
+          onDeleteAllComponents={() => handleDeleteDataComponentType(
+            componentType,
+            tab.dataTypeValues.length ? tab.dataTypeValues : [tab.dataType],
+          )}
+          deleteLoading={deleteComponentTypeLoading === componentType}
+        />,
       ),
     };
   }), [
     dataFactoriesByType,
     dataTabLabel,
     deleteComponentTypeLoading,
-    factoryAdd,
-    factorySearch,
     getDataTypeDisplayName,
     handleDeleteDataComponentType,
     readOnly,
-    requestedApplicationDetail,
     renderScrollablePane,
-    setActiveDataTab,
-    user.role,
     visibleDataTabs,
   ]);
 

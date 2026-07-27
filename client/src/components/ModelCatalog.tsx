@@ -7,6 +7,7 @@ import { SearchOutlined, FolderOutlined, TableOutlined, BarsOutlined, UnorderedL
 import { getModelCatalog, getModelCatalogTree, getModelCatalogTreeChildren, searchModelCatalogTree, type ModelCatalogRow } from '../api';
 import type { CatalogTreeNode, ModelCatalog } from '../types';
 import { enhanceColumnsWithSortAndFilters } from '../utils/tableEnhancer';
+import { loadFkValidationValues, normalizeFkToken, parseFkColumnHeader } from '../utils/fkValidation';
 
 const CATALOG_PAGE_SIZE = 50;
 
@@ -143,6 +144,7 @@ function ModelCatalog({ modelName, requestedSearch = null }: ModelCatalogProps) 
   const builtTreeDataRef = useRef<DataNode[]>([]);
   const horizontalPanStateRef = useRef<{ pointerId: number; startX: number; startY: number; startScrollLeft: number; startScrollTop: number; moved: boolean; } | null>(null);
   const [isHorizontalPanning, setIsHorizontalPanning] = useState(false);
+  const [fkValidationSets, setFkValidationSets] = useState<Record<string, Set<string>>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -172,6 +174,16 @@ function ModelCatalog({ modelName, requestedSearch = null }: ModelCatalogProps) 
             if (autoVisible.size > 0) {
               setVisibleColumns(prev => new Set([...prev, ...autoVisible]));
             }
+
+            const fkColumns = nextCatalog.columns.filter((column) => parseFkColumnHeader(column));
+            const nextValidationSets: Record<string, Set<string>> = {};
+            await Promise.all(fkColumns.map(async (column) => {
+              const parsed = parseFkColumnHeader(column);
+              if (!parsed) return;
+              const validationKey = `${normalizeFkToken(parsed.targetTab)}|${normalizeFkToken(parsed.targetSubtab)}|${normalizeFkToken(parsed.targetField)}`;
+              nextValidationSets[validationKey] = await loadFkValidationValues(parsed.targetTab, parsed.targetSubtab, parsed.targetField);
+            }));
+            setFkValidationSets(nextValidationSets);
           }
         }
       } catch (error: any) {
@@ -292,6 +304,11 @@ function ModelCatalog({ modelName, requestedSearch = null }: ModelCatalogProps) 
           }
         }
 
+        const fkValidationKey = targetTab && targetSubtab && searchField
+          ? `${normalizeFkToken(targetTab)}|${normalizeFkToken(targetSubtab)}|${normalizeFkToken(searchField)}`
+          : '';
+        const validationSet = fkValidationKey ? fkValidationSets[fkValidationKey] : undefined;
+
         return {
           title: column,
           key: column,
@@ -300,9 +317,11 @@ function ModelCatalog({ modelName, requestedSearch = null }: ModelCatalogProps) 
           render: (value: unknown) => {
             if (value === null || value === undefined || value === '') return '—';
             const valueStr = String(value);
+            const normalizedValue = normalizeFkToken(valueStr);
+            const isValidFk = Boolean(validationSet && normalizedValue && validationSet.has(normalizedValue));
             
-            // Render FK columns as links
-            if (isForeignKeyColumn && searchField && targetTab && targetSubtab) {
+            // Render FK columns as validated links when a matching persisted target exists.
+            if (isForeignKeyColumn && searchField && targetTab && targetSubtab && isValidFk) {
               console.log(`[FK_LINK_RENDER] Rendering "${column}" value "${valueStr}" as link`);
               return (
                 <a
@@ -342,14 +361,17 @@ function ModelCatalog({ modelName, requestedSearch = null }: ModelCatalogProps) 
                   {valueStr}
                 </a>
               );
-            } else {
-              if (isForeignKeyColumn) {
-                console.log(`[FK_LINK_SKIP] Column "${column}" is FK but missing required fields:`, {
-                  hasTabs: !!targetTab,
-                  hasSubtab: !!targetSubtab,
-                  hasSearchField: !!searchField
-                });
-              }
+            }
+
+            if (isForeignKeyColumn && searchField && targetTab && targetSubtab) {
+              return (
+                <span
+                  style={{ color: '#dc2626', fontWeight: 500 }}
+                  title={`Invalid FK: ${targetTab} > ${targetSubtab}.${searchField} did not contain ${valueStr}`}
+                >
+                  {valueStr}
+                </span>
+              );
             }
             
             return valueStr;
@@ -373,7 +395,7 @@ function ModelCatalog({ modelName, requestedSearch = null }: ModelCatalogProps) 
       visibleColumnsIncludeFK: Array.from(visibleColumns).filter((col: string) => col.toLowerCase().startsWith('fk_')).length
     });
     return cols;
-  }, [catalog, visibleColumns]);
+  }, [catalog, fkValidationSets, visibleColumns]);
 
   // Server already applies search + pagination; render rows as-is.
   const filteredRows = useMemo(() => catalog?.rows ?? [], [catalog]);

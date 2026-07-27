@@ -3137,6 +3137,10 @@ router.get('/search/typeahead', async (req, res) => {
     const neighborhoodName = String(req.query?.neighborhoodName || DEFAULT_NEIGHBORHOOD_NAME).trim();
     const prefix = String(req.query?.prefix || '').trim().toLowerCase();
     const componentName = req.query?.componentName ? String(req.query.componentName).trim() : null;
+    const indexModeRaw = String(req.query?.indexMode || req.query?.index || 'component').trim().toLowerCase();
+    const indexMode = indexModeRaw === 'data' ? 'data' : 'component';
+    const SearchIndexModel = indexMode === 'data' ? DataSearchIndex : ComponentSearchIndex;
+    const applicationLikeRegex = /application/i;
     const limit = Math.min(parseInt(req.query?.limit) || 10, 100);
     
     if (!prefix || prefix.length < 1) {
@@ -3152,9 +3156,18 @@ router.get('/search/typeahead', async (req, res) => {
     if (componentName) {
       query.componentName = componentName;
     }
+    if (indexMode === 'data') {
+      const scopeClauses = [];
+      if (componentName) {
+        scopeClauses.push({ componentName: componentName });
+      }
+      scopeClauses.push({ componentName: { $regex: applicationLikeRegex } });
+      scopeClauses.push({ dataType: { $regex: applicationLikeRegex } });
+      query.$or = scopeClauses;
+    }
     
     // Find unique suggestions, grouped by value and sorted by frequency
-    const suggestions = await ComponentSearchIndex.aggregate([
+    const suggestions = await SearchIndexModel.aggregate([
       { $match: query },
       {
         $group: {
@@ -3182,7 +3195,13 @@ router.get('/search/typeahead', async (req, res) => {
       neighborhoodName,
       componentName: { $regex: `^${prefix}`, $options: 'i' }
     };
-    const componentTypesAgg = await ComponentSearchIndex.aggregate([
+    if (indexMode === 'data') {
+      typeQuery.$or = [
+        { componentName: { $regex: applicationLikeRegex } },
+        { dataType: { $regex: applicationLikeRegex } },
+      ];
+    }
+    const componentTypesAgg = await SearchIndexModel.aggregate([
       { $match: typeQuery },
       { $group: { _id: '$componentName', count: { $sum: 1 } } },
       { $sort: { count: -1 } },
@@ -3190,7 +3209,7 @@ router.get('/search/typeahead', async (req, res) => {
       { $project: { _id: 0, componentName: '$_id', count: 1 } }
     ]);
 
-    res.json({ suggestions, componentTypes: componentTypesAgg, prefix, neighborhoodName });
+    res.json({ suggestions, componentTypes: componentTypesAgg, prefix, neighborhoodName, indexMode });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

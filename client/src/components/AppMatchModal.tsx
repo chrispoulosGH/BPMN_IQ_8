@@ -13,6 +13,8 @@ export interface AppMatchResult {
   refMatch: string | null;
   /** Display label for the best scoring match value (acronym or full name) */
   displayMatch?: string | null;
+  /** Correlation id for the matched reference application, if any */
+  correlationId?: string | null;
   /** Similarity score 0-1 */
   score: number;
   /** Whether this was an exact match */
@@ -69,6 +71,7 @@ export function computeAppMatches(
           original: app,
           refMatch: exactMatch.name,
           displayMatch: String(exactMatch[matchedOn || 'name'] || exactMatch.name || '').trim() || exactMatch.name,
+          correlationId: String(exactMatch.correlationId || '').trim() || null,
           score: 1,
           exact: true,
           matchedOn: matchedOn || null,
@@ -101,6 +104,7 @@ export function computeAppMatches(
           original: app,
           refMatch: bestRef.name,
           displayMatch: bestField ? String(bestRef[bestField] || '').trim() || bestRef.name : bestRef.name,
+          correlationId: String(bestRef.correlationId || '').trim() || null,
           score: bestScore,
           exact: false,
           matchedOn: bestField,
@@ -136,7 +140,7 @@ export function computeAppMatches(
       }
     }
     if (bestScore >= FUZZY_THRESHOLD && bestRef) {
-      results.push({ original: app, refMatch: bestRef, displayMatch: bestRef, score: bestScore, exact: false, matchedOn: 'name' });
+      results.push({ original: app, refMatch: bestRef, displayMatch: bestRef, correlationId: null, score: bestScore, exact: false, matchedOn: 'name' });
     } else {
       results.push({ original: app, refMatch: null, score: bestScore, exact: false, matchedOn: null });
     }
@@ -212,6 +216,7 @@ export default function AppMatchModal({ open, matches, title, onApprove, onClose
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             <Tag color="orange">{bestDisplay}</Tag>
+            {record.correlationId ? <Text type="secondary">Correlation ID: {record.correlationId}</Text> : null}
             {matchedLabel ? <Text type="secondary">Matched on {matchedLabel}</Text> : null}
           </div>
         );

@@ -5,7 +5,7 @@ import {
   BpmnPropertiesProviderModule,
 } from 'bpmn-js-properties-panel';
 import { Modal, Tag } from 'antd';
-import { validateTasks, getTaskNames, getServers, getServer, getApplicationServers, getDatabases, getDatabase, getApplicationDatabases } from '../api';
+import { validateTasks, getTaskNames, getServers, getServer, getApplicationServers, getDatabases, getDatabase, getApplicationDatabases, getApplicationReferenceForNeighborhood } from '../api';
 import type { ApplicationItem, ServerItem, DatabaseItem, CapabilityMatch } from '../types';
 import bpmniqModdle from '../bpmniq-moddle.json';
 import {
@@ -95,6 +95,13 @@ function normalizeBusinessFlowLookupValue(value?: string | null): string {
     .replace(/[^a-z0-9]+/g, '');
 }
 
+function splitStoredApplicationNames(value: string): string[] {
+  return String(value || '')
+    .split(/[\r\n,;]+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
 const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
   ({ xml, importTrigger, onXmlChange, onDirty, showProperties = true, allApplicationNames = [], allApplications = [], allBusinessFlowNames = [], allTaskNames = [], allActorNames = [], diagramName, diagramStatus, canEditDiagramName = false, isInFactory, isAlreadyLoaded, readOnly, onNavigateToFactory, onTaskSelect, selectedCapability, isCapabilityAssigned = false, onCapabilityAssignToggle, onCapabilityViewInCatalog, onCapabilityBack, onAddToFactory, onDeleteAndReload, onSaveAsNew, onDiagramNameClick, onNewDiagram, onDiagramNameChange, diagramBreadcrumb }, ref) => {
     const canvasRef = useRef<HTMLDivElement>(null);
@@ -120,6 +127,8 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
     const propsStartW = useRef(280);
     const allAppNamesRef = useRef<string[]>(allApplicationNames);
     const allApplicationsRef = useRef<ApplicationItem[]>(allApplications);
+    const applicationCatalogRef = useRef<ApplicationItem[] | null>(null);
+    const applicationCatalogLoadingRef = useRef<Promise<ApplicationItem[]> | null>(null);
     const renderAppOverlaysRef = useRef<(m?: any) => void>(() => {});
     const getTaskAppsRef = useRef<(bo: any) => string[]>(() => []);
     const [selectedApp, setSelectedApp] = useState<{ name: string; taskName: string; taskId: string } | null>(null);
@@ -158,6 +167,43 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
 
     const getAppDisplayName = (appName: string) => getPreferredApplicationDisplayName(getAppMeta(appName), appName);
 
+    const loadApplicationCatalog = async () => {
+      if (applicationCatalogRef.current?.length) return applicationCatalogRef.current;
+      if (!applicationCatalogLoadingRef.current) {
+        applicationCatalogLoadingRef.current = getApplicationReferenceForNeighborhood('System Components')
+          .then((applications) => {
+            const catalog = Array.isArray(applications) ? applications : [];
+            if (catalog.length) {
+              applicationCatalogRef.current = catalog;
+            }
+            applicationCatalogLoadingRef.current = null;
+            return catalog;
+          })
+          .catch(() => {
+            applicationCatalogLoadingRef.current = null;
+            return [] as ApplicationItem[];
+          });
+      }
+      return applicationCatalogLoadingRef.current;
+    };
+
+    const findApplicationReference = (value: string): ApplicationItem | null => {
+      const normalizedValue = normalizeApplicationLookupValue(value);
+      if (!normalizedValue) return null;
+      return allApplicationsRef.current.find((app) => [app.correlationId, app.acronym, app.name]
+        .map((candidate) => normalizeApplicationLookupValue(candidate))
+        .includes(normalizedValue)) || null;
+    };
+
+    const createApplicationEntry = (value: string) => {
+      const match = findApplicationReference(value);
+      return {
+        name: String(value || '').trim(),
+        correlationId: match?.correlationId || null,
+        acronym: match?.acronym || null,
+      };
+    };
+
     const replaceTaskAppIdentifier = async (taskId: string, currentAppName: string, application: ApplicationItem) => {
       const replacementIdentifier = getPreferredApplicationIdentifier(application);
       const modeler = modelerRef.current;
@@ -173,8 +219,11 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
       const nextApps = Array.from(
         new Map(
           currentApps
-            .map((name) => normalizeApplicationLookupValue(name) === normalizeApplicationLookupValue(currentAppName) ? replacementIdentifier : name)
-            .map((name) => [normalizeApplicationLookupValue(name), name])
+            .flatMap((name) => splitStoredApplicationNames(name))
+            .map((name) => normalizeApplicationLookupValue(name) === normalizeApplicationLookupValue(currentAppName)
+              ? createApplicationEntry(replacementIdentifier)
+              : createApplicationEntry(name))
+            .map((entry: any) => [normalizeApplicationLookupValue(entry?.correlationId || entry?.acronym || entry?.name), entry])
         ).values()
       );
 
@@ -188,8 +237,12 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
       );
 
       if (nextApps.length) {
-        const apps = nextApps.map((name) => {
-          const app = moddleInst.create('bpmniq:Application', { name });
+        const apps = nextApps.map((entry: any) => {
+          const app = moddleInst.create('bpmniq:Application', {
+            name: entry.name,
+            correlationId: entry.correlationId || null,
+            acronym: entry.acronym || null,
+          });
           return app;
         });
         const container = moddleInst.create('bpmniq:TaskApplications', { applications: apps });
@@ -293,22 +346,19 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
       return String(value);
     };
 
-    const loadServersForApp = async (appName: string, taskId?: string) => {
-      let app = getAppMeta(appName);
+    const loadServersForApp = async (appName: string, taskId?: string, explicitApp?: ApplicationItem | null) => {
+      let app = explicitApp || getAppMeta(appName);
       if (!app && taskId) {
         app = await ensureResolvedDiagramApplication(appName, taskId);
       }
 
       const correlationId = String(app?.correlationId || '').trim();
-      const acronym = String(app?.acronym || '').trim();
       const shouldUseCorrelationId = !!correlationId;
-      const shouldUseAcronym = !shouldUseCorrelationId && !!acronym;
       console.log('[BpmnEditor] loadServersForApp input:', {
         appName,
         resolvedName: app?.name || null,
-        resolvedAcronym: app?.acronym || null,
         resolvedCorrelationId: correlationId || null,
-        selectedMode: shouldUseCorrelationId ? 'correlationId' : shouldUseAcronym ? 'acronym' : 'unmatched',
+        selectedMode: shouldUseCorrelationId ? 'correlationId' : 'unmatched',
       });
 
       setServerModalOpen(true);
@@ -319,14 +369,10 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
       try {
         const rows = shouldUseCorrelationId
           ? await getApplicationServers(correlationId)
-          : shouldUseAcronym
-            ? await getServers({ applicationName: acronym })
-            : [];
+          : [];
         console.log('[BpmnEditor] loadServersForApp request:', shouldUseCorrelationId
           ? { endpoint: '/servers/by-application/:correlationId', correlationId }
-          : shouldUseAcronym
-            ? { endpoint: '/servers', params: { applicationName: acronym } }
-            : { endpoint: 'unmatched', params: null });
+          : { endpoint: 'unmatched', params: null });
         console.log('[BpmnEditor] loadServersForApp response count:', rows.length);
         setServerList(rows);
       } catch {
@@ -337,23 +383,20 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
       }
     };
 
-    const loadDatabasesForApp = async (appName: string, taskId?: string) => {
-      let app = getAppMeta(appName);
+    const loadDatabasesForApp = async (appName: string, taskId?: string, explicitApp?: ApplicationItem | null) => {
+      let app = explicitApp || getAppMeta(appName);
       if (!app && taskId) {
         app = await ensureResolvedDiagramApplication(appName, taskId);
       }
 
       const correlationId = String(app?.correlationId || '').trim();
-      const acronym = String(app?.acronym || '').trim();
       const shouldUseCorrelationId = !!correlationId;
-      const shouldUseAcronym = !shouldUseCorrelationId && !!acronym;
 
       console.log('[BpmnEditor] loadDatabasesForApp input:', {
         appName,
         resolvedName: app?.name || null,
-        resolvedAcronym: app?.acronym || null,
         resolvedCorrelationId: correlationId || null,
-        selectedMode: shouldUseCorrelationId ? 'correlationId' : shouldUseAcronym ? 'acronym' : 'unmatched',
+        selectedMode: shouldUseCorrelationId ? 'correlationId' : 'unmatched',
       });
 
       setDatabaseModalOpen(true);
@@ -364,14 +407,10 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
       try {
         const rows = shouldUseCorrelationId
           ? await getApplicationDatabases(correlationId)
-          : shouldUseAcronym
-            ? await getDatabases({ applicationName: acronym })
-            : [];
+          : [];
         console.log('[BpmnEditor] loadDatabasesForApp request:', shouldUseCorrelationId
           ? { endpoint: '/databases/by-application/:correlationId', correlationId }
-          : shouldUseAcronym
-            ? { endpoint: '/databases', params: { applicationName: acronym } }
-            : { endpoint: 'unmatched', params: null });
+          : { endpoint: 'unmatched', params: null });
         console.log('[BpmnEditor] loadDatabasesForApp response count:', rows.length);
         setDatabaseList(rows);
       } catch {
@@ -468,7 +507,7 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
           // Get current app names from extension elements or annotation fallback
           let currentNames: string[] = [];
           if (container?.applications?.length) {
-            currentNames = container.applications.map((a: any) => a.name);
+            currentNames = container.applications.flatMap((a: any) => splitStoredApplicationNames(String(a.name || a.correlationId || '')));
           } else if (annotationAppMap.has(el.id)) {
             currentNames = annotationAppMap.get(el.id) || [];
           }
@@ -486,7 +525,7 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
               (e: any) => e.$type !== 'bpmniq:TaskApplications'
             );
             // Create new TaskApplications with replaced names
-            const apps = newNames.map((name: string) => {
+            const apps = newNames.flatMap((name: string) => splitStoredApplicationNames(name)).map((name: string) => {
               const app = moddle.create('bpmniq:Application', { name });
               return app;
             });
@@ -566,7 +605,9 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
         const exts = bo.extensionElements?.values || [];
         const container = exts.find((e: any) => e.$type === 'bpmniq:TaskApplications');
         if (!container) return [];
-        return (container.applications || []).map((a: any) => a.name);
+        return (container.applications || [])
+          .flatMap((a: any) => splitStoredApplicationNames(String(a.name || a.correlationId || '')))
+          .filter(Boolean);
       }
       getTaskAppsRef.current = getTaskApps;
 
@@ -584,8 +625,13 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
         );
         // Add new one if apps exist
         if (appNames.length) {
-          const apps = appNames.map((name) => {
-            const app = moddleInst.create('bpmniq:Application', { name });
+          const apps = appNames.flatMap((name) => splitStoredApplicationNames(name)).map((name) => {
+            const match = findApplicationReference(name);
+            const app = moddleInst.create('bpmniq:Application', {
+              name,
+              correlationId: match?.correlationId || null,
+              acronym: match?.acronym || null,
+            });
             return app;
           });
           const container = moddleInst.create('bpmniq:TaskApplications', { applications: apps });
@@ -681,7 +727,15 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
           for (const appName of appNames) {
             const isValid = validSet.has(normalizeApplicationLookupValue(appName));
             const displayName = getAppDisplayName(appName);
+            const applicationMeta = allApplicationsRef.current.find((app) => [app.correlationId, app.acronym, app.name]
+              .map((candidate) => normalizeApplicationLookupValue(candidate))
+              .includes(normalizeApplicationLookupValue(appName))) || null;
             const row = document.createElement('div');
+            row.title = [
+              `Application: ${displayName}`,
+              applicationMeta?.correlationId ? `Correlation ID: ${applicationMeta.correlationId}` : null,
+              applicationMeta?.acronym ? `Acronym: ${applicationMeta.acronym}` : null,
+            ].filter(Boolean).join('\n');
             row.style.cssText = 'display:flex;align-items:center;gap:3px;white-space:nowrap;cursor:pointer;padding:1px 2px;border-radius:3px;';
             row.addEventListener('mouseenter', () => { row.style.background = '#f0f5ff'; });
             row.addEventListener('mouseleave', () => { row.style.background = 'transparent'; });
@@ -692,14 +746,14 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
             row.addEventListener('contextmenu', (e) => {
               e.preventDefault();
               e.stopPropagation();
-              showAppActionMenu(appName, el, m, e.clientX, e.clientY);
+              showAppActionMenu(appName, el, m, e.clientX, e.clientY, applicationMeta);
             });
             const icon = document.createElement('span');
             icon.innerHTML = COMPUTER_ICON;
-            icon.style.cssText = `display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;color:${isValid ? '#000000' : DARK_ORANGE};flex-shrink:0;`;
+            icon.style.cssText = `display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;color:${isValid ? '#0284c7' : DARK_ORANGE};flex-shrink:0;`;
             const label = document.createElement('span');
             label.textContent = displayName;
-            label.style.cssText = `font-size:9px;color:${isValid ? '#000000' : DARK_ORANGE};line-height:1.1;overflow:hidden;text-overflow:ellipsis;max-width:120px;`;
+            label.style.cssText = `font-size:9px;color:${isValid ? '#0284c7' : DARK_ORANGE};line-height:1.1;overflow:hidden;text-overflow:ellipsis;max-width:120px;`;
             row.appendChild(icon);
             row.appendChild(label);
             html.appendChild(row);
@@ -730,9 +784,10 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
         }
       }
 
-      function showAppActionMenu(appName: string, element: any, m: any, clientX: number, clientY: number) {
+      function showAppActionMenu(appName: string, element: any, m: any, clientX: number, clientY: number, appMeta?: ApplicationItem | null) {
         removeAppActionMenu();
-        const displayName = getAppDisplayName(appName);
+        const resolvedMeta = appMeta || getAppMeta(appName);
+        const displayName = resolvedMeta ? getPreferredApplicationDisplayName(resolvedMeta, appName) : getAppDisplayName(appName);
 
         const menu = document.createElement('div');
         menu.style.cssText = `
@@ -771,8 +826,8 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
         };
 
         menu.appendChild(makeItem('Edit applications', () => showAppPopover(element, m)));
-        menu.appendChild(makeItem('Servers', () => { void loadServersForApp(appName, element.id); }));
-        menu.appendChild(makeItem('Databases', () => { void loadDatabasesForApp(appName, element.id); }));
+        menu.appendChild(makeItem('Servers', () => { void loadServersForApp(appName, element.id, resolvedMeta); }));
+        menu.appendChild(makeItem('Databases', () => { void loadDatabasesForApp(appName, element.id, resolvedMeta); }));
 
         document.body.appendChild(menu);
         appActionMenuRef.current = menu;
@@ -806,6 +861,36 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
             };
           })
           .filter((entry): entry is { app: ApplicationItem; identifier: string; displayName: string } => !!entry);
+        const availableAppOptions = (() => {
+          const options = new Map<string, { identifier: string; displayName: string; secondaryText: string }>();
+
+          for (const appName of allAppNamesRef.current) {
+            const identifier = String(appName || '').trim();
+            if (!identifier) continue;
+            const key = normalizeApplicationLookupValue(identifier);
+            if (!key || options.has(key)) continue;
+            options.set(key, {
+              identifier,
+              displayName: getAppDisplayName(identifier),
+              secondaryText: '',
+            });
+          }
+
+          for (const entry of availableApps) {
+            const key = normalizeApplicationLookupValue(entry.identifier);
+            if (!key) continue;
+            options.set(key, {
+              identifier: entry.identifier,
+              displayName: entry.displayName,
+              secondaryText: [
+                (entry.app as any).acronym,
+                (entry.app as any).correlationId,
+              ].filter(Boolean).join(' • '),
+            });
+          }
+
+          return Array.from(options.values());
+        })();
 
         const popover = document.createElement('div');
         popover.className = 'task-app-popover';
@@ -835,9 +920,17 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
           for (const appName of apps) {
             const isValid = validAppSet.has(normalizeApplicationLookupValue(appName));
             const displayName = getAppDisplayName(appName);
+            const applicationMeta = allApplicationsRef.current.find((app) => [app.correlationId, app.acronym, app.name]
+              .map((candidate) => normalizeApplicationLookupValue(candidate))
+              .includes(normalizeApplicationLookupValue(appName))) || null;
             const tag = document.createElement('span');
+            tag.title = [
+              `Application: ${displayName}`,
+              applicationMeta?.correlationId ? `Correlation ID: ${applicationMeta.correlationId}` : null,
+              applicationMeta?.acronym ? `Acronym: ${applicationMeta.acronym}` : null,
+            ].filter(Boolean).join('\n');
             tag.style.cssText = isValid
-              ? 'display:inline-flex;align-items:center;gap:3px;padding:2px 6px;background:#f5f5f5;color:#000000;border:1px solid #d9d9d9;border-radius:4px;font-size:11px;'
+              ? 'display:inline-flex;align-items:center;gap:3px;padding:2px 6px;background:#eff6ff;color:#0284c7;border:1px solid #93c5fd;border-radius:4px;font-size:11px;'
               : `display:inline-flex;align-items:center;gap:3px;padding:2px 6px;background:#fff7e6;color:${DARK_ORANGE};border:1px solid ${DARK_ORANGE};border-radius:4px;font-size:11px;`;
             tag.innerHTML = COMPUTER_ICON + ' ' + displayName;
             const x = document.createElement('span');
@@ -860,34 +953,60 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
         popover.appendChild(assignedDiv);
 
         const searchRow = document.createElement('div');
-        searchRow.style.cssText = 'display:flex;gap:4px;';
+        searchRow.style.cssText = 'display:flex;gap:4px;align-items:center;';
         const searchInput = document.createElement('input');
-        searchInput.placeholder = 'Search application…';
+        searchInput.placeholder = 'Type to search applications…';
         searchInput.style.cssText = 'flex:1;padding:4px 8px;border:1px solid #d9d9d9;border-radius:4px;font-size:12px;outline:none;';
         searchRow.appendChild(searchInput);
         popover.appendChild(searchRow);
 
         const list = document.createElement('div');
-        list.style.cssText = 'max-height:140px;overflow-y:auto;margin-top:4px;border:1px solid #f0f0f0;border-radius:4px;';
+        list.style.cssText = 'max-height:180px;overflow-y:auto;margin-top:4px;border:1px solid #f0f0f0;border-radius:4px;';
 
-        function renderList(filter: string) {
-          list.innerHTML = '';
+        const typeaheadState = {
+          requestId: 0,
+          timer: undefined as ReturnType<typeof setTimeout> | undefined,
+        };
+
+        function resolveSuggestedApplication(value: string) {
+          const normalizedValue = normalizeApplicationLookupValue(value);
+          return availableApps.find((entry) => {
+            const app = entry.app as any;
+            return [
+              entry.identifier,
+              entry.displayName,
+              app.name,
+              app.acronym,
+              app.correlationId,
+            ].some((candidate) => normalizeApplicationLookupValue(candidate) === normalizedValue);
+          }) || null;
+        }
+
+        function buildLocalSuggestions(query: string) {
+          const normalizedQuery = normalizeApplicationLookupValue(query);
           const assigned = new Set(getTaskApps(bo).map((name) => normalizeApplicationLookupValue(name)));
-          const lc = filter.toLowerCase();
-          const matches = availableApps.filter((entry) => {
-            if (assigned.has(normalizeApplicationLookupValue(entry.identifier))) return false;
-            return [entry.displayName, entry.identifier, entry.app.name, entry.app.acronym, entry.app.correlationId]
-              .map((value) => String(value || '').toLowerCase())
-              .some((value) => value.includes(lc));
-          }).slice(0, 20);
-          if (!matches.length) {
-            list.innerHTML = '<div style="padding:4px 8px;color:#999;">No matches</div>';
+
+          return availableAppOptions
+            .filter((entry) => !assigned.has(normalizeApplicationLookupValue(entry.identifier)))
+            .filter((entry) => {
+              if (!normalizedQuery) return true;
+              return [entry.displayName, entry.identifier, entry.secondaryText]
+                .map((value) => normalizeApplicationLookupValue(value))
+                .some((value) => value.includes(normalizedQuery));
+            })
+            .sort((a, b) => a.displayName.localeCompare(b.displayName))
+            .slice(0, 20);
+        }
+
+        function renderList(suggestions: Array<{ identifier: string; displayName: string; secondaryText: string; frequency?: number }>) {
+          list.innerHTML = '';
+          if (!suggestions.length) {
+            list.innerHTML = '<div style="padding:4px 8px;color:#999;">Type to search applications</div>';
             return;
           }
-          for (const match of matches) {
+          for (const match of suggestions) {
             const row = document.createElement('div');
-            row.textContent = match.displayName;
-            row.style.cssText = 'padding:4px 8px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+            row.style.cssText = 'padding:5px 8px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;flex-direction:column;gap:1px;';
             row.addEventListener('mouseenter', () => { row.style.background = '#f0f0ff'; });
             row.addEventListener('mouseleave', () => { row.style.background = 'white'; });
             row.addEventListener('click', (ev) => {
@@ -896,16 +1015,128 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
               setTaskApps(bo, [...current, match.identifier], m);
               popoverDirtyRef.current = true;
               rebuildAssigned();
-              renderList(searchInput.value);
+              void refreshTypeahead(searchInput.value);
               renderAppOverlays(m);
             });
+            const title = document.createElement('div');
+            title.textContent = match.displayName;
+            title.style.cssText = 'font-size:12px;color:#1f2937;line-height:1.2;overflow:hidden;text-overflow:ellipsis;';
+            row.appendChild(title);
+            const subline = document.createElement('div');
+            const sourceBits = [match.secondaryText, match.frequency ? `${match.frequency} matches` : ''].filter(Boolean);
+            subline.textContent = sourceBits.join(' • ');
+            subline.style.cssText = 'font-size:10px;color:#6b7280;line-height:1.2;overflow:hidden;text-overflow:ellipsis;';
+            if (subline.textContent) row.appendChild(subline);
             list.appendChild(row);
           }
         }
-        renderList('');
+
+        async function refreshTypeahead(query: string) {
+          const term = query.trim();
+          const requestId = ++typeaheadState.requestId;
+          const localMatches = buildLocalSuggestions(term);
+          renderList(localMatches);
+
+          if (!term) return;
+
+          const componentCandidates = ['application', 'Application', 'applications', 'Applications', null];
+          let backendSuggestions: Array<{ value: string; frequency?: number; componentNames?: string[] }> = [];
+
+          for (const componentName of componentCandidates) {
+            try {
+              const params = new URLSearchParams({
+                neighborhoodName: 'System Components',
+                prefix: term,
+                limit: '20',
+                indexMode: 'data',
+              });
+              if (componentName) params.set('componentName', componentName);
+
+              const response = await fetch(`/api/custom-factories/search/typeahead?${params.toString()}`);
+              if (!response.ok) continue;
+              const data = await response.json();
+              const nextSuggestions = Array.isArray(data.suggestions) ? data.suggestions : [];
+              const filteredSuggestions = nextSuggestions.filter((item: any) => {
+                const componentNames = Array.isArray(item?.componentNames) ? item.componentNames : [];
+                return componentNames.some((name: string) => normalizeApplicationLookupValue(name).includes('application'));
+              });
+
+              if (filteredSuggestions.length) {
+                backendSuggestions = filteredSuggestions;
+                break;
+              }
+            } catch {
+              // Try the next component name fallback.
+            }
+          }
+
+          if (requestId !== typeaheadState.requestId) return;
+
+          if (!backendSuggestions.length) return;
+
+          const merged = new Map<string, { identifier: string; displayName: string; secondaryText: string; frequency?: number }>();
+          for (const local of localMatches) {
+            merged.set(normalizeApplicationLookupValue(local.identifier), local);
+          }
+          for (const suggestion of backendSuggestions) {
+            const raw = String(suggestion.value || '').trim();
+            if (!raw) continue;
+            const resolved = resolveSuggestedApplication(raw);
+            if (!resolved) continue;
+            const identifier = resolved.identifier;
+            const key = normalizeApplicationLookupValue(identifier);
+            if (!key || merged.has(key)) continue;
+            merged.set(key, {
+              identifier,
+              displayName: resolved.displayName,
+              secondaryText: [
+                (resolved.app as any).acronym,
+                (resolved.app as any).correlationId,
+              ].filter(Boolean).join(' • '),
+              frequency: suggestion.frequency,
+            });
+          }
+
+          renderList(Array.from(merged.values()).slice(0, 20));
+        }
+
+        renderList(buildLocalSuggestions(''));
         popover.appendChild(list);
 
-        searchInput.addEventListener('input', () => renderList(searchInput.value));
+        if (!availableAppOptions.length) {
+          list.innerHTML = '<div style="padding:4px 8px;color:#999;">Loading applications...</div>';
+          void loadApplicationCatalog().then((catalogApps) => {
+            if (appPopoverRef.current !== popover) return;
+            const catalogOptions = new Map<string, { identifier: string; displayName: string; secondaryText: string }>();
+            for (const app of catalogApps) {
+              const identifier = getPreferredApplicationIdentifier(app) || String(app?.name || '').trim();
+              if (!identifier) continue;
+              const key = normalizeApplicationLookupValue(identifier);
+              if (!key || catalogOptions.has(key)) continue;
+              catalogOptions.set(key, {
+                identifier,
+                displayName: getPreferredApplicationDisplayName(app, identifier),
+                secondaryText: [app.acronym, app.correlationId].filter(Boolean).join(' • '),
+              });
+            }
+            for (const option of catalogOptions.values()) {
+              availableAppOptions.push(option);
+            }
+            const currentValue = searchInput.value;
+            if (currentValue.trim()) {
+              void refreshTypeahead(currentValue);
+            } else {
+              renderList(buildLocalSuggestions(''));
+            }
+          });
+        }
+
+        searchInput.addEventListener('input', () => {
+          if (typeaheadState.timer) clearTimeout(typeaheadState.timer);
+          typeaheadState.timer = setTimeout(() => {
+            void refreshTypeahead(searchInput.value);
+          }, 200);
+        });
 
         const closeHandler = (ev: MouseEvent) => {
           if (!popover.contains(ev.target as Node)) {
@@ -922,6 +1153,7 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
         document.body.appendChild(popover);
         appPopoverRef.current = popover;
         searchInput.focus();
+        void refreshTypeahead('');
       }
 
       /** Notify parent of XML change after modifying extension elements */
@@ -1261,12 +1493,19 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
         const existing = (task.extensionElements?.values || []).find((e: any) => e.$type === 'bpmniq:TaskApplications');
 
         if (existing) {
-          const storedNames = (existing.applications || []).map((a: any) => a.name?.trim()).filter(Boolean);
+          const storedNames = (existing.applications || [])
+            .flatMap((a: any) => splitStoredApplicationNames(a.name || a.correlationId || ''))
+            .filter(Boolean);
           const mergedNames = mergeTaskApplicationNames(storedNames, appNames);
 
           if (mergedNames.length !== storedNames.length) {
             const mergedApps = mergedNames.map((name: string) => {
-              const app = moddle.create('bpmniq:Application', { name });
+              const match = findApplicationReference(name);
+              const app = moddle.create('bpmniq:Application', {
+                name,
+                correlationId: match?.correlationId || null,
+                acronym: match?.acronym || null,
+              });
               app.$parent = existing;
               return app;
             });
@@ -1290,8 +1529,13 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
           task.extensionElements = moddle.create('bpmn:ExtensionElements', { values: [] });
           task.extensionElements.$parent = task;
         }
-        const apps = appNames.map((name: string) => {
-          const app = moddle.create('bpmniq:Application', { name });
+        const apps = appNames.flatMap((name: string) => splitStoredApplicationNames(name)).map((name: string) => {
+          const match = findApplicationReference(name);
+          const app = moddle.create('bpmniq:Application', {
+            name,
+            correlationId: match?.correlationId || null,
+            acronym: match?.acronym || null,
+          });
           return app;
         });
         const container = moddle.create('bpmniq:TaskApplications', { applications: apps });
@@ -1498,7 +1742,7 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
         {showProperties && (
           <div
             ref={propertiesRef}
-            className="properties-panel-container border-l border-gray-200 bg-white absolute right-0 top-0 bottom-0 z-10 overflow-hidden"
+            className="properties-panel-container properties-panel-shell border-l border-gray-200 bg-white absolute right-0 top-0 bottom-0 z-10 overflow-hidden"
             style={{
               width: propsCollapsed ? 0 : propsWidth,
               display: (selectedApp || selectedTask?.name || selectedLane || diagramSelected || selectedCapability) ? 'none' : undefined,
@@ -1532,7 +1776,7 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
           </div>
         )}
         {/* Collapse button — rendered outside propertiesRef so bpmn-js content doesn't cover it */}
-        {showProperties && !propsCollapsed && !selectedApp && !selectedTask?.name && !selectedLane && !diagramSelected && !selectedCapability && (
+        {showProperties && !propsCollapsed && !selectedApp && !selectedTask && !selectedLane && !diagramSelected && !selectedCapability && (
           <button
             className="absolute top-1 bg-white border border-gray-300 rounded shadow-sm text-gray-500 hover:text-gray-800 hover:bg-gray-50 text-xs px-1.5 py-0.5"
             style={{ right: propsWidth + 4, zIndex: 20 }}
@@ -1543,240 +1787,133 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
           </button>
         )}
         {/* ─── Diagram Properties Panel ─── */}
-        {showProperties && !propsCollapsed && diagramSelected && !selectedApp && !selectedTask?.name && !selectedLane && (
-          <div className="border-l border-gray-200 bg-white absolute right-0 top-0 bottom-0 z-20 overflow-y-auto"
-            style={{ width: propsWidth, fontFamily: '"IBM Plex Sans", Arial, sans-serif' }}>
+        {showProperties && !propsCollapsed && diagramSelected && !selectedApp && !selectedTask && !selectedLane && !selectedCapability && (
+          <div className="properties-panel-summary-card absolute right-0 top-0 bottom-0 z-20 overflow-y-auto" style={{ width: propsWidth, fontFamily: '"IBM Plex Sans", Arial, sans-serif' }}>
             <div className="p-4">
               <div className="flex items-center gap-2 mb-4">
                 <div className={`w-8 h-8 rounded ${isInFactory ? 'bg-blue-50 border border-blue-200' : 'bg-orange-50 border border-orange-200'} flex items-center justify-center`}>
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={isInFactory ? '#1677ff' : '#cc7000'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="20" height="20" rx="3"/><path d="M7 7h10"/><path d="M7 12h10"/><path d="M7 17h6"/></svg>
                 </div>
                 <div>
-                  <div className="text-xs text-gray-500 uppercase tracking-wide">Diagram</div>
+                  <div className="text-xs uppercase tracking-wide text-slate-500">Diagram</div>
                   <div className="font-semibold text-sm" style={{ color: diagramNameColor }}>{diagramName || 'Untitled'}</div>
                 </div>
               </div>
               <div className="border-t border-gray-100 pt-3">
-                <table className="w-full text-xs">
-                  <tbody />
-                </table>
+                <table className="w-full text-xs"><tbody /></table>
               </div>
               {isAlreadyLoaded && (
-                <div className="border-t border-gray-100 mt-3 pt-3 flex flex-col gap-1.5">
-                  <p className="text-xs text-orange-600 mb-1">This diagram already exists in the component view. Choose an action:</p>
-                  <button
-                    className="w-full text-xs py-1.5 px-3 rounded border text-left flex items-center gap-1.5 border-orange-200 bg-orange-50 hover:bg-orange-100 text-orange-700"
-                    onClick={() => onDeleteAndReload?.()}
-                    title="Delete the existing component entry and reload from this file"
-                  >
+                <div className="properties-panel-section flex flex-col gap-1.5">
+                  <p className="text-xs text-orange-700 mb-1">This diagram already exists in the component view. Choose an action:</p>
+                  <button className="properties-panel-btn-primary is-invalid w-full text-xs py-1.5 px-3 text-left flex items-center gap-1.5" onClick={() => onDeleteAndReload?.()} title="Delete the existing component entry and reload from this file">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
                     Delete &amp; Reload →
                   </button>
                   <div className="flex gap-1 mt-1">
-                    <input
-                      className="flex-1 text-xs border border-gray-300 rounded px-2 py-1 focus:outline-none focus:border-orange-400"
-                      placeholder="New name…"
-                      value={newDiagramName}
-                      onChange={e => setNewDiagramName(e.target.value)}
-                    />
-                    <button
-                      className="text-xs py-1 px-2 rounded border border-orange-200 bg-orange-50 hover:bg-orange-100 text-orange-700 whitespace-nowrap"
-                      onClick={() => { if (newDiagramName.trim()) { onSaveAsNew?.(newDiagramName.trim()); setNewDiagramName(''); } }}
-                      disabled={!newDiagramName.trim()}
-                      title="Save a renamed copy in draft state"
-                    >
+                    <input className="flex-1 text-xs border border-orange-200 rounded-lg px-2 py-1 focus:outline-none focus:border-orange-400 bg-white" placeholder="New name…" value={newDiagramName} onChange={e => setNewDiagramName(e.target.value)} />
+                    <button className="properties-panel-btn-primary is-invalid text-xs py-1 px-2 whitespace-nowrap" onClick={() => { if (newDiagramName.trim()) { onSaveAsNew?.(newDiagramName.trim()); setNewDiagramName(''); } }} disabled={!newDiagramName.trim()} title="Save a renamed copy in draft state">
                       Save as New →
                     </button>
                   </div>
                 </div>
               )}
               {!isInFactory && !isAlreadyLoaded && (
-                <div className="border-t border-gray-100 mt-3 pt-3 flex flex-col gap-1.5">
-                  <button
-                    className="w-full text-xs py-1.5 px-3 rounded border text-left flex items-center gap-1.5 border-orange-200 bg-orange-50 hover:bg-orange-100 text-orange-700"
-                    onClick={() => onAddToFactory?.()}
-                    title="Save this diagram to MongoDB"
-                  >
+                <div className="properties-panel-section flex flex-col gap-1.5">
+                  <button className="properties-panel-btn-primary is-invalid w-full text-xs py-1.5 px-3 text-left flex items-center gap-1.5" onClick={() => onAddToFactory?.()} title="Save this diagram to MongoDB">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
                     Save to MongoDB →
                   </button>
                 </div>
               )}
               {isInFactory && (
-                <div className="border-t border-gray-100 mt-3 pt-3 flex flex-col gap-1.5">
-                  <button
-                    className="w-full text-xs py-1.5 px-3 rounded border text-left flex items-center gap-1.5 border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-700"
-                    onClick={() => onNavigateToFactory?.('diagramFactory', diagramName || '', 'view')}
-                    title="View in BPMN Component"
-                  >
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="2" width="20" height="20" rx="3"/><path d="M7 7h10"/><path d="M7 12h10"/><path d="M7 17h6"/></svg>
+                <div className="properties-panel-section flex flex-col gap-1.5">
+                  <button className="properties-panel-btn-primary is-valid w-full text-xs py-1.5 px-3 text-left flex items-center gap-1.5" onClick={() => onDiagramNameClick?.()} title="View in BPMN Component">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 12l2 2 4-4"/></svg>
                     View in BPMN Component →
                   </button>
                 </div>
               )}
-              <button
-                className="mt-4 w-full text-xs py-1.5 px-3 rounded border border-gray-200 hover:bg-gray-50 text-gray-600"
-                onClick={() => setDiagramSelected(false)}
-              >
+              <button className="mt-4 w-full text-xs py-1.5 px-3 rounded-lg border border-blue-100 hover:bg-blue-50 text-slate-600" onClick={() => setDiagramSelected(false)}>
                 ← Back to Properties
               </button>
             </div>
           </div>
         )}
-        {showProperties && !propsCollapsed && !selectedApp && !selectedLane && selectedTask && selectedTask.name && (
-          <div className="border-l border-gray-200 bg-white absolute right-0 top-0 bottom-0 z-20 overflow-y-auto"
-            style={{ width: propsWidth, fontFamily: '"IBM Plex Sans", Arial, sans-serif' }}>
+        {showProperties && !propsCollapsed && selectedTask && !selectedApp && !selectedLane && !diagramSelected && !selectedCapability && (
+          <div className="properties-panel-summary-card absolute right-0 top-0 bottom-0 z-20 overflow-y-auto" style={{ width: propsWidth, fontFamily: '"IBM Plex Sans", Arial, sans-serif' }}>
             <div className="p-4">
               <div className="flex items-center gap-2 mb-4">
                 <div className={`w-8 h-8 rounded ${isSelectedTaskValid ? 'bg-blue-50 border border-blue-200' : 'bg-orange-50 border border-orange-200'} flex items-center justify-center`}>
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={isSelectedTaskValid ? '#1677ff' : '#cc7000'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 12l2 2 4-4"/></svg>
                 </div>
                 <div>
-                  <div className="text-xs text-gray-500 uppercase tracking-wide">Task</div>
-                  <div className="font-semibold text-sm" style={{ color: isSelectedTaskValid ? '#333' : '#cc7000' }}>{selectedTask.name}</div>
+                  <div className="text-xs uppercase tracking-wide text-slate-500">Business Task</div>
+                  <div className="font-semibold text-sm" style={{ color: isSelectedTaskValid ? '#1677ff' : '#cc7000' }}>{selectedTask.name}</div>
                 </div>
               </div>
               <div className="border-t border-gray-100 pt-3">
-                <table className="w-full text-xs">
-                  <tbody>
-                    <tr><td className="text-gray-500 py-1 pr-2 align-top">Status</td><td className="py-1"><span className={`px-1.5 py-0.5 rounded text-xs ${isSelectedTaskValid ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-orange-50 text-orange-700 border border-orange-300'}`}>{isSelectedTaskValid ? 'Valid' : 'Invalid'}</span></td></tr>
-                    <tr><td className="text-gray-500 py-1 pr-2 align-top">Element ID</td><td className="py-1 text-gray-600 break-all">{selectedTask.id}</td></tr>
-                  </tbody>
-                </table>
+                <table className="w-full text-xs"><tbody><tr><td className="text-gray-500 py-1 pr-2 align-top">Status</td><td className="py-1"><span className={`px-1.5 py-0.5 rounded text-xs ${isSelectedTaskValid ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-orange-50 text-orange-700 border border-orange-300'}`}>{isSelectedTaskValid ? 'Valid' : 'Invalid'}</span></td></tr><tr><td className="text-gray-500 py-1 pr-2 align-top">Element ID</td><td className="py-1 text-gray-600 break-all">{selectedTask.id}</td></tr></tbody></table>
               </div>
               <div className="border-t border-gray-100 mt-3 pt-3 flex flex-col gap-1.5">
-                <button
-                  className={`w-full text-xs py-1.5 px-3 rounded border text-left flex items-center gap-1.5 ${isSelectedTaskValid ? 'border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-700' : 'border-orange-200 bg-orange-50 hover:bg-orange-100 text-orange-700'}`}
-                  onClick={() => {
-                    if (isSelectedTaskValid) {
-                      onNavigateToFactory?.('tasks', selectedTask.name, 'view');
-                    } else {
-                      // Gather extra context from the BPMN element
-                      const m = modelerRef.current;
-                      let apps: string[] = [];
-                      let actor: string | undefined;
-                      if (m) {
-                        const elementRegistry = m.get('elementRegistry');
-                        const el = elementRegistry.get(selectedTask.id);
-                        if (el) {
-                          apps = getTaskAppsRef.current(el.businessObject);
-                          // Find lane containing this task
-                          const allEls = elementRegistry.getAll();
-                          for (const candidate of allEls) {
-                            const bo = candidate.businessObject;
-                            if (bo?.$type === 'bpmn:Lane' || bo?.$type === 'bpmn2:Lane') {
-                              const flowRefs = bo.flowNodeRef || [];
-                              if (flowRefs.some((ref: any) => ref.id === el.businessObject.id || ref === el.businessObject)) {
-                                actor = bo.name;
-                                break;
-                              }
-                            }
-                          }
-                        }
-                      }
-                      onNavigateToFactory?.('tasks', selectedTask.name, 'add', { applications: apps.length ? apps : undefined, actor });
-                    }
-                  }}
-                  title={isSelectedTaskValid ? 'Open in Business Task Component' : 'Add to Business Task Component'}
-                >
-                  {isSelectedTaskValid
-                    ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 12l2 2 4-4"/></svg>
-                    : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
-                  }
+                <button className={`w-full text-xs py-1.5 px-3 rounded border text-left flex items-center gap-1.5 ${isSelectedTaskValid ? 'border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-700' : 'border-orange-200 bg-orange-50 hover:bg-orange-100 text-orange-700'}`} onClick={() => onNavigateToFactory?.('tasks', selectedTask.name, isSelectedTaskValid ? 'view' : 'add')} title={isSelectedTaskValid ? 'Open in Business Task Component' : 'Add to Business Task Component'}>
+                  {isSelectedTaskValid ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 12l2 2 4-4"/></svg> : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 5v14"/><path d="M5 12h14"/></svg>}
                   {isSelectedTaskValid ? 'View in Task Component →' : 'Add to Task Component →'}
                 </button>
               </div>
-              <button
-                className="mt-4 w-full text-xs py-1.5 px-3 rounded border border-gray-200 hover:bg-gray-50 text-gray-600"
-                onClick={() => { setSelectedTask(null); onTaskSelect?.(null); }}
-              >
+              <button className="mt-4 w-full text-xs py-1.5 px-3 rounded-lg border border-blue-100 hover:bg-blue-50 text-slate-600" onClick={() => { setSelectedTask(null); onTaskSelect?.(null); }}>
                 ← Back to Properties
               </button>
             </div>
           </div>
         )}
-        {showProperties && !propsCollapsed && !selectedApp && !selectedTask?.name && selectedLane && (
-          <div className="border-l border-gray-200 bg-white absolute right-0 top-0 bottom-0 z-20 overflow-y-auto"
-            style={{ width: propsWidth, fontFamily: '"IBM Plex Sans", Arial, sans-serif' }}>
+        {showProperties && !propsCollapsed && !selectedApp && !selectedTask && selectedLane && !diagramSelected && !selectedCapability && (
+          <div className="properties-panel-summary-card absolute right-0 top-0 bottom-0 z-20 overflow-y-auto" style={{ width: propsWidth, fontFamily: '"IBM Plex Sans", Arial, sans-serif' }}>
             <div className="p-4">
               <div className="flex items-center gap-2 mb-4">
                 <div className={`w-8 h-8 rounded ${isSelectedLaneValid ? 'bg-blue-50 border border-blue-200' : 'bg-orange-50 border border-orange-200'} flex items-center justify-center`}>
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={isSelectedLaneValid ? '#1677ff' : '#cc7000'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="4"/><path d="M6 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/></svg>
                 </div>
                 <div>
-                  <div className="text-xs text-gray-500 uppercase tracking-wide">Actor / Lane</div>
-                  <div className="font-semibold text-sm" style={{ color: isSelectedLaneValid ? '#333' : '#cc7000' }}>{selectedLane.name}</div>
+                  <div className="text-xs uppercase tracking-wide text-slate-500">Actor / Lane</div>
+                  <div className="font-semibold text-sm" style={{ color: isSelectedLaneValid ? '#1677ff' : '#cc7000' }}>{selectedLane.name}</div>
                 </div>
               </div>
               <div className="border-t border-gray-100 pt-3">
-                <table className="w-full text-xs">
-                  <tbody>
-                    <tr><td className="text-gray-500 py-1 pr-2 align-top">Status</td><td className="py-1"><span className={`px-1.5 py-0.5 rounded text-xs ${isSelectedLaneValid ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-orange-50 text-orange-700 border border-orange-300'}`}>{isSelectedLaneValid ? 'Valid' : 'Invalid'}</span></td></tr>
-                    <tr><td className="text-gray-500 py-1 pr-2 align-top">Element ID</td><td className="py-1 text-gray-600 break-all">{selectedLane.id}</td></tr>
-                  </tbody>
-                </table>
+                <table className="w-full text-xs"><tbody><tr><td className="text-gray-500 py-1 pr-2 align-top">Status</td><td className="py-1"><span className={`px-1.5 py-0.5 rounded text-xs ${isSelectedLaneValid ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-orange-50 text-orange-700 border border-orange-300'}`}>{isSelectedLaneValid ? 'Valid' : 'Invalid'}</span></td></tr><tr><td className="text-gray-500 py-1 pr-2 align-top">Element ID</td><td className="py-1 text-gray-600 break-all">{selectedLane.id}</td></tr></tbody></table>
               </div>
               <div className="border-t border-gray-100 mt-3 pt-3 flex flex-col gap-1.5">
-                <button
-                  className={`w-full text-xs py-1.5 px-3 rounded border text-left flex items-center gap-1.5 ${isSelectedLaneValid ? 'border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-700' : 'border-orange-200 bg-orange-50 hover:bg-orange-100 text-orange-700'}`}
-                  onClick={() => onNavigateToFactory?.('actors', selectedLane.name, isSelectedLaneValid ? 'view' : 'add')}
-                  title={isSelectedLaneValid ? 'Open in Actor Component' : 'Add to Actor Component'}
-                >
-                  {isSelectedLaneValid
-                    ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="8" r="4"/><path d="M6 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/></svg>
-                    : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
-                  }
+                <button className={`w-full text-xs py-1.5 px-3 rounded border text-left flex items-center gap-1.5 ${isSelectedLaneValid ? 'border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-700' : 'border-orange-200 bg-orange-50 hover:bg-orange-100 text-orange-700'}`} onClick={() => onNavigateToFactory?.('actors', selectedLane.name, isSelectedLaneValid ? 'view' : 'add')} title={isSelectedLaneValid ? 'Open in Actor Component' : 'Add to Actor Component'}>
+                  {isSelectedLaneValid ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="8" r="4"/><path d="M6 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2"/></svg> : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 5v14"/><path d="M5 12h14"/></svg>}
                   {isSelectedLaneValid ? 'View in Actor Component →' : 'Add to Actor Component →'}
                 </button>
               </div>
-              <button
-                className="mt-4 w-full text-xs py-1.5 px-3 rounded border border-gray-200 hover:bg-gray-50 text-gray-600"
-                onClick={() => setSelectedLane(null)}
-              >
+              <button className="mt-4 w-full text-xs py-1.5 px-3 rounded-lg border border-blue-100 hover:bg-blue-50 text-slate-600" onClick={() => setSelectedLane(null)}>
                 ← Back to Properties
               </button>
             </div>
           </div>
         )}
-        {showProperties && !propsCollapsed && !selectedApp && !selectedTask?.name && !selectedLane && !diagramSelected && selectedCapability && (
-          <div className="border-l border-gray-200 bg-white absolute right-0 top-0 bottom-0 z-20 overflow-y-auto"
-            style={{ width: propsWidth, fontFamily: '"IBM Plex Sans", Arial, sans-serif' }}>
+        {showProperties && !propsCollapsed && !selectedApp && !selectedTask && !selectedLane && !diagramSelected && selectedCapability && (
+          <div className="properties-panel-summary-card absolute right-0 top-0 bottom-0 z-20 overflow-y-auto" style={{ width: propsWidth, fontFamily: '"IBM Plex Sans", Arial, sans-serif' }}>
             <div className="p-4">
               <div className="flex items-center gap-2 mb-4">
                 <div className={`w-8 h-8 rounded ${isCapabilityAssigned ? 'bg-blue-50 border border-blue-200' : 'bg-orange-50 border border-orange-200'} flex items-center justify-center`}>
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={isCapabilityAssigned ? '#1677ff' : '#cc7000'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/></svg>
                 </div>
                 <div>
-                  <div className="text-xs text-gray-500 uppercase tracking-wide">Business Capability</div>
-                  <div className="font-semibold text-sm" style={{ color: isCapabilityAssigned ? '#333' : '#cc7000' }}>{selectedCapability.capabilityName}</div>
+                  <div className="text-xs uppercase tracking-wide text-slate-500">Business Capability</div>
+                  <div className="font-semibold text-sm" style={{ color: isCapabilityAssigned ? '#1677ff' : '#cc7000' }}>{selectedCapability.capabilityName}</div>
                 </div>
               </div>
               <div className="border-t border-gray-100 pt-3">
-                <table className="w-full text-xs">
-                  <tbody>
-                    <tr><td className="text-gray-500 py-1 pr-2 align-top">Status</td><td className="py-1"><span className={`px-1.5 py-0.5 rounded text-xs ${isCapabilityAssigned ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-orange-50 text-orange-700 border border-orange-300'}`}>{isCapabilityAssigned ? 'Assigned' : 'Unassigned'}</span></td></tr>
-                    <tr><td className="text-gray-500 py-1 pr-2 align-top">Confidence</td><td className="py-1 text-gray-700">{selectedCapability.confidence}%</td></tr>
-                    <tr><td className="text-gray-500 py-1 pr-2 align-top">ID</td><td className="py-1 text-gray-600">{selectedCapability.capabilityId}</td></tr>
-                  </tbody>
-                </table>
+                <table className="w-full text-xs"><tbody><tr><td className="text-gray-500 py-1 pr-2 align-top">Status</td><td className="py-1"><span className={`px-1.5 py-0.5 rounded text-xs ${isCapabilityAssigned ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-orange-50 text-orange-700 border border-orange-300'}`}>{isCapabilityAssigned ? 'Assigned' : 'Unassigned'}</span></td></tr><tr><td className="text-gray-500 py-1 pr-2 align-top">Confidence</td><td className="py-1 text-gray-700">{selectedCapability.confidence}%</td></tr><tr><td className="text-gray-500 py-1 pr-2 align-top">ID</td><td className="py-1 text-gray-600">{selectedCapability.capabilityId}</td></tr></tbody></table>
               </div>
               <div className="border-t border-gray-100 mt-3 pt-3 flex flex-col gap-1.5">
-                <button
-                  className={`w-full text-xs py-1.5 px-3 rounded border text-left flex items-center gap-1.5 ${isCapabilityAssigned ? 'border-orange-200 bg-orange-50 hover:bg-orange-100 text-orange-700' : 'border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-700'}`}
-                  onClick={() => onCapabilityAssignToggle?.(selectedCapability)}
-                  title={isCapabilityAssigned ? 'Unassign from diagram' : 'Assign to diagram'}
-                >
-                  {isCapabilityAssigned
-                    ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg>
-                    : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
-                  }
+                <button className={`properties-panel-btn-primary w-full text-xs py-1.5 px-3 text-left flex items-center gap-1.5 ${isCapabilityAssigned ? 'is-invalid' : 'is-valid'}`} onClick={() => onCapabilityAssignToggle?.(selectedCapability)} title={isCapabilityAssigned ? 'Unassign from diagram' : 'Assign to diagram'}>
+                  {isCapabilityAssigned ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg> : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 5v14"/><path d="M5 12h14"/></svg>}
                   {isCapabilityAssigned ? 'Unassign from Diagram →' : 'Assign to Diagram →'}
                 </button>
-                <button
-                  className="w-full text-xs py-1.5 px-3 rounded border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-700 text-left flex items-center gap-1.5"
-                  onClick={() => onCapabilityViewInCatalog?.(selectedCapability)}
-                  title="View in Capability Component"
-                >
+                <button className="properties-panel-btn-primary is-valid w-full text-xs py-1.5 px-3 text-left flex items-center gap-1.5" onClick={() => onCapabilityViewInCatalog?.(selectedCapability)} title="View in Capability Component">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/></svg>
                   View in Capability Component →
                 </button>
@@ -1787,65 +1924,34 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
                   <p className="text-xs text-gray-700 leading-5 m-0">{selectedCapability.justification}</p>
                 </div>
               ) : null}
-              <button
-                className="mt-4 w-full text-xs py-1.5 px-3 rounded border border-gray-200 hover:bg-gray-50 text-gray-600"
-                onClick={() => onCapabilityBack?.()}
-              >
+              <button className="mt-4 w-full text-xs py-1.5 px-3 rounded-lg border border-blue-100 hover:bg-blue-50 text-slate-600" onClick={() => onCapabilityBack?.()}>
                 ← Back to Properties
               </button>
             </div>
           </div>
         )}
         {selectedApp && !propsCollapsed && (
-          <div className="border-l border-gray-200 bg-white absolute right-0 top-0 bottom-0 z-20 overflow-y-auto"
-            style={{ width: propsWidth, fontFamily: '"IBM Plex Sans", Arial, sans-serif' }}>
+          <div className="properties-panel-summary-card absolute right-0 top-0 bottom-0 z-20 overflow-y-auto" style={{ width: propsWidth, fontFamily: '"IBM Plex Sans", Arial, sans-serif' }}>
             <div className="p-4">
               <div className="flex items-center gap-2 mb-4">
                 <div className="w-8 h-8 rounded bg-blue-50 border border-blue-200 flex items-center justify-center">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={isSelectedAppValid ? '#1677ff' : '#cc7000'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
                 </div>
                 <div>
-                  <div className="text-xs text-gray-500 uppercase tracking-wide">Application</div>
-                  <div className="font-semibold text-sm" style={{ color: isSelectedAppValid ? '#333' : '#cc7000' }}>{getAppDisplayName(selectedApp.name)}</div>
+                  <div className="text-xs uppercase tracking-wide text-slate-500">Application</div>
+                  <div className="font-semibold text-sm" style={{ color: isSelectedAppValid ? '#1677ff' : '#cc7000' }}>{getAppDisplayName(selectedApp.name)}</div>
                 </div>
               </div>
               <div className="border-t border-gray-100 pt-3">
-                <table className="w-full text-xs">
-                  <tbody>
-                    <tr><td className="text-gray-500 py-1 pr-2 align-top">Status</td><td className="py-1"><span className={`px-1.5 py-0.5 rounded text-xs ${isSelectedAppValid ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-orange-50 text-orange-700 border border-orange-300'}`}>{isSelectedAppValid ? 'Valid' : 'Invalid'}</span></td></tr>
-                    <tr><td className="text-gray-500 py-1 pr-2 align-top">Task</td><td className="py-1 font-medium">{selectedApp.taskName}</td></tr>
-                    <tr><td className="text-gray-500 py-1 pr-2 align-top">Task ID</td><td className="py-1 text-gray-600 break-all">{selectedApp.taskId}</td></tr>
-                  </tbody>
-                </table>
+                <table className="w-full text-xs"><tbody><tr><td className="text-gray-500 py-1 pr-2 align-top">Status</td><td className="py-1"><span className={`px-1.5 py-0.5 rounded text-xs ${isSelectedAppValid ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-orange-50 text-orange-700 border border-orange-300'}`}>{isSelectedAppValid ? 'Valid' : 'Invalid'}</span></td></tr><tr><td className="text-gray-500 py-1 pr-2 align-top">Task</td><td className="py-1 font-medium">{selectedApp.taskName}</td></tr><tr><td className="text-gray-500 py-1 pr-2 align-top">Task ID</td><td className="py-1 text-gray-600 break-all">{selectedApp.taskId}</td></tr></tbody></table>
               </div>
               <div className="border-t border-gray-100 mt-3 pt-3 flex flex-col gap-1.5">
-                <button
-                  className="w-full text-xs py-1.5 px-3 rounded border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-700 text-left flex items-center gap-1.5"
-                  onClick={async () => {
-                    const exactMatch = getAppMeta(selectedApp.name);
-                    if (exactMatch) {
-                      onNavigateToFactory?.('applications', getPreferredApplicationIdentifier(exactMatch) || selectedApp.name, 'view');
-                      return;
-                    }
-
-                    const resolvedApp = await ensureResolvedDiagramApplication(selectedApp.name, selectedApp.taskId);
-                    if (resolvedApp) {
-                      onNavigateToFactory?.('applications', getPreferredApplicationIdentifier(resolvedApp) || selectedApp.name, 'view');
-                      return;
-                    }
-
-                    onNavigateToFactory?.('applications', selectedApp.name, 'add');
-                  }}
-                  title={isSelectedAppValid ? 'Open in Application Component' : 'Add to Application Component'}
-                >
+                <button className="properties-panel-btn-primary is-valid w-full text-xs py-1.5 px-3 text-left flex items-center gap-1.5" onClick={async () => { const exactMatch = getAppMeta(selectedApp.name); if (exactMatch) { onNavigateToFactory?.('applications', getPreferredApplicationIdentifier(exactMatch) || selectedApp.name, 'view'); return; } const resolvedApp = await ensureResolvedDiagramApplication(selectedApp.name, selectedApp.taskId); if (resolvedApp) { onNavigateToFactory?.('applications', getPreferredApplicationIdentifier(resolvedApp) || selectedApp.name, 'view'); return; } onNavigateToFactory?.('applications', selectedApp.name, 'add'); }} title={isSelectedAppValid ? 'Open in Application Component' : 'Add to Application Component'}>
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
                   {isSelectedAppValid ? 'View in Application Component →' : 'Add to Application Component →'}
                 </button>
               </div>
-              <button
-                className="mt-4 w-full text-xs py-1.5 px-3 rounded border border-gray-200 hover:bg-gray-50 text-gray-600"
-                onClick={() => setSelectedApp(null)}
-              >
+              <button className="mt-4 w-full text-xs py-1.5 px-3 rounded-lg border border-blue-100 hover:bg-blue-50 text-slate-600" onClick={() => setSelectedApp(null)}>
                 ← Back to Properties
               </button>
             </div>

@@ -154,13 +154,23 @@ async function generateDiagramForFlow(neighborhoodName, flow) {
 
   const allAppIds = Array.from(new Set(orderedTasks.flatMap((t) => (t.childrenRefs || []).map(String))));
   const appDocs = allAppIds.length ? await CanonicalComponent.find({ _id: { $in: allAppIds } }).lean() : [];
-  const appNameById = new Map(appDocs.map((a) => [String(a._id), a.values?.name || a.primaryKey]));
+  const appById = new Map(appDocs.map((a) => [String(a._id), a]));
 
   const tasks = orderedTasks.map((t) => ({
     name: t.values?.name || t.primaryKey,
     bpmnType: t.values?.bpmn_task_qualifier,
     actor: t.values?.actor_qualifier,
-    applications: (t.childrenRefs || []).map((id) => appNameById.get(String(id))).filter(Boolean),
+    applications: (t.childrenRefs || []).map((id) => {
+      const app = appById.get(String(id));
+      const values = app?.values || {};
+      const name = values['Application Component'] || values.name || app?.primaryKey;
+      if (!name) return null;
+      return {
+        name,
+        correlationId: values['CORRELATION_ID Qualifier'] || values.correlationId || null,
+        acronym: values['X_ATT2_ITAP_U_APPL_ACRON_NM Qualifier'] || values.acronym || null,
+      };
+    }).filter(Boolean),
   }));
 
   const diagramTasks = tasks.map((t, i) => ({
@@ -168,7 +178,11 @@ async function generateDiagramForFlow(neighborhoodName, flow) {
     source: i > 0 ? tasks[i - 1].name : null,
     target: i < tasks.length - 1 ? tasks[i + 1].name : null,
     actor: t.actor || null,
-    applications: t.applications.map((name) => ({ name })),
+    applications: t.applications.map((application) => ({
+      name: application.name,
+      correlationId: application.correlationId || null,
+      acronym: application.acronym || null,
+    })),
   }));
 
   const branches = await getFlowLineageBranches(flow);

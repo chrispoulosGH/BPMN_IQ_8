@@ -67,6 +67,7 @@ const diagramSchema = new mongoose.Schema(
           applications: [
             {
               name: { type: String, required: true, trim: true },
+              correlationId: { type: String, default: null, trim: true },
             },
           ],
         },

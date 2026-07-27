@@ -12,12 +12,15 @@ const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/bpmn_iq';
 
 function primaryKeyFromRow(row) {
   if (!row) return null;
+  const values = row.values && typeof row.values === 'object' ? row.values : row;
   // Support multiple possible shapes: { values: { name } } or { name }
-  if (row.values && (row.values.name || row.values.Name)) return row.values.name || row.values.Name;
+  if (values.name || values.Name) return values.name || values.Name;
+  const componentKey = Object.keys(values).find((key) => /(?:^|\s)component$/i.test(String(key).trim()));
+  if (componentKey && String(values[componentKey] || '').trim()) return String(values[componentKey]).trim();
   if (row.name || row.Name) return row.name || row.Name;
-  // fallback to first string-ish field
-  for (const k of Object.keys(row)) {
-    const v = row[k];
+  // Fall back to row data before wrapper metadata such as owner/state.
+  for (const k of Object.keys(values)) {
+    const v = values[k];
     if (typeof v === 'string' && v.trim()) return v.trim();
   }
   return null;

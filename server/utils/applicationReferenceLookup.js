@@ -36,9 +36,18 @@ function getFieldValue(source, aliases) {
 
 function buildApplicationItem(source, fallbackId, neighborhoodName = '') {
   const values = toPlainObject(source);
-  const name = getFieldValue(values, ['name', 'application name', 'application_name']) || normalizeValue(values.rowName) || normalizeValue(values.name) || normalizeValue(fallbackId);
-  const correlationId = getFieldValue(values, ['correlationId', 'correlation_id', 'application correlation id', 'app correlation id']);
-  const acronym = getFieldValue(values, ['acronym', 'application acronym', 'app acronym']);
+  const name = getFieldValue(values, [
+    'name',
+    'application',
+    'applications',
+    'application component',
+    'application name',
+    'application_name',
+    'app name',
+    'app_name',
+  ]) || normalizeValue(values.rowName) || normalizeValue(values.name);
+  const correlationId = getFieldValue(values, ['correlationId', 'correlation_id', 'correlation_id qualifier', 'application correlation id', 'app correlation id']);
+  const acronym = getFieldValue(values, ['acronym', 'application acronym', 'app acronym', 'x_att2_itap_u_appl_acron_nm qualifier']);
 
   if (!name && !correlationId && !acronym) return null;
 
@@ -89,6 +98,14 @@ function dedupeAndSortApplicationItems(items) {
     if (leftName !== rightName) return leftName.localeCompare(rightName);
     return normalizeValue(left.correlationId).localeCompare(normalizeValue(right.correlationId));
   });
+}
+
+function isValidApplicationName(value) {
+  const name = normalizeValue(value);
+  if (!name) return false;
+  // Filter obvious non-app placeholders (internal IDs / usernames)
+  if (/^cp\d+$/i.test(name)) return false;
+  return true;
 }
 
 async function loadApplicationReferencesFromSearchIndex(neighborhoodName) {
@@ -179,12 +196,13 @@ async function loadApplicationReferencesFromData(neighborhoodName) {
 
 async function listApplicationReferences(neighborhoodName) {
   const normalizedNeighborhoodName = normalizeValue(neighborhoodName);
-  const fromCanonical = await loadApplicationReferencesFromCanonicalData(normalizedNeighborhoodName);
+  const fromCanonical = (await loadApplicationReferencesFromCanonicalData(normalizedNeighborhoodName)).filter((item) => isValidApplicationName(item?.name));
   if (fromCanonical.length) return fromCanonical;
 
-  const fromIndex = await loadApplicationReferencesFromSearchIndex(normalizedNeighborhoodName);
+  const fromIndex = (await loadApplicationReferencesFromSearchIndex(normalizedNeighborhoodName)).filter((item) => isValidApplicationName(item?.name));
   if (fromIndex.length) return fromIndex;
-  return loadApplicationReferencesFromData(normalizedNeighborhoodName);
+  const fromData = await loadApplicationReferencesFromData(normalizedNeighborhoodName);
+  return fromData.filter((item) => isValidApplicationName(item?.name));
 }
 
 async function findApplicationReferenceByField(neighborhoodName, fieldName, value) {
