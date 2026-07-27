@@ -169,7 +169,7 @@ function extractTaskNames(xml: string): string[] {
   const regex = /<bpmn2?:(?:task|userTask|serviceTask|sendTask|receiveTask|manualTask|businessRuleTask|scriptTask|subProcess)[^>]*name="([^"]+)"/gi;
   let match;
   while ((match = regex.exec(xml)) !== null) {
-    tasks.push(match[1]);
+    tasks.push(normalizeExtractedApplicationName(match[1]));
   }
   return tasks;
 }
@@ -252,6 +252,17 @@ function extractApplicationsFromXml(xml: string): string[] {
   }
 
   return apps;
+}
+
+function isApplicationAlreadyValidated(applicationName: string, referenceApplications: ApplicationItem[]): boolean {
+  const target = normalizeLookupToken(applicationName);
+  if (!target) return false;
+
+  return referenceApplications.some((application) => {
+    const identifiers = [application.correlationId, application.acronym, application.name]
+      .map((value) => normalizeLookupToken(value));
+    return identifiers.includes(target);
+  });
 }
 
 function getCapabilityFocusName(rawName: string): string {
@@ -2037,14 +2048,16 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
       }
 
       let referenceApplications = allApplications;
-      try {
-        referenceApplications = await getApplicationReferenceForNeighborhood(REFERENCE_DATA_NEIGHBORHOOD_NAME);
-        setAllApplications(referenceApplications);
-        setAllAppNames(referenceApplications.map((app: ApplicationItem) => app.name).filter(Boolean).sort());
-      } catch {
-        if (!referenceApplications.length) {
-          message.open({ key: feedbackKey, type: 'warning', content: 'Application reference data not loaded', duration: 4 });
-          return;
+      if (!referenceApplications.length) {
+        try {
+          referenceApplications = await getApplicationReferenceForNeighborhood(REFERENCE_DATA_NEIGHBORHOOD_NAME);
+          setAllApplications(referenceApplications);
+          setAllAppNames(referenceApplications.map((app: ApplicationItem) => app.name).filter(Boolean).sort());
+        } catch {
+          if (!referenceApplications.length) {
+            message.open({ key: feedbackKey, type: 'warning', content: 'Application reference data not loaded', duration: 4 });
+            return;
+          }
         }
       }
 
@@ -2053,7 +2066,13 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
         return;
       }
 
-      const results = computeAppMatches(apps, referenceApplications);
+      const unresolvedApps = apps.filter((applicationName) => !isApplicationAlreadyValidated(applicationName, referenceApplications));
+      if (!unresolvedApps.length) {
+        message.open({ key: feedbackKey, type: 'success', content: `All ${apps.length} applications are already validated`, duration: 3 });
+        return;
+      }
+
+      const results = computeAppMatches(unresolvedApps, referenceApplications);
       if (!results.length) {
         message.open({ key: feedbackKey, type: 'info', content: 'No application names were parsed for matching', duration: 3 });
         return;
@@ -2129,6 +2148,72 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
     const xml = await editorRef.current?.getXml() || currentXmlRef.current;
     if (!xml || xml === EMPTY_DIAGRAM) {
       message.info('Load or create a diagram before running validation.');
+      return;
+    }
+
+    // Always refresh on-canvas task validity colors from Model Component Task names.
+    await editorRef.current?.validateTasks();
+
+    // Step 1: use the same quick task/application checks as the Match buttons.
+    const tasks = extractTaskNames(xml);
+    const apps = extractApplicationsFromXml(xml);
+
+    const currentFlow = activeDiagram?.name || canvasDiagramName || diagramMeta.businessFlow;
+    let taskReferenceNames: string[] = [];
+    if (tasks.length) {
+      if (currentFlow) {
+        taskReferenceNames = await getTaskNames(currentFlow).catch(() => [] as string[]);
+      } else {
+        taskReferenceNames = allTaskNames;
+      }
+    }
+
+    const quickTaskResults = (tasks.length && taskReferenceNames.length)
+      ? computeAppMatches(tasks, taskReferenceNames)
+      : [];
+    const invalidTaskNames = Array.from(new Set(quickTaskResults.filter((result) => !result.exact).map((result) => result.original)));
+
+    let referenceApplications = allApplications;
+    if (!referenceApplications.length) {
+      referenceApplications = await getApplicationReferenceForNeighborhood(REFERENCE_DATA_NEIGHBORHOOD_NAME).catch(() => [] as ApplicationItem[]);
+      if (referenceApplications.length) {
+        setAllApplications(referenceApplications);
+        setAllAppNames(referenceApplications.map((app: ApplicationItem) => app.name).filter(Boolean).sort());
+      }
+    }
+
+    const invalidApplicationNames = Array.from(new Set(
+      apps.filter((applicationName) => !isApplicationAlreadyValidated(applicationName, referenceApplications))
+    ));
+
+    if (invalidTaskNames.length || invalidApplicationNames.length) {
+      const reasons = [
+        invalidTaskNames.length ? `Invalid tasks: ${invalidTaskNames.length}` : null,
+        invalidApplicationNames.length ? `Invalid applications: ${invalidApplicationNames.length}` : null,
+      ].filter(Boolean) as string[];
+
+      modal.warning({
+        title: 'Diagram Validation: Task/Application Check Failed',
+        width: 760,
+        content: (
+          <div style={{ maxHeight: 420, overflowY: 'auto' }}>
+            <p><strong>Status:</strong> Invalid</p>
+            <p><strong>Why Invalid:</strong></p>
+            <ul style={{ paddingLeft: 18 }}>
+              {reasons.map((reason) => <li key={reason}>{reason}</li>)}
+            </ul>
+            {!!invalidTaskNames.length && (
+              <p><strong>Invalid Task Names:</strong> {invalidTaskNames.slice(0, 20).join(', ')}{invalidTaskNames.length > 20 ? ' ...' : ''}</p>
+            )}
+            {!!invalidApplicationNames.length && (
+              <p><strong>Invalid Application Names:</strong> {invalidApplicationNames.slice(0, 20).join(', ')}{invalidApplicationNames.length > 20 ? ' ...' : ''}</p>
+            )}
+            <p style={{ marginTop: 8, color: '#64748b' }}>
+              Resolve these first using Match Tasks / Match Applications, then run full diagram validation.
+            </p>
+          </div>
+        ),
+      });
       return;
     }
 

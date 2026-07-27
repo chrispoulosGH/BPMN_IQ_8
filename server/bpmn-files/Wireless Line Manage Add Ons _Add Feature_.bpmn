@@ -1,0 +1,259 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:bpmniq="http://bpmniq.io/schema/1.0" xmlns:bioc="http://bpmn.io/schema/bpmn/biocolor/1.0" id="Definitions_Wireless_Line_Manage_Add_Ons_Add_Feature" targetNamespace="http://bpmn.io/schema/bpmn">
+  <bpmn:process id="Process_Wireless_Line_Manage_Add_Ons_Add_Feature" isExecutable="false">
+    <bpmn:laneSet>
+      <bpmn:lane id="Lane_Unassigned" name="Unassigned">
+        <bpmn:flowNodeRef>StartEvent_1</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_Return_to_C360</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_Queue_Customer</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_Lookup_Customer</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_Identify_Consumer</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_Authenticate_Customer</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_View_Offers</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_View_Accts_Services</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_Accept_T_Cs_via_SMS_Email</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_Select_Line_Manage_Add_Ons</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_Close_Page</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_Select_Line_Add_Options</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_Submit</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>Task_View_Summary_Page</bpmn:flowNodeRef>
+        <bpmn:flowNodeRef>EndEvent_1</bpmn:flowNodeRef>
+      </bpmn:lane>
+    </bpmn:laneSet>
+    <bpmn:startEvent id="StartEvent_1" name="Start" />
+    <bpmn:task id="Task_Return_to_C360" name="Return to C360">
+      <bpmn:extensionElements>
+        <bpmniq:taskApplications>
+          <bpmniq:application name="CCSF" correlationId="30685" acronym="CCSF" />
+        </bpmniq:taskApplications>
+      </bpmn:extensionElements>
+    </bpmn:task>
+    <bpmn:task id="Task_Queue_Customer" name="Queue Customer">
+      <bpmn:extensionElements>
+        <bpmniq:taskApplications>
+          <bpmniq:application name="CCSF" correlationId="30685" acronym="CCSF" />
+        </bpmniq:taskApplications>
+      </bpmn:extensionElements>
+    </bpmn:task>
+    <bpmn:task id="Task_Lookup_Customer" name="Lookup Customer">
+      <bpmn:extensionElements>
+        <bpmniq:taskApplications>
+          <bpmniq:application name="IDP-Cloud" />
+          <bpmniq:application name="CCSF" />
+          <bpmniq:application name="(FED) - US" />
+          <bpmniq:application name="CSI - Customer Care" />
+          <bpmniq:application name="CCM" />
+          <bpmniq:application name="Clarify Customer Management" />
+          <bpmniq:application name="CM" />
+          <bpmniq:application name="CCMULE" />
+          <bpmniq:application name="DPG - Sales &#38; Sunrise" />
+          <bpmniq:application name="IDP-BUPS" />
+          <bpmniq:application name="ATTFEDGOV1 ServiceNow Platform" />
+          <bpmniq:application name="eTRACS" />
+          <bpmniq:application name="CSI - Credit and Val" />
+          <bpmniq:application name="TLG-MOB" />
+          <bpmniq:application name="GRID-AC" />
+        </bpmniq:taskApplications>
+      </bpmn:extensionElements>
+    </bpmn:task>
+    <bpmn:task id="Task_Identify_Consumer" name="Identify Consumer">
+      <bpmn:extensionElements>
+        <bpmniq:taskApplications>
+          <bpmniq:application name="CCSF" correlationId="30685" acronym="CCSF" />
+        </bpmniq:taskApplications>
+      </bpmn:extensionElements>
+    </bpmn:task>
+    <bpmn:task id="Task_Authenticate_Customer" name="Authenticate Customer">
+      <bpmn:extensionElements>
+        <bpmniq:taskApplications>
+          <bpmniq:application name="Cricket Access Management" />
+          <bpmniq:application name="MPSYS" />
+          <bpmniq:application name="IDP-IDM" />
+          <bpmniq:application name="IDP-Cloud" />
+          <bpmniq:application name="GRID-GDDN" />
+          <bpmniq:application name="AVTK" />
+          <bpmniq:application name="CCSF" />
+        </bpmniq:taskApplications>
+      </bpmn:extensionElements>
+    </bpmn:task>
+    <bpmn:task id="Task_View_Offers" name="View Offers">
+      <bpmn:extensionElements>
+        <bpmniq:taskApplications>
+          <bpmniq:application name="CCSF" correlationId="30685" acronym="CCSF" />
+        </bpmniq:taskApplications>
+      </bpmn:extensionElements>
+    </bpmn:task>
+    <bpmn:task id="Task_View_Accts_Services" name="View Accts &#38; Services">
+      <bpmn:extensionElements>
+        <bpmniq:taskApplications>
+          <bpmniq:application name="CCSF" correlationId="30685" acronym="CCSF" />
+        </bpmniq:taskApplications>
+      </bpmn:extensionElements>
+    </bpmn:task>
+    <bpmn:task id="Task_Accept_T_Cs_via_SMS_Email" name="Accept T&#38;Cs via SMS/Email">
+      <bpmn:extensionElements>
+        <bpmniq:taskApplications>
+          <bpmniq:application name="CCSF" correlationId="30685" acronym="CCSF" />
+        </bpmniq:taskApplications>
+      </bpmn:extensionElements>
+    </bpmn:task>
+    <bpmn:task id="Task_Select_Line_Manage_Add_Ons" name="Select Line &#62; Manage Add Ons">
+      <bpmn:extensionElements>
+        <bpmniq:taskApplications>
+          <bpmniq:application name="CCSF" correlationId="30685" acronym="CCSF" />
+        </bpmniq:taskApplications>
+      </bpmn:extensionElements>
+    </bpmn:task>
+    <bpmn:task id="Task_Close_Page" name="Close Page">
+      <bpmn:extensionElements>
+        <bpmniq:taskApplications>
+          <bpmniq:application name="CCSF" correlationId="30685" acronym="CCSF" />
+        </bpmniq:taskApplications>
+      </bpmn:extensionElements>
+    </bpmn:task>
+    <bpmn:task id="Task_Select_Line_Add_Options" name="Select Line &#62; Add Options">
+      <bpmn:extensionElements>
+        <bpmniq:taskApplications>
+          <bpmniq:application name="CCSF" correlationId="30685" acronym="CCSF" />
+        </bpmniq:taskApplications>
+      </bpmn:extensionElements>
+    </bpmn:task>
+    <bpmn:task id="Task_Submit" name="Submit">
+      <bpmn:extensionElements>
+        <bpmniq:taskApplications>
+          <bpmniq:application name="CCSF" correlationId="30685" acronym="CCSF" />
+        </bpmniq:taskApplications>
+      </bpmn:extensionElements>
+    </bpmn:task>
+    <bpmn:task id="Task_View_Summary_Page" name="View Summary Page">
+      <bpmn:extensionElements>
+        <bpmniq:taskApplications>
+          <bpmniq:application name="CCSF" correlationId="30685" acronym="CCSF" />
+        </bpmniq:taskApplications>
+      </bpmn:extensionElements>
+    </bpmn:task>
+    <bpmn:endEvent id="EndEvent_1" name="End" />
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="StartEvent_1" targetRef="Task_Return_to_C360" />
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="Task_Return_to_C360" targetRef="Task_Queue_Customer" />
+    <bpmn:sequenceFlow id="Flow_3" sourceRef="Task_Queue_Customer" targetRef="Task_Lookup_Customer" />
+    <bpmn:sequenceFlow id="Flow_4" sourceRef="Task_Lookup_Customer" targetRef="Task_Identify_Consumer" />
+    <bpmn:sequenceFlow id="Flow_5" sourceRef="Task_Identify_Consumer" targetRef="Task_Authenticate_Customer" />
+    <bpmn:sequenceFlow id="Flow_6" sourceRef="Task_Authenticate_Customer" targetRef="Task_View_Offers" />
+    <bpmn:sequenceFlow id="Flow_7" sourceRef="Task_View_Offers" targetRef="Task_View_Accts_Services" />
+    <bpmn:sequenceFlow id="Flow_8" sourceRef="Task_View_Accts_Services" targetRef="Task_Accept_T_Cs_via_SMS_Email" />
+    <bpmn:sequenceFlow id="Flow_9" sourceRef="Task_Accept_T_Cs_via_SMS_Email" targetRef="Task_Select_Line_Manage_Add_Ons" />
+    <bpmn:sequenceFlow id="Flow_10" sourceRef="Task_Select_Line_Manage_Add_Ons" targetRef="Task_Close_Page" />
+    <bpmn:sequenceFlow id="Flow_11" sourceRef="Task_Close_Page" targetRef="Task_Select_Line_Add_Options" />
+    <bpmn:sequenceFlow id="Flow_12" sourceRef="Task_Select_Line_Add_Options" targetRef="Task_Submit" />
+    <bpmn:sequenceFlow id="Flow_13" sourceRef="Task_Submit" targetRef="Task_View_Summary_Page" />
+    <bpmn:sequenceFlow id="Flow_14" sourceRef="Task_View_Summary_Page" targetRef="EndEvent_1" />
+  </bpmn:process>
+  <bpmndi:BPMNDiagram id="BPMNDiagram_Process_Wireless_Line_Manage_Add_Ons_Add_Feature" name="lineOfBusiness: Mass Markets | channel: MVNO | product: Wholesale Mobility | domain: Use &#38; Manage | subdomain: Change Settings &#38; Prefrences | Value Stream: Acquire Customer Offering(s) | Journey: Sales Qualification | Business Capability: Customer Operations Management | Business Flow: Wireless Line Manage Add Ons (Add Feature)">
+    <bpmndi:BPMNPlane id="BPMNPlane_Process_Wireless_Line_Manage_Add_Ons_Add_Feature" bpmnElement="Process_Wireless_Line_Manage_Add_Ons_Add_Feature">
+      <bpmndi:BPMNShape id="Lane_Unassigned_di" bpmnElement="Lane_Unassigned" isHorizontal="true" bioc:stroke="gray">
+        <dc:Bounds x="60" y="60" width="2860" height="140" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="StartEvent_1_di" bpmnElement="StartEvent_1" bioc:stroke="blue">
+        <dc:Bounds x="72" y="112" width="36" height="36" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_Return_to_C360_di" bpmnElement="Task_Return_to_C360" bioc:stroke="blue">
+        <dc:Bounds x="220" y="90" width="100" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_Queue_Customer_di" bpmnElement="Task_Queue_Customer" bioc:stroke="blue">
+        <dc:Bounds x="400" y="90" width="100" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_Lookup_Customer_di" bpmnElement="Task_Lookup_Customer" bioc:stroke="blue">
+        <dc:Bounds x="580" y="90" width="100" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_Identify_Consumer_di" bpmnElement="Task_Identify_Consumer" bioc:stroke="blue">
+        <dc:Bounds x="760" y="90" width="100" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_Authenticate_Customer_di" bpmnElement="Task_Authenticate_Customer" bioc:stroke="blue">
+        <dc:Bounds x="940" y="90" width="100" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_View_Offers_di" bpmnElement="Task_View_Offers" bioc:stroke="blue">
+        <dc:Bounds x="1120" y="90" width="100" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_View_Accts_Services_di" bpmnElement="Task_View_Accts_Services" bioc:stroke="blue">
+        <dc:Bounds x="1300" y="90" width="100" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_Accept_T_Cs_via_SMS_Email_di" bpmnElement="Task_Accept_T_Cs_via_SMS_Email" bioc:stroke="blue">
+        <dc:Bounds x="1480" y="90" width="100" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_Select_Line_Manage_Add_Ons_di" bpmnElement="Task_Select_Line_Manage_Add_Ons" bioc:stroke="blue">
+        <dc:Bounds x="1660" y="90" width="100" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_Close_Page_di" bpmnElement="Task_Close_Page" bioc:stroke="blue">
+        <dc:Bounds x="1840" y="90" width="100" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_Select_Line_Add_Options_di" bpmnElement="Task_Select_Line_Add_Options" bioc:stroke="blue">
+        <dc:Bounds x="2020" y="90" width="100" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_Submit_di" bpmnElement="Task_Submit" bioc:stroke="blue">
+        <dc:Bounds x="2200" y="90" width="100" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Task_View_Summary_Page_di" bpmnElement="Task_View_Summary_Page" bioc:stroke="blue">
+        <dc:Bounds x="2380" y="90" width="100" height="80" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="EndEvent_1_di" bpmnElement="EndEvent_1" bioc:stroke="blue">
+        <dc:Bounds x="2592" y="112" width="36" height="36" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="Flow_1_di" bpmnElement="Flow_1">
+        <di:waypoint x="108" y="130" />
+        <di:waypoint x="220" y="130" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_2_di" bpmnElement="Flow_2">
+        <di:waypoint x="320" y="130" />
+        <di:waypoint x="400" y="130" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_3_di" bpmnElement="Flow_3">
+        <di:waypoint x="500" y="130" />
+        <di:waypoint x="580" y="130" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_4_di" bpmnElement="Flow_4">
+        <di:waypoint x="680" y="130" />
+        <di:waypoint x="760" y="130" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_5_di" bpmnElement="Flow_5">
+        <di:waypoint x="860" y="130" />
+        <di:waypoint x="940" y="130" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_6_di" bpmnElement="Flow_6">
+        <di:waypoint x="1040" y="130" />
+        <di:waypoint x="1120" y="130" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_7_di" bpmnElement="Flow_7">
+        <di:waypoint x="1220" y="130" />
+        <di:waypoint x="1300" y="130" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_8_di" bpmnElement="Flow_8">
+        <di:waypoint x="1400" y="130" />
+        <di:waypoint x="1480" y="130" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_9_di" bpmnElement="Flow_9">
+        <di:waypoint x="1580" y="130" />
+        <di:waypoint x="1660" y="130" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_10_di" bpmnElement="Flow_10">
+        <di:waypoint x="1760" y="130" />
+        <di:waypoint x="1840" y="130" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_11_di" bpmnElement="Flow_11">
+        <di:waypoint x="1940" y="130" />
+        <di:waypoint x="2020" y="130" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_12_di" bpmnElement="Flow_12">
+        <di:waypoint x="2120" y="130" />
+        <di:waypoint x="2200" y="130" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_13_di" bpmnElement="Flow_13">
+        <di:waypoint x="2300" y="130" />
+        <di:waypoint x="2380" y="130" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="Flow_14_di" bpmnElement="Flow_14">
+        <di:waypoint x="2480" y="130" />
+        <di:waypoint x="2592" y="130" />
+      </bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

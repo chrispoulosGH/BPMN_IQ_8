@@ -5,7 +5,7 @@ import {
   BpmnPropertiesProviderModule,
 } from 'bpmn-js-properties-panel';
 import { Modal, Tag } from 'antd';
-import { validateTasks, getTaskNames, getServers, getServer, getApplicationServers, getDatabases, getDatabase, getApplicationDatabases, getApplicationReferenceForNeighborhood } from '../api';
+import { getTaskNames, getServers, getServer, getApplicationServers, getDatabases, getDatabase, getApplicationDatabases, getApplicationReferenceForNeighborhood } from '../api';
 import type { ApplicationItem, ServerItem, DatabaseItem, CapabilityMatch } from '../types';
 import bpmniqModdle from '../bpmniq-moddle.json';
 import {
@@ -82,6 +82,7 @@ interface BpmnEditorProps {
 
 const DARK_ORANGE = '#cc7000';
 const DEFAULT_STROKE = 'blue';
+const VALID_TASK_TEXT_BLUE = '#1677ff';
 
 /** Returns true for Task, UserTask, ServiceTask, SubProcess, CallActivity, etc. */
 function isActivityType(type?: string): boolean {
@@ -998,6 +999,53 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
             .slice(0, 20);
         }
 
+        function addApplicationToTask(identifier: string) {
+          const normalizedIdentifier = normalizeApplicationLookupValue(identifier);
+          if (!normalizedIdentifier) return;
+
+          const resolveReference = (value: string) => {
+            const normalizedValue = normalizeApplicationLookupValue(value);
+            if (!normalizedValue) return null;
+            return allApplicationsRef.current.find((app) => [app.name, app.acronym, app.correlationId]
+              .map((candidate) => normalizeApplicationLookupValue(candidate))
+              .includes(normalizedValue)) || null;
+          };
+
+          const reference = resolveReference(identifier);
+          const canonicalIdentifier = (reference && getPreferredApplicationIdentifier(reference)) || identifier;
+
+          const candidateKeys = new Set<string>([
+            normalizeApplicationLookupValue(canonicalIdentifier),
+            normalizeApplicationLookupValue(identifier),
+            normalizeApplicationLookupValue(reference?.name),
+            normalizeApplicationLookupValue(reference?.acronym),
+            normalizeApplicationLookupValue(reference?.correlationId),
+          ].filter(Boolean) as string[]);
+
+          const current = getTaskApps(bo);
+          const existingKeys = new Set<string>();
+          for (const appName of current) {
+            existingKeys.add(normalizeApplicationLookupValue(appName));
+            const existingRef = resolveReference(appName);
+            if (existingRef) {
+              existingKeys.add(normalizeApplicationLookupValue(existingRef.name));
+              existingKeys.add(normalizeApplicationLookupValue(existingRef.acronym));
+              existingKeys.add(normalizeApplicationLookupValue(existingRef.correlationId));
+            }
+          }
+
+          const exists = Array.from(candidateKeys).some((key) => key && existingKeys.has(key));
+          if (exists) return;
+
+          setTaskApps(bo, [...current, canonicalIdentifier], m);
+          popoverDirtyRef.current = true;
+          rebuildAssigned();
+          void refreshTypeahead(searchInput.value);
+          renderAppOverlays(m);
+          // Persist immediately so add actions are not lost if the popover closes unexpectedly.
+          void triggerXmlChange(m);
+        }
+
         function renderList(suggestions: Array<{ identifier: string; displayName: string; secondaryText: string; frequency?: number }>) {
           list.innerHTML = '';
           if (!suggestions.length) {
@@ -1006,27 +1054,37 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
           }
           for (const match of suggestions) {
             const row = document.createElement('div');
-            row.style.cssText = 'padding:5px 8px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;flex-direction:column;gap:1px;';
+            row.style.cssText = 'padding:5px 8px;cursor:pointer;display:flex;align-items:center;gap:8px;';
             row.addEventListener('mouseenter', () => { row.style.background = '#f0f0ff'; });
             row.addEventListener('mouseleave', () => { row.style.background = 'white'; });
             row.addEventListener('click', (ev) => {
               ev.stopPropagation();
-              const current = getTaskApps(bo);
-              setTaskApps(bo, [...current, match.identifier], m);
-              popoverDirtyRef.current = true;
-              rebuildAssigned();
-              void refreshTypeahead(searchInput.value);
-              renderAppOverlays(m);
+              addApplicationToTask(match.identifier);
             });
+            const textWrap = document.createElement('div');
+            textWrap.style.cssText = 'min-width:0;flex:1;display:flex;flex-direction:column;gap:1px;';
             const title = document.createElement('div');
             title.textContent = match.displayName;
             title.style.cssText = 'font-size:12px;color:#1f2937;line-height:1.2;overflow:hidden;text-overflow:ellipsis;';
-            row.appendChild(title);
+            textWrap.appendChild(title);
             const subline = document.createElement('div');
             const sourceBits = [match.secondaryText, match.frequency ? `${match.frequency} matches` : ''].filter(Boolean);
             subline.textContent = sourceBits.join(' • ');
             subline.style.cssText = 'font-size:10px;color:#6b7280;line-height:1.2;overflow:hidden;text-overflow:ellipsis;';
-            if (subline.textContent) row.appendChild(subline);
+            if (subline.textContent) textWrap.appendChild(subline);
+
+            const addButton = document.createElement('button');
+            addButton.textContent = 'Add';
+            addButton.type = 'button';
+            addButton.style.cssText = 'flex:0 0 auto;padding:2px 8px;border:1px solid #93c5fd;background:#eff6ff;color:#0284c7;border-radius:4px;font-size:11px;cursor:pointer;';
+            addButton.addEventListener('click', (ev) => {
+              ev.preventDefault();
+              ev.stopPropagation();
+              addApplicationToTask(match.identifier);
+            });
+
+            row.appendChild(textWrap);
+            row.appendChild(addButton);
             list.appendChild(row);
           }
         }
@@ -1082,16 +1140,15 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
             const raw = String(suggestion.value || '').trim();
             if (!raw) continue;
             const resolved = resolveSuggestedApplication(raw);
-            if (!resolved) continue;
-            const identifier = resolved.identifier;
+            const identifier = resolved?.identifier || raw;
             const key = normalizeApplicationLookupValue(identifier);
             if (!key || merged.has(key)) continue;
             merged.set(key, {
               identifier,
-              displayName: resolved.displayName,
+              displayName: resolved?.displayName || raw,
               secondaryText: [
-                (resolved.app as any).acronym,
-                (resolved.app as any).correlationId,
+                resolved ? (resolved.app as any).acronym : null,
+                resolved ? (resolved.app as any).correlationId : null,
               ].filter(Boolean).join(' • '),
               frequency: suggestion.frequency,
             });
@@ -1581,9 +1638,17 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
 
         if (!taskElements.length) return;
 
-        const taskNames = taskElements.map((el: any) => el.businessObject.name);
-        const { invalid } = await validateTasks(taskNames, diagramNameRef.current || undefined);
-        const invalidSet = new Set(invalid.map((n: string) => n.toLowerCase().trim()));
+        // Validate against the loaded Model Component Task names for the active scope.
+        const validTaskSet = new Set(
+          (taskNamesRef.current || [])
+            .map((name) => String(name || '').toLowerCase().trim())
+            .filter(Boolean)
+        );
+        const invalidSet = new Set(
+          taskElements
+            .map((el: any) => String(el.businessObject.name || '').toLowerCase().trim())
+            .filter((name: string) => name && !validTaskSet.has(name))
+        );
         invalidTaskNamesRef.current = invalidSet;
 
         // Apply colors via SVG — does NOT touch commandStack, no undo history, no re-render
@@ -1599,7 +1664,7 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
           if (textGroup) {
             const texts = (textGroup as Element).tagName === 'text' ? [textGroup as SVGElement] : Array.from((textGroup as Element).querySelectorAll('text')) as SVGElement[];
             texts.forEach((t) => {
-              t.style.fill = invalidSet.has(name) ? DARK_ORANGE : '';
+              t.style.fill = invalidSet.has(name) ? DARK_ORANGE : VALID_TASK_TEXT_BLUE;
             });
           }
         }

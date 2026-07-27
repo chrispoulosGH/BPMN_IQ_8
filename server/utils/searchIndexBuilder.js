@@ -1,12 +1,20 @@
 const mongoose = require('mongoose');
 const ComponentSearchIndex = require('../models/ComponentSearchIndex');
 const CanonicalComponent = require('../models/CanonicalComponent');
+const Model = require('../models/Model');
 
 function logHeap(stage, extra = {}) {
   const usedMb = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
   const totalMb = Math.round(process.memoryUsage().heapTotal / 1024 / 1024);
   console.log(`[INDEX] Heap ${stage}: ${usedMb}MB used / ${totalMb}MB total`, extra);
 }
+
+const DEFAULT_PARENT_FACTORY_BY_TYPE = new Map([
+  ['businessprocessflow', 'Business Capability'],
+  ['businessflow', 'Business Capability'],
+  ['task', 'Business Process Flow'],
+  ['application', 'Task'],
+]);
 
 /**
  * Rebuild the search index for all components in a neighborhood
@@ -25,6 +33,27 @@ async function rebuildSearchIndex(neighborhoodName, options = {}) {
   logHeap('start', { neighborhoodName, indexLabel });
 
   try {
+    const normalizeKey = (val) => String(val || '').trim().toLowerCase();
+    const parentFactoryByType = new Map();
+    try {
+      const modelDoc = await Model.findOne({ name: neighborhoodName }, { schemaFactories: 1 }).lean();
+      const schemaFactories = Array.isArray(modelDoc?.schemaFactories) ? modelDoc.schemaFactories : [];
+      schemaFactories.forEach((factory) => {
+        const child = normalizeKey(factory?.name);
+        const parent = String(factory?.parentFactoryName || '').trim();
+        if (!child || !parent) return;
+        parentFactoryByType.set(child, parent);
+      });
+      for (const [child, parent] of DEFAULT_PARENT_FACTORY_BY_TYPE.entries()) {
+        if (!parentFactoryByType.has(child)) parentFactoryByType.set(child, parent);
+      }
+    } catch (err) {
+      console.warn('[INDEX] Failed to load schemaFactories for parent mapping:', err?.message || err);
+      for (const [child, parent] of DEFAULT_PARENT_FACTORY_BY_TYPE.entries()) {
+        if (!parentFactoryByType.has(child)) parentFactoryByType.set(child, parent);
+      }
+    }
+
     // Stream canonical rows and group them into synthesized "components" by componentType.
     const rowProjection = {
       _id: 1,
@@ -48,7 +77,7 @@ async function rebuildSearchIndex(neighborhoodName, options = {}) {
         componentsByType.set(type, {
           _id: type,
           name: type,
-          parentFactoryName: '',
+          parentFactoryName: parentFactoryByType.get(normalizeKey(type)) || '',
           rows: [],
         });
       }
@@ -111,18 +140,74 @@ async function rebuildSearchIndex(neighborhoodName, options = {}) {
       return String(rowValues.name || row.name || row.primaryKey || (componentKey && rowValues[componentKey]) || 'unnamed').trim();
     }
 
+    const LINEAGE_FIELD_ALIASES = new Map([
+      ['lineofbusiness', 'lineOfBusiness'],
+      ['lob', 'lineOfBusiness'],
+      ['channel', 'channel'],
+      ['product', 'product'],
+      ['domain', 'domain'],
+      ['subdomain', 'subdomain'],
+      ['valuestream', 'valueStream'],
+      ['journey', 'journey'],
+      ['businesscapability', 'businessCapability'],
+      ['businessprocessflow', 'businessFlow'],
+      ['businessflow', 'businessFlow'],
+      ['task', 'task'],
+      ['application', 'application'],
+    ]);
+
+    function mapComponentNameToLineageField(componentName) {
+      const normalized = String(componentName || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+      return LINEAGE_FIELD_ALIASES.get(normalized) || null;
+    }
+
+    function getLineageVariants(rowValues) {
+      const variants = [];
+      if (rowValues.__lineage && typeof rowValues.__lineage === 'object') variants.push(rowValues.__lineage);
+      if (Array.isArray(rowValues.__lineageVariants)) {
+        rowValues.__lineageVariants.forEach((variant) => {
+          if (variant && typeof variant === 'object') variants.push(variant);
+        });
+      }
+
+      // Deduplicate variants by stable JSON value
+      const deduped = [];
+      const seen = new Set();
+      for (const variant of variants) {
+        const key = JSON.stringify(variant);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        deduped.push(variant);
+      }
+      return deduped;
+    }
+
+    function getLineageVariantsOrSingle(rowValues) {
+      const variants = getLineageVariants(rowValues);
+      return variants.length ? variants : [null];
+    }
+
+    function lineageParentNameForComponent(lineageVariant, parentComponentName) {
+      if (!lineageVariant || typeof lineageVariant !== 'object') return '';
+      const parentField = mapComponentNameToLineageField(parentComponentName);
+      if (!parentField) return '';
+      return String(lineageVariant?.[parentField] || '').trim();
+    }
+
     // Helper to build ALL hierarchy paths for a row (recursively handling multiple parents)
     // Returns array of hierarchies, where each hierarchy is an array of {componentName, rowName, componentId, rowId}
     const hierarchyPathCache = new Map();
     const truncatedHierarchyRows = new Set();
 
-    const buildAllHierarchyPaths = async (component, row, visitedRowKeys = new Set()) => {
+    const buildAllHierarchyPaths = async (component, row, visitedRowKeys = new Set(), forcedLineageVariant = null) => {
       const rowValues = getRowValues(row);
       const rowName = getRowName(row, rowValues);
       const currentRowKey = `${component.name}:${String(row._id)}`;
+      const activeVariant = forcedLineageVariant || null;
+      const cacheKey = `${currentRowKey}::${activeVariant ? JSON.stringify(activeVariant) : 'none'}`;
 
-      if (visitedRowKeys.size === 0 && hierarchyPathCache.has(currentRowKey)) {
-        return hierarchyPathCache.get(currentRowKey);
+      if (visitedRowKeys.size === 0 && hierarchyPathCache.has(cacheKey)) {
+        return hierarchyPathCache.get(cacheKey);
       }
 
       // Prevent infinite loops
@@ -138,16 +223,12 @@ async function rebuildSearchIndex(neighborhoodName, options = {}) {
 
       if (parentRefs.length === 0) {
         // No explicit parentRefs - fall back to legacy parentName parsing
-        const parentNames = row.parentName
+        const explicitParentNames = row.parentName
           ? row.parentName.split('|').map(p => p.trim()).filter(p => p)
           : [];
-
-        if (parentNames.length === 0) {
-          return [singleNode];
-        }
-
         const hierarchies = [];
-        for (const parentName of parentNames) {
+        const rowVariants = activeVariant ? [activeVariant] : getLineageVariantsOrSingle(rowValues);
+        for (const lineageVariant of rowVariants) {
           const parentComponentName = component.parentFactoryName;
           const parentComponent = componentMap.get(normalizeValue(parentComponentName));
 
@@ -156,22 +237,89 @@ async function rebuildSearchIndex(neighborhoodName, options = {}) {
             continue;
           }
 
-          // Find parent row by name
-          const parentRow = parentComponent.rows?.find(r => {
-            const pRowValues = getRowValues(r);
-            const pName = String(pRowValues.name || r.name || 'unnamed').trim();
-            return normalizeValue(pName) === normalizeValue(parentName);
-          });
+          const lineageParentName = lineageParentNameForComponent(lineageVariant, parentComponentName);
+          const parentNames = lineageParentName ? [lineageParentName] : explicitParentNames;
+
+          if (parentNames.length === 0) {
+            hierarchies.push(singleNode);
+            continue;
+          }
+
+          for (const parentName of parentNames) {
+            // Find parent row by exact name; lineage variant already pins which parent to use.
+            const parentRow = parentComponent.rows?.find(r => {
+              const pRowValues = getRowValues(r);
+              const pName = String(pRowValues.name || r.name || r.primaryKey || 'unnamed').trim();
+              return normalizeValue(pName) === normalizeValue(parentName);
+            });
+
+            if (!parentRow) {
+              hierarchies.push(singleNode);
+              continue;
+            }
+
+            const pathVisitedSet = new Set(visitedRowKeys);
+            pathVisitedSet.add(currentRowKey);
+            const parentHierarchies = await buildAllHierarchyPaths(parentComponent, parentRow, pathVisitedSet, lineageVariant);
+            parentHierarchies.forEach(parentPath => {
+              const fullPath = [...parentPath, {
+                componentName: component.name,
+                componentId: String(component._id),
+                rowName,
+                rowId: String(row._id)
+              }];
+              hierarchies.push(fullPath);
+            });
+          }
+        }
+
+        const result = hierarchies.length > 0 ? hierarchies.slice(0, maxPathsPerRow) : [singleNode];
+        if (hierarchies.length > maxPathsPerRow) truncatedHierarchyRows.add(currentRowKey);
+        if (visitedRowKeys.size === 0) hierarchyPathCache.set(cacheKey, result);
+        return result;
+      }
+
+      // Build hierarchies from parentRefs (canonical link-based)
+      const hierarchies = [];
+      const rowVariants = activeVariant ? [activeVariant] : getLineageVariantsOrSingle(rowValues);
+      for (const lineageVariant of rowVariants) {
+        for (const parentRefId of parentRefs) {
+          const parentCanonical = canonicalById.get(String(parentRefId));
+          if (!parentCanonical) {
+            hierarchies.push(singleNode);
+            continue;
+          }
+
+          const parentComponentName = parentCanonical.componentType || parentCanonical.component_type || 'unknown';
+          const parentComponent = componentMap.get(normalizeValue(parentComponentName));
+
+          if (!parentComponent) {
+            hierarchies.push(singleNode);
+            continue;
+          }
+
+          // Find the parent row in the parentComponent by matching _id
+          const parentRow = parentComponent.rows?.find(r => String(r._id) === String(parentRefId));
 
           if (!parentRow) {
             hierarchies.push(singleNode);
             continue;
           }
 
+          const expectedByLineage = lineageParentNameForComponent(lineageVariant, parentComponentName);
+          if (expectedByLineage) {
+            const pRowValues = getRowValues(parentRow);
+            const pName = String(pRowValues.name || parentRow.primaryKey || parentRow.name || 'unnamed').trim();
+            if (normalizeValue(pName) !== normalizeValue(expectedByLineage)) {
+              continue;
+            }
+          }
+
           const pathVisitedSet = new Set(visitedRowKeys);
           pathVisitedSet.add(currentRowKey);
-          const parentHierarchies = await buildAllHierarchyPaths(parentComponent, parentRow, pathVisitedSet);
+          const parentHierarchies = await buildAllHierarchyPaths(parentComponent, parentRow, pathVisitedSet, lineageVariant);
           parentHierarchies.forEach(parentPath => {
+            if (hierarchies.length >= maxPathsPerRow) return;
             const fullPath = [...parentPath, {
               componentName: component.name,
               componentId: String(component._id),
@@ -180,61 +328,16 @@ async function rebuildSearchIndex(neighborhoodName, options = {}) {
             }];
             hierarchies.push(fullPath);
           });
-        }
 
-        const result = hierarchies.length > 0 ? hierarchies.slice(0, maxPathsPerRow) : [singleNode];
-        if (hierarchies.length > maxPathsPerRow) truncatedHierarchyRows.add(currentRowKey);
-        if (visitedRowKeys.size === 0) hierarchyPathCache.set(currentRowKey, result);
-        return result;
-      }
-
-      // Build hierarchies from parentRefs (canonical link-based)
-      const hierarchies = [];
-      for (const parentRefId of parentRefs) {
-        const parentCanonical = canonicalById.get(String(parentRefId));
-        if (!parentCanonical) {
-          hierarchies.push(singleNode);
-          continue;
-        }
-
-        const parentComponentName = parentCanonical.componentType || parentCanonical.component_type || 'unknown';
-        const parentComponent = componentMap.get(normalizeValue(parentComponentName));
-
-        if (!parentComponent) {
-          hierarchies.push(singleNode);
-          continue;
-        }
-
-        // Find the parent row in the parentComponent by matching _id
-        const parentRow = parentComponent.rows?.find(r => String(r._id) === String(parentRefId));
-
-        if (!parentRow) {
-          hierarchies.push(singleNode);
-          continue;
-        }
-
-        const pathVisitedSet = new Set(visitedRowKeys);
-        pathVisitedSet.add(currentRowKey);
-        const parentHierarchies = await buildAllHierarchyPaths(parentComponent, parentRow, pathVisitedSet);
-        parentHierarchies.forEach(parentPath => {
-          if (hierarchies.length >= maxPathsPerRow) return;
-          const fullPath = [...parentPath, {
-            componentName: component.name,
-            componentId: String(component._id),
-            rowName,
-            rowId: String(row._id)
-          }];
-          hierarchies.push(fullPath);
-        });
-
-        if (hierarchies.length >= maxPathsPerRow) {
-          truncatedHierarchyRows.add(currentRowKey);
-          break;
+          if (hierarchies.length >= maxPathsPerRow) {
+            truncatedHierarchyRows.add(currentRowKey);
+            break;
+          }
         }
       }
 
       const result = hierarchies.length > 0 ? hierarchies : [singleNode];
-      if (visitedRowKeys.size === 0) hierarchyPathCache.set(currentRowKey, result);
+      if (visitedRowKeys.size === 0) hierarchyPathCache.set(cacheKey, result);
       return result;
     };
 

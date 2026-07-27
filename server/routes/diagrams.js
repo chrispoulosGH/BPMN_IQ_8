@@ -44,18 +44,21 @@ function extractTasks(xml) {
   const taskTypes = /task|subProcess/i;
 
   // Match task-like elements (self-closing or with body)
-  const elRegex = /<bpmn:(\w+)\s+id="([^"]+)"(?:\s+name="([^"]*)")?[^>]*?\/?>/gi;
+  const elRegex = /<bpmn2?:(\w+)\b([^>]*)\/?>/gi;
   let m;
   while ((m = elRegex.exec(xml)) !== null) {
-    const [, type, id, name] = m;
+    const [, type, attrsRaw] = m;
+    const id = (String(attrsRaw || '').match(/\bid="([^"]+)"/i) || [])[1];
+    if (!id) continue;
+    const name = (String(attrsRaw || '').match(/\bname="([^"]*)"/i) || [])[1];
     const isTask = taskTypes.test(type);
-    elementMap.set(id, { id, name: name || id, isTask });
+    elementMap.set(id, { id, name: decodeXmlValue(name || id), isTask });
   }
 
   // 2. Parse sequence flows into adjacency lists
   const outgoing = new Map(); // id -> [targetId, ...]
   const incoming = new Map(); // id -> [sourceId, ...]
-  const flowRegex = /<bpmn:sequenceFlow[^>]+sourceRef="([^"]+)"[^>]+targetRef="([^"]+)"[^>]*\/?>/gi;
+  const flowRegex = /<bpmn2?:sequenceFlow[^>]+sourceRef="([^"]+)"[^>]+targetRef="([^"]+)"[^>]*\/?>/gi;
   while ((m = flowRegex.exec(xml)) !== null) {
     const [, src, tgt] = m;
     if (!outgoing.has(src)) outgoing.set(src, []);
@@ -90,37 +93,44 @@ function extractTasks(xml) {
   // 4. Parse per-task applications from bpmniq:TaskApplications extension elements
   //    Pattern: <bpmn:task id="...">...<bpmniq:Application name="AppName"/>...</bpmn:task>
   const taskAppExtMap = new Map(); // taskId -> [appName, ...]
-  const taskBlockRegex = /<bpmn:(?:task|userTask|serviceTask|sendTask|receiveTask|manualTask|businessRuleTask|scriptTask|subProcess)\s+id="([^"]+)"[^>]*>([\s\S]*?)<\/bpmn:(?:task|userTask|serviceTask|sendTask|receiveTask|manualTask|businessRuleTask|scriptTask|subProcess)>/gi;
+  const taskBlockRegex = /<bpmn2?:(?:task|userTask|serviceTask|sendTask|receiveTask|manualTask|businessRuleTask|scriptTask|subProcess)\b([^>]*)>([\s\S]*?)<\/bpmn2?:(?:task|userTask|serviceTask|sendTask|receiveTask|manualTask|businessRuleTask|scriptTask|subProcess)>/gi;
   while ((m = taskBlockRegex.exec(xml)) !== null) {
-    const [, taskId, body] = m;
+    const [, taskAttrsRaw, body] = m;
+    const taskId = (String(taskAttrsRaw || '').match(/\bid="([^"]+)"/i) || [])[1];
+    if (!taskId) continue;
     const appNames = [];
     const appAttrRegex = /<(?:bpmniq|ns\d+):(?:A|a)pplication[^>]+name="([^"]+)"/gi;
     let am;
     while ((am = appAttrRegex.exec(body)) !== null) {
-      appNames.push(am[1].trim());
+      const decoded = decodeXmlValue(am[1]);
+      decoded.split(/[\r\n,;]+/).map((value) => value.trim()).filter(Boolean).forEach((value) => {
+        if (!appNames.includes(value)) appNames.push(value);
+      });
     }
     // Also handle element-style: <bpmniq:application><bpmniq:name>X</bpmniq:name></bpmniq:application>
     const appElRegex = /<(?:bpmniq|ns\d+):application>[\s\S]*?<(?:bpmniq|ns\d+):name>([\s\S]*?)<\/(?:bpmniq|ns\d+):name>[\s\S]*?<\/(?:bpmniq|ns\d+):application>/gi;
     while ((am = appElRegex.exec(body)) !== null) {
-      const name = am[1].trim();
-      if (name && !appNames.includes(name)) appNames.push(name);
+      const decoded = decodeXmlValue(am[1]);
+      decoded.split(/[\r\n,;]+/).map((value) => value.trim()).filter(Boolean).forEach((value) => {
+        if (!appNames.includes(value)) appNames.push(value);
+      });
     }
     if (appNames.length) taskAppExtMap.set(taskId, appNames);
   }
 
   // 5. Parse text annotations and associations (fallback for apps)
   const annotationMap = new Map(); // annotationId -> text
-  const annRegex = /<bpmn:textAnnotation\s+id="([^"]+)"[^>]*>[\s\S]*?<bpmn:text>([\s\S]*?)<\/bpmn:text>[\s\S]*?<\/bpmn:textAnnotation>/gi;
+  const annRegex = /<bpmn2?:textAnnotation\s+id="([^"]+)"[^>]*>[\s\S]*?<bpmn2?:text>([\s\S]*?)<\/bpmn2?:text>[\s\S]*?<\/bpmn2?:textAnnotation>/gi;
   while ((m = annRegex.exec(xml)) !== null) {
     const [, annId, text] = m;
-    const trimmed = text.trim();
+    const trimmed = decodeXmlValue(text);
     // Skip metadata annotations (contain | and :) and empty annotations
     if (!trimmed || (trimmed.includes('|') && trimmed.includes(':'))) continue;
     annotationMap.set(annId, trimmed);
   }
 
   const assocAppMap = new Map(); // taskId -> [appName, ...]
-  const assocRegex = /<bpmn:association[^>]+sourceRef="([^"]+)"[^>]+targetRef="([^"]+)"[^>]*\/?>/gi;
+  const assocRegex = /<bpmn2?:association[^>]+sourceRef="([^"]+)"[^>]+targetRef="([^"]+)"[^>]*\/?>/gi;
   while ((m = assocRegex.exec(xml)) !== null) {
     const [, srcRef, tgtRef] = m;
     // One of them is a textAnnotation, the other is a task
@@ -129,7 +139,7 @@ function extractTasks(xml) {
     if (!annId) continue;
     const el = elementMap.get(taskId);
     if (!el || !el.isTask) continue;
-    const apps = annotationMap.get(annId).split(',').map(s => s.trim()).filter(Boolean);
+    const apps = annotationMap.get(annId).split(/[\r\n,;]+/).map(s => s.trim()).filter(Boolean);
     if (apps.length) {
       const existing = assocAppMap.get(taskId) || [];
       assocAppMap.set(taskId, [...existing, ...apps]);
@@ -258,11 +268,38 @@ function rowMatchesParent(row, parentName) {
   const expected = normalizeObjectMatchValue(parentName);
   if (!expected) return true;
   const rawParentName = String(row?.parentName || '');
-  if (!rawParentName.trim()) return false;
-  return rawParentName
-    .split(/[|,]/)
-    .map((value) => normalizeObjectMatchValue(value))
-    .includes(expected);
+  if (rawParentName.trim()) {
+    return rawParentName
+      .split(/[|,]/)
+      .map((value) => normalizeObjectMatchValue(value))
+      .includes(expected);
+  }
+
+  // Spreadsheet lineage snapshot is the source of truth when parentName is absent.
+  const values = getPlainRowValues(row?.values);
+  const lineageVariants = [];
+  if (values.__lineage && typeof values.__lineage === 'object') lineageVariants.push(values.__lineage);
+  if (Array.isArray(values.__lineageVariants)) {
+    values.__lineageVariants.forEach((variant) => {
+      if (variant && typeof variant === 'object') lineageVariants.push(variant);
+    });
+  }
+
+  if (!lineageVariants.length) return false;
+
+  const lineageKeys = [
+    'businessCapability',
+    'journey',
+    'valueStream',
+    'subdomain',
+    'domain',
+    'product',
+    'channel',
+    'lineOfBusiness',
+    'businessFlow',
+  ];
+
+  return lineageVariants.some((variant) => lineageKeys.some((key) => normalizeObjectMatchValue(variant?.[key]) === expected));
 }
 
 async function getNeighborhoodMetadataMappings(neighborhoodName) {
@@ -466,24 +503,30 @@ function normalizeBusinessFlowLookupValue(value) {
 function extractLaneNames(xml) {
   if (!xml) return [];
   const laneNames = [];
-  const laneRegex = /<bpmn:lane\b[^>]*\bname="([^"]+)"/gi;
+  const laneRegex = /<bpmn2?:lane\b[^>]*\bname="([^"]+)"/gi;
   let match;
   while ((match = laneRegex.exec(xml)) !== null) {
-    const name = String(match[1] || '').trim();
+    const name = decodeXmlValue(match[1]);
     if (name) laneNames.push(name);
   }
   return [...new Set(laneNames)];
 }
 
 function decodeXmlValue(value) {
-  return String(value || '')
-    .replace(/&#(\d+);/g, (_match, codePoint) => String.fromCharCode(Number(codePoint)))
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&quot;/gi, '"')
-    .replace(/&apos;/gi, "'")
-    .trim();
+  let next = String(value || '');
+  for (let i = 0; i < 2; i += 1) {
+    const decoded = next
+      .replace(/&#(\d+);/g, (_match, codePoint) => String.fromCharCode(Number(codePoint)))
+      .replace(/&#x([0-9a-f]+);/gi, (_match, hexCodePoint) => String.fromCharCode(parseInt(hexCodePoint, 16)))
+      .replace(/&amp;/gi, '&')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/&quot;/gi, '"')
+      .replace(/&apos;/gi, "'");
+    if (decoded === next) break;
+    next = decoded;
+  }
+  return next.trim();
 }
 
 function normalizeNameForFuzzyMatch(value) {
@@ -533,7 +576,7 @@ function parseApplicationEntriesFromXml(xml) {
   if (!xml) return [];
 
   const entries = [];
-  const taskBlockRegex = /<bpmn:(?:task|userTask|serviceTask|sendTask|receiveTask|manualTask|businessRuleTask|scriptTask|subProcess)\s+id="([^"]+)"[^>]*>([\s\S]*?)<\/bpmn:(?:task|userTask|serviceTask|sendTask|receiveTask|manualTask|businessRuleTask|scriptTask|subProcess)>/gi;
+  const taskBlockRegex = /<bpmn2?:(?:task|userTask|serviceTask|sendTask|receiveTask|manualTask|businessRuleTask|scriptTask|subProcess)\b([^>]*)>([\s\S]*?)<\/bpmn2?:(?:task|userTask|serviceTask|sendTask|receiveTask|manualTask|businessRuleTask|scriptTask|subProcess)>/gi;
   let taskMatch;
 
   while ((taskMatch = taskBlockRegex.exec(xml)) !== null) {
@@ -610,10 +653,13 @@ async function validateDiagramObjectIntegrity(diagramLike, neighborhoodName = DE
     Actor.distinct('name', neighborhoodFilter),
   ]);
 
-  const knownTaskNames = (taskComponent?.rows || [])
+  const scopedTaskNames = (taskComponent?.rows || [])
     .filter((row) => rowMatchesParent(row, businessFlow))
     .map((row) => getCustomFactoryRowName(row))
     .filter(Boolean);
+  const knownTaskNames = scopedTaskNames.length
+    ? scopedTaskNames
+    : (taskComponent?.rows || []).map((row) => getCustomFactoryRowName(row)).filter(Boolean);
 
   const taskSet = new Set(knownTaskNames.map((name) => normalizeObjectMatchValue(name)));
   const knownByCorrelationId = new Map(
@@ -667,14 +713,32 @@ async function hasMatchingBusinessFlowReference(name, neighborhoodName = DEFAULT
   const normalizedName = normalizeBusinessFlowLookupValue(name);
   if (!normalizedName) return false;
 
+  const BUSINESS_FLOW_COMPONENT_REGEX = /^(business[\s_]*flow|business[\s_]*process[\s_]*flow)$/i;
   const businessFlowComponentFilter = combineFilters(
     buildNeighborhoodFilter(neighborhoodName),
-    { name: { $regex: /^business[\s_]*flow$/i } }
+    { name: { $regex: BUSINESS_FLOW_COMPONENT_REGEX } }
   );
-  const businessFlowComponent = await Component.findOne(businessFlowComponentFilter, { rows: 1 }).lean();
-  return (businessFlowComponent?.rows || []).some((row) => {
-    return normalizeBusinessFlowLookupValue(getCustomFactoryRowName(row)) === normalizedName;
-  });
+  const businessFlowComponents = await Component.find(businessFlowComponentFilter, { rows: 1, name: 1 }).lean();
+
+  for (const businessFlowComponent of businessFlowComponents || []) {
+    const hasMatch = (businessFlowComponent?.rows || []).some((row) => {
+      const rowValues = getPlainRowValues(row?.values);
+      const rowCandidates = [
+        getCustomFactoryRowName(row),
+        row?.name,
+        row?.primaryKey,
+        ...Object.values(rowValues || {}),
+      ]
+        .map((value) => String(value || '').trim())
+        .filter(Boolean);
+
+      return rowCandidates.some((candidate) => normalizeBusinessFlowLookupValue(candidate) === normalizedName);
+    });
+
+    if (hasMatch) return true;
+  }
+
+  return false;
 }
 
 async function resolveImportedDiagramStatus(requestedStatus, sourcedFrom, businessFlowName, neighborhoodName, metadataValidationSummary, diagramLike = {}, validStatus = 'staged') {
@@ -812,6 +876,10 @@ router.post('/validate', async (req, res) => {
         invalidTasks: objectValidation.invalidTasks,
         invalidApplications: objectValidation.invalidApplications,
         invalidActors: objectValidation.invalidActors,
+      },
+      debug: {
+        invalidTaskNormalized: objectValidation.invalidTasks.slice(0, 25).map((name) => normalizeObjectMatchValue(name)),
+        invalidApplicationNormalized: objectValidation.invalidApplications.slice(0, 25).map((name) => normalizeObjectMatchValue(name)),
       },
     });
   } catch (err) {

@@ -469,6 +469,12 @@ function ModelCatalog({ modelName, requestedSearch = null }: ModelCatalogProps) 
     return () => { cancelled = true; };
   }, [viewMode, modelName, message]);
 
+  useEffect(() => {
+    if (viewMode !== 'table') return;
+    treeLoadedModelRef.current = null;
+    setLoadedChildKeys(new Set());
+  }, [viewMode]);
+
   // Reset cached tree when the model changes so it reloads next time a tree view opens.
   useEffect(() => {
     treeLoadedModelRef.current = null;

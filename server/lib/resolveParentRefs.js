@@ -1,6 +1,21 @@
 const mongoose = require('mongoose');
 const CanonicalComponent = require('../models/CanonicalComponent');
 
+function primaryKeyFromRow(row) {
+  if (!row) return null;
+  const values = row.values && typeof row.values === 'object' ? row.values : row;
+  if (values.name || values.Name) return values.name || values.Name;
+  const componentKey = Object.keys(values).find((key) => /(?:^|\s)component$/i.test(String(key).trim()));
+  if (componentKey && String(values[componentKey] || '').trim()) return String(values[componentKey]).trim();
+  if (values.application || values.Application) return values.application || values.Application;
+  if (row.name || row.Name) return row.name || row.Name;
+  for (const key of Object.keys(values)) {
+    const value = values[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return null;
+}
+
 /**
  * Resolve and persist parent/child relationships on canonical components.
  *
@@ -71,8 +86,7 @@ async function resolveParentRefs({ neighborhoodName, batchCollectionName = 'data
     const batchParentFactory = batch.parentFactoryName || '';
 
     for (const row of batch.rows) {
-      const values = (row && row.values) || {};
-      const childPrimaryKey = values.name || values.Name || row.name;
+      const childPrimaryKey = primaryKeyFromRow(row);
       if (!childPrimaryKey) continue;
 
       const childComponentType = row.componentType || row.component_type || batchComponentType;

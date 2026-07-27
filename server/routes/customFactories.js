@@ -1673,7 +1673,7 @@ function combineCatalogRows(model, batches) {
   (batches || []).forEach((batch) => {
     if (Array.isArray(batch.rows)) {
       batch.rows.forEach((row) => {
-        allRows.push({ values: toPlainCatalogValue(row) });
+        allRows.push({ values: toPlainCatalogValue(row?.values || row) });
       });
     }
   });
@@ -1687,6 +1687,21 @@ function combineCatalogRows(model, batches) {
 // preserving the order they appear in the combined column list.
 function getTupleColumns(finalColumns) {
   return (finalColumns || []).filter((col) => String(col).toLowerCase().endsWith('component'));
+}
+
+function getModelDefinedTupleColumns(model) {
+  const schemaFactories = Array.isArray(model?.schemaFactories) ? model.schemaFactories : [];
+  const byLevel = schemaFactories
+    .filter((factory) => String(factory?.sourceColumnName || '').trim())
+    .slice()
+    .sort((left, right) => Number(left?.level || 0) - Number(right?.level || 0));
+
+  const schemaColumns = byLevel
+    .map((factory) => String(factory.sourceColumnName || '').trim())
+    .filter((column) => /component$/i.test(column));
+
+  if (schemaColumns.length) return schemaColumns;
+  return getTupleColumns(model?.modelCatalogColumns || []);
 }
 
 function tupleTypeName(col) {
@@ -2228,7 +2243,8 @@ async function loadCatalogForTree(name) {
     .project({ rows: 1, name: 1, batchId: 1 })
     .toArray();
   const { allRows, finalColumns } = combineCatalogRows(model, batches);
-  return { model, allRows, tupleColumns: getTupleColumns(finalColumns) };
+  const tupleColumns = getModelDefinedTupleColumns(model).filter((column) => finalColumns.includes(column));
+  return { model, allRows, tupleColumns };
 }
 
 // Full hierarchy tree (with node-count guard). Falls back to lazy mode when too large.
@@ -3654,13 +3670,26 @@ router.get('/hierarchies/tree', async (req, res) => {
     const neighborhoodName = String(req.query?.neighborhoodName || DEFAULT_NEIGHBORHOOD_NAME).trim();
     const componentName = String(req.query?.componentName || 'Application').trim();
     const compact = String(req.query?.compact || '').trim().toLowerCase() === 'true';
+    const headerModelName = String(req.headers['x-model-name'] || req.headers['X-Model-Name'] || '').trim();
 
-    const entries = await ComponentSearchIndex.find(compact
-      ? { neighborhoodName }
-      : {
-          neighborhoodName,
-          componentName: { $regex: new RegExp(`^${escapeRegExp(componentName)}$`, 'i') },
-        })
+    let requiredRootComponentName = '';
+    if (headerModelName) {
+      const model = await Model.findOne({ name: headerModelName }, { schemaFactories: 1, modelCatalogColumns: 1 }).lean();
+      const schemaFactories = Array.isArray(model?.schemaFactories) ? model.schemaFactories.slice() : [];
+      const sortedFactories = schemaFactories
+        .filter((factory) => String(factory?.name || '').trim())
+        .sort((left, right) => Number(left?.level || 0) - Number(right?.level || 0));
+      if (sortedFactories.length > 0) {
+        requiredRootComponentName = String(sortedFactories[0].name || '').trim().toLowerCase();
+      }
+    }
+
+    const componentScope = {
+      neighborhoodName,
+      componentName: { $regex: new RegExp(`^${escapeRegExp(componentName)}$`, 'i') },
+    };
+
+    const entries = await ComponentSearchIndex.find(compact ? componentScope : componentScope)
     .sort({ rowName: 1 })
     .lean();
     
@@ -3673,20 +3702,23 @@ router.get('/hierarchies/tree', async (req, res) => {
 
       const selectedHierarchies = compact
         ? Array.from(new Map(hierarchies.map((hierarchy) => {
-            const parentNode = hierarchy.length > 1 ? hierarchy[hierarchy.length - 2] : null;
-            const currentNode = hierarchy[hierarchy.length - 1] || null;
-            const relationshipKey = parentNode
-              ? `${parentNode.componentName}:${parentNode.rowId || parentNode.rowName}->${currentNode?.componentName}:${currentNode?.rowId || currentNode?.rowName}`
-              : `root:${currentNode?.componentName}:${currentNode?.rowId || currentNode?.rowName}`;
-            return [relationshipKey, hierarchy];
+            const fullPathKey = hierarchy.map((node) => `${node.componentName}:${node.rowId || node.rowName}`).join('>');
+            return [fullPathKey, hierarchy];
           })).values())
         : hierarchies;
       selectedHierarchies.forEach((hierarchy) => {
         const containsComponent = hierarchy.some(
-          (node) => compact || String(node.componentName || '').trim().toLowerCase() === componentName.toLowerCase()
+          (node) => String(node.componentName || '').trim().toLowerCase() === componentName.toLowerCase()
         );
         
         if (!containsComponent) return;
+
+        if (requiredRootComponentName) {
+          const firstNodeComponent = String(hierarchy?.[0]?.componentName || '').trim().toLowerCase();
+          if (firstNodeComponent !== requiredRootComponentName) {
+            return;
+          }
+        }
         
         const pathKey = hierarchy.map(node => node.rowName).join('|');
         

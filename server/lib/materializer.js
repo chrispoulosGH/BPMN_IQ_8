@@ -38,6 +38,42 @@ function normalizeLooseKey(value) {
   return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
 }
 
+function toPlainObject(value) {
+  if (!value || typeof value !== 'object') return {};
+  if (value instanceof Map) return Object.fromEntries(value.entries());
+  return Array.isArray(value) ? {} : { ...value };
+}
+
+function mergeLineageVariants(existingValues, nextValues) {
+  const mergedValues = { ...existingValues, ...nextValues };
+  const variants = [];
+  const pushVariant = (variant) => {
+    if (!variant || typeof variant !== 'object') return;
+    variants.push(variant);
+  };
+
+  if (existingValues.__lineage && typeof existingValues.__lineage === 'object') pushVariant(existingValues.__lineage);
+  if (Array.isArray(existingValues.__lineageVariants)) existingValues.__lineageVariants.forEach(pushVariant);
+  if (nextValues.__lineage && typeof nextValues.__lineage === 'object') pushVariant(nextValues.__lineage);
+  if (Array.isArray(nextValues.__lineageVariants)) nextValues.__lineageVariants.forEach(pushVariant);
+
+  const deduped = [];
+  const seen = new Set();
+  for (const variant of variants) {
+    const key = JSON.stringify(variant);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(variant);
+  }
+
+  if (deduped.length) {
+    mergedValues.__lineage = deduped[0];
+    mergedValues.__lineageVariants = deduped;
+  }
+
+  return mergedValues;
+}
+
 function getMaterializationConfig(domain = 'component') {
   if (domain === 'data') {
     return {
@@ -74,6 +110,18 @@ async function materializeFromBatches({ neighborhoodName, batchIds = null, batch
   if (neighborhoodName) query.neighborhoodName = neighborhoodName;
   if (Array.isArray(batchIds) && batchIds.length) query._id = { $in: batchIds.map(id => (typeof id === 'string' ? new mongoose.Types.ObjectId(id) : id)) };
 
+  // Component/data load should reflect current spreadsheet truth for the neighborhood.
+  // Clear canonical docs in-scope before re-materializing from selected batch rows.
+  if (neighborhoodName) {
+    try {
+      const deleted = await config.CanonicalModel.deleteMany({ neighborhoodName });
+      console.log(`[MATERIALIZER TRACE] Cleared canonical ${config.domain} docs before rematerialize`, { neighborhoodName, deleted: deleted?.deletedCount || 0 });
+    } catch (err) {
+      console.error('[MATERIALIZER] Failed clearing canonical docs before rematerialize:', err && err.message);
+      throw err;
+    }
+  }
+
   let totalProcessed = 0;
   const batchCollectionNames = Array.isArray(config.batchCollectionNames) && config.batchCollectionNames.length
     ? config.batchCollectionNames
@@ -97,9 +145,15 @@ async function materializeFromBatches({ neighborhoodName, batchIds = null, batch
         const componentType = componentTypeFromRow(row, batch);
         if (!primaryKey) continue;
 
+        const rowValues = (row.values && Object.assign({}, row.values)) || row;
         const filter = { neighborhoodName: batch.neighborhoodName || neighborhoodName || '', componentType, primaryKey };
+        const existingDoc = await config.CanonicalModel.findOne(filter, { values: 1 }).lean();
+        const mergedValues = existingDoc
+          ? mergeLineageVariants(toPlainObject(existingDoc.values), toPlainObject(rowValues))
+          : toPlainObject(rowValues);
+
         const update = {
-          $set: { values: (row.values && Object.assign({}, row.values)) || row, neighborhoodName: batch.neighborhoodName || neighborhoodName || '', componentType, dataType: batch.dataType || '', primaryKey },
+          $set: { values: mergedValues, neighborhoodName: batch.neighborhoodName || neighborhoodName || '', componentType, dataType: batch.dataType || '', primaryKey },
           $addToSet: { sourceBatches: { batchId: String(batch._id), rowIndex: i, batchCollectionName } },
         };
         ops.push({ updateOne: { filter, update, upsert: true } });
