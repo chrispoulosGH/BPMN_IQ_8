@@ -416,7 +416,10 @@ export default function SystemComponentSummary({
   const svrLocCounts = getValueCounts(SVR_LOC_COLUMN);
   const cityCounts = locationSummary?.cityCounts || [];
   const isServerTab = dataType.trim().toLowerCase().includes('server');
-  const dynamicAggregateColumns = aggregateColumns.filter((column) => /aggregate$/i.test(column));
+  // aggregateColumns is already the authoritative "show as a tile" list computed
+  // server-side (suffix-matched, or cardinality-detected when a data type doesn't
+  // use the Aggregate/Aggregator suffix convention at all) — don't re-filter it.
+  const dynamicAggregateColumns = aggregateColumns;
   const tileColumns = isServerTab
     ? Array.from(new Set([...SERVER_PINNED_COLUMNS, ...dynamicAggregateColumns]))
     : dynamicAggregateColumns;

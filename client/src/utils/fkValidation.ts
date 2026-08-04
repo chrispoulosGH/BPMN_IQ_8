@@ -17,6 +17,8 @@ export function normalizeFkValue(value: unknown) {
   return String(value || '').trim().toLowerCase();
 }
 
+// Parses "FK_<TargetTab>[<TargetSubtab>].<ColumnName>" headers generically —
+// see server/services/FK-MAPPING-GUIDE.js for the full convention.
 export function parseFkColumnHeader(column: string): FkColumnTarget | null {
   const match = String(column || '').trim().match(/^FK_([^\[]+)\[([^\]]+)\]\.(.+)$/i);
   if (!match) return null;

@@ -1,501 +1,101 @@
 /**
- * FK Mapping System - Implementation Guide & Examples
- * 
- * This guide demonstrates how the Foreign Key (FK) mapping system works
- * in practice and provides examples for common use cases.
+ * FK Column Convention — How cross-tab references actually work
+ *
+ * NOTE: This file previously documented ForeignKeyRegistry.js / ForeignKeyResolver.js,
+ * an in-memory FK system with admin/debug endpoints under /api/custom-factories/fk-*.
+ * That system is NOT used by any client code (verified: nothing in client/src calls
+ * those endpoints) and should be treated as dead code, not as documentation of current
+ * behavior. This file now documents the system that IS actually live.
  */
 
 // =============================================================================
-// SYSTEM ARCHITECTURE
+// THE CONVENTION
 // =============================================================================
 
 /*
-The FK Mapping system consists of three components:
+CSV/spreadsheet column header format:
 
-1. ForeignKeyRegistry (server/services/ForeignKeyRegistry.js)
-   - Maintains metadata about FK relationships
-   - Maps (targetGroup, targetScope) pairs to collection info
-   - Tracks which components reference which targets
-   - Stateless query layer for registry lookups
+  FK_<TargetTab>[<TargetSubtab>].<ColumnName>
 
-2. ForeignKeyResolver (server/services/ForeignKeyResolver.js)
-   - Performs actual database queries to resolve FK values
-   - Validates FK values exist in target collections
-   - Enriches component data with resolved references
-   - Handles batch validation
+Example: FK_System Components[Applications].APP_ID
+  ├─ FK_          prefix identifying the column as a foreign key reference
+  ├─ TargetTab     "System Components" — the outer tab holding the target data
+  ├─ TargetSubtab  "Applications" — the subtab/data-type within that tab
+  └─ ColumnName    "APP_ID" — the field on the target record to resolve against
 
-3. API Endpoints (server/routes/customFactories.js)
-   - REST interface for FK operations
-   - Admin/debug endpoints for registry inspection
-   - Validation and enrichment endpoints
+Resolution is a TWO-STAGE process, and both stages must be generic — hardcoding
+either one recreates the bug this file used to document:
+
+  Stage 1 — Parse the header into { targetTab, targetSubtab, columnName }.
+            Pure string/regex parsing. No target names should ever be hardcoded
+            here — the whole point is that ANY "FK_X[Y].Z" header parses the
+            same way regardless of what X/Y/Z are.
+
+  Stage 2 — Resolve columnName ("APP_ID") against the target subtab's ACTUAL
+            data field ("correlationId" on an ApplicationItem). The raw column
+            in the target's own uploaded data might be spelled differently
+            ("APP_ID Qualifier", "Application ID", etc.), so this stage is an
+            alias/normalization lookup — it stays generic as long as new
+            spellings get added to the alias list instead of being special-cased
+            elsewhere.
 */
 
 // =============================================================================
-// NAMING CONVENTIONS
+// STAGE 1 — HEADER PARSING (generic, no hardcoded targets)
 // =============================================================================
 
 /*
-CSV Column Header Format:
-  FK_[targetGroup]([targetScope]).[targetColumnName]
+Server: server/routes/customFactories.js, parseForeignKeyColumnHeader()
+  - Strips the "FK_" prefix (FK_COLUMN_PREFIX = /^fk_/i)
+  - Splits the remainder on "." → [targetNamespace, targetColumnName]
+  - Matches targetNamespace against /^(.+?)(?:\[(.+?)\])?$/
+      group 1 → targetGroup   (the tab, e.g. "System Components")
+      group 2 → targetScope   (the subtab, e.g. "Applications")
+  - targetColumnNameBase strips a trailing " Qualifier" suffix for matching
+    against target data that used the *_Qualifier CSV convention
+  - Stored on the component as `foreignKeyColumns: [{ targetGroup, targetScope,
+    targetColumnName, targetColumnNameBase, fieldName, ... }]`
 
-Example: FK_Data[Applications].CORRELATION_ID
-  ├─ FK_ prefix: Identifies as foreign key column
-  ├─ Data: targetGroup (sheet tab where foreign data was loaded)
-  ├─ Applications: targetScope (MongoDB collection name)
-  └─ CORRELATION_ID: targetColumnName (the lookup field)
+Client: client/src/utils/fkValidation.ts, parseFkColumnHeader()
+  and the equivalent inline regex in NeighborhoodFactory.tsx
+  (/^FK_([^\[]+)\[([^\]]+)\]\.(.+)$/i) — same three groups, used to render a
+  clickable link and to build a navigateToApplication event
+  ({ targetTab, targetSubtab, searchField, searchValue }) that jumps to the
+  target tab/subtab and pre-fills a search using targetColumnNameBase.
 
-Normalized Field Name:
-  Columns are normalized to: fk_[targetColumnName_normalized]
-  
-Example: FK_Data[Applications].CORRELATION_ID
-  └─ fk_correlation_id (stored as field name in component rows)
-
-Storage in MongoDB:
-  Component document:
-    {
-      name: "Applications",          // component name
-      neighborhoodName: "Data",      // the group it belongs to
-      foreignKeyColumns: [           // metadata about FK columns
-        {
-          name: "FK_Data[Applications].CORRELATION_ID",
-          sourceColumnName: "FK_Data[Applications].CORRELATION_ID",
-          fieldName: "fk_correlation_id",
-          targetReference: "Data[Applications].CORRELATION_ID",
-          targetGroup: "Data",
-          targetScope: "Applications",
-          targetColumnName: "CORRELATION_ID"
-        }
-      ],
-      rows: [                        // data rows
-        {
-          values: {
-            name: "SAP System",
-            fk_correlation_id: "APP-001"  // the actual FK value
-          }
-        }
-      ]
-    }
+Both are pure parsing — verified against "FK_System Components[Applications].APP_ID"
+resolving correctly to targetGroup="System Components", targetScope="Applications",
+targetColumnName="APP_ID" even with the space in the tab name.
 */
 
 // =============================================================================
-// API ENDPOINTS
-// =============================================================================
-
-// 1. REGISTRY STATUS - View all registered FK mappings
-/*
-GET /api/custom-factories/fk-registry/status
-
-Response:
-{
-  "success": true,
-  "registry": {
-    "totalTargets": 3,
-    "totalComponents": 5,
-    "targets": [
-      {
-        "targetGroup": "Data",
-        "targetScope": "Applications",
-        "targetIdField": "CORRELATION_ID",
-        "sourceReferences": [
-          "ATT Journey Model|MyModel|Applications"
-        ]
-      }
-    ]
-  }
-}
-*/
-
-// 2. RESOLVE SINGLE FK VALUE
-/*
-POST /api/custom-factories/fk-resolve
-
-Request Body:
-{
-  "targetGroup": "Data",
-  "targetScope": "Applications",
-  "targetIdField": "CORRELATION_ID",
-  "fkValue": "APP-001"
-}
-
-Response (Success):
-{
-  "success": true,
-  "fkValue": "APP-001",
-  "target": {
-    "targetGroup": "Data",
-    "targetScope": "Applications",
-    "targetIdField": "CORRELATION_ID"
-  },
-  "resolved": {
-    "values": {
-      "name": "SAP System",
-      "correlation_id": "APP-001",
-      "status": "Active"
-    }
-  }
-}
-
-Response (Not Found):
-{
-  "error": "FK value \"APP-001\" not found in Data/Applications",
-  "fkValue": "APP-001",
-  "target": {...}
-}
-*/
-
-// 3. BATCH VALIDATE FK VALUES
-/*
-POST /api/custom-factories/fk-validate
-
-Request Body:
-{
-  "validations": [
-    {
-      "targetGroup": "Data",
-      "targetScope": "Applications",
-      "targetIdField": "CORRELATION_ID",
-      "fkValue": "APP-001"
-    },
-    {
-      "targetGroup": "Data",
-      "targetScope": "Applications",
-      "targetIdField": "CORRELATION_ID",
-      "fkValue": "APP-999"
-    }
-  ]
-}
-
-Response:
-{
-  "success": false,
-  "allValid": false,
-  "validatedCount": 2,
-  "invalidCount": 1,
-  "results": [
-    {
-      "fkValue": "APP-001",
-      "target": {...},
-      "exists": true
-    },
-    {
-      "fkValue": "APP-999",
-      "target": {...},
-      "exists": false
-    }
-  ],
-  "invalidResults": [
-    {
-      "fkValue": "APP-999",
-      "target": {...},
-      "exists": false
-    }
-  ]
-}
-*/
-
-// 4. GET COMPONENT WITH RESOLVED FK DATA
-/*
-GET /api/custom-factories/components/{componentId}/fk-enriched
-
-Response:
-{
-  "success": true,
-  "component": {
-    "name": "Applications",
-    "rows": [
-      {
-        "values": {
-          "name": "SAP System",
-          "fk_correlation_id": "APP-001"
-        },
-        "_fkResolved": {
-          "fk_correlation_id": {
-            "fkValue": "APP-001",
-            "resolved": {
-              "values": {
-                "name": "SAP System",
-                "correlation_id": "APP-001",
-                "status": "Active"
-              }
-            },
-            "targetReference": "Data[Applications].CORRELATION_ID"
-          }
-        }
-      }
-    ]
-  }
-}
-*/
-
-// 5. GET COMPONENTS REFERENCED BY FK COLUMNS
-/*
-GET /api/custom-factories/components/{componentId}/fk-references
-
-Response:
-{
-  "success": true,
-  "componentName": "Applications",
-  "referencedComponentsCount": 2,
-  "referencedComponents": [
-    {
-      "fieldName": "fk_correlation_id",
-      "targetGroup": "Data",
-      "targetScope": "Applications",
-      "targetComponentId": "507f1f77bcf86cd799439011",
-      "targetComponentName": "Applications",
-      "targetComponentRowCount": 150
-    },
-    {
-      "fieldName": "fk_product_id",
-      "targetGroup": "Data",
-      "targetScope": "Products",
-      "targetComponentId": "507f1f77bcf86cd799439012",
-      "targetComponentName": "Products",
-      "targetComponentRowCount": 45
-    }
-  ]
-}
-*/
-
-// 6. VALIDATE ALL FK VALUES IN A COMPONENT
-/*
-POST /api/custom-factories/components/{componentId}/fk-validate
-
-Response (All Valid):
-{
-  "success": true,
-  "componentName": "Applications",
-  "valid": true,
-  "errorCount": 0,
-  "errors": []
-}
-
-Response (With Errors):
-{
-  "success": false,
-  "componentName": "Applications",
-  "valid": false,
-  "errorCount": 2,
-  "errors": [
-    {
-      "rowPrimaryKey": "MyApp1",
-      "errors": [
-        {
-          "fieldName": "fk_correlation_id",
-          "fkValue": "INVALID-ID",
-          "targetGroup": "Data",
-          "targetScope": "Applications",
-          "targetIdField": "CORRELATION_ID",
-          "message": "FK value \"INVALID-ID\" not found in Data/Applications.CORRELATION_ID"
-        }
-      ]
-    }
-  ]
-}
-*/
-
-// 7. LIST ALL REGISTERED FK TARGETS
-/*
-GET /api/custom-factories/fk-registry/targets
-
-Response:
-{
-  "success": true,
-  "targetCount": 3,
-  "targets": [
-    {
-      "targetGroup": "Data",
-      "targetScope": "Applications",
-      "targetIdField": "CORRELATION_ID",
-      "sourceReferences": [
-        "ATT Journey Model|MyModel|Applications",
-        "ATT Journey Model|MyModel|BusinessFlow"
-      ]
-    },
-    {
-      "targetGroup": "Data",
-      "targetScope": "Products",
-      "targetIdField": "PRODUCT_ID",
-      "sourceReferences": [
-        "ATT Journey Model|MyModel|Applications"
-      ]
-    }
-  ]
-}
-*/
-
-// 8. GET COMPONENTS THAT REFERENCE A TARGET
-/*
-GET /api/custom-factories/fk-registry/targets/{targetGroup}/{targetScope}/sources
-
-Example:
-GET /api/custom-factories/fk-registry/targets/Data/Applications/sources
-
-Response:
-{
-  "success": true,
-  "targetGroup": "Data",
-  "targetScope": "Applications",
-  "sourceComponentCount": 2,
-  "sourceComponents": [
-    "ATT Journey Model|MyModel|Applications",
-    "ATT Journey Model|MyModel|BusinessFlow"
-  ]
-}
-*/
-
-// =============================================================================
-// WORKFLOW: Upload Component File with FK Columns
+// STAGE 2 — TARGET FIELD RESOLUTION (alias lookup, extend as needed)
 // =============================================================================
 
 /*
-1. User prepares spreadsheet with FK columns:
-   
-   | Application Component | Product Component | FK_Data[Products].PRODUCT_ID |
-   |---|---|---|
-   | SAP System | Finance | PROD-001 |
-   | Oracle EBS | HR | PROD-002 |
+For "System Components" > "Applications": server/utils/applicationReferenceLookup.js,
+buildApplicationItem(). Each canonical field (name, acronym, correlationId, ...) is
+built via getFieldValue(values, [list of accepted raw-column aliases]). If a target
+subtab's real CSV column isn't in the relevant alias list, that field comes back
+empty even though Stage 1 parsed the FK header correctly — this is what happened
+with APP_ID / APP_ID Qualifier not being recognized as a correlationId source
+(fixed 2026-07 by adding those aliases).
 
-2. Upload endpoint receives file and:
-   - Parses FK column headers
-   - Extracts FK metadata (targetGroup, targetScope, targetColumnName)
-   - Normalizes field names (FK_Data[Products].PRODUCT_ID → fk_product_id)
-   - Stores FK values in component rows
-   - Registers FK columns in the registry
+Rule going forward: adding a new FK_ reference to a new-looking column name never
+requires touching the parser (Stage 1) — only requires confirming the target
+column's alias is present in the relevant Stage 2 alias list. If it's missing,
+add the raw column spelling(s) there.
 
-3. Registry registration occurs:
-   - Component "Products" (in "Data" group) is registered as target
-   - "Applications" component (in model) is marked as source
-   - FK relationship metadata is stored in memory
-
-4. Optional: Validate FK values
-   - Can validate during upload (currently skipped - can be enabled)
-   - Can validate after upload using /fk-validate endpoint
-   - Can validate entire component using /components/{id}/fk-validate
-
-5. Query phase - Resolve FK references:
-   - GET /components/{appId}/fk-enriched - Get app with resolved product data
-   - POST /fk-resolve - Look up specific FK value
-   - GET /components/{appId}/fk-references - See what targets are referenced
-*/
-
-// =============================================================================
-// SPREADSHEET REQUIREMENTS
-// =============================================================================
-
-/*
-For FK columns to work correctly, spreadsheets must follow conventions:
-
-Tab Names (targetGroup):
-  - Must be consistent across related files
-  - Used as "Data" group namespace
-  - Example: "Data", not "Data1" or "Source_Data"
-
-Collection Names (targetScope):
-  - Must match MongoDB collection names
-  - Must match the component name in the Data group
-  - Example: "Applications" (not "Application" or "APPLICATIONS")
-
-Column Names (targetColumnName):
-  - Must be the actual identifier field in the target collection
-  - Should match how data is stored
-  - Example: "CORRELATION_ID" (exact case/format as in data)
-
-FK Column Headers:
-  - Must follow format: FK_[group]([collection]).[field]
-  - Example: FK_Data[Applications].CORRELATION_ID
-  - No spaces around brackets or dots
-  - Case-sensitive for collection and field names
-
-Consistency:
-  - All related spreadsheets must use same group name: "Data"
-  - Collection names must match across files
-  - Field names must match the actual column names in source data
-*/
-
-// =============================================================================
-// COMMON TASKS
-// =============================================================================
-
-// Task: Check if all FK values in a component are valid
-async function validateComponentFKs(componentId) {
-  const response = await fetch(
-    `/api/custom-factories/components/${componentId}/fk-validate`,
-    { method: 'POST' }
-  );
-  const result = await response.json();
-  if (!result.valid) {
-    console.error('FK Validation errors:', result.errors);
-  }
-  return result;
-}
-
-// Task: Get resolved data for a component
-async function getComponentWithResolvedFKs(componentId) {
-  const response = await fetch(
-    `/api/custom-factories/components/${componentId}/fk-enriched`
-  );
-  const result = await response.json();
-  // result.component.rows[0]._fkResolved contains resolved data
-  return result.component;
-}
-
-// Task: Find what components reference a specific target
-async function findSourcesForTarget(targetGroup, targetScope) {
-  const response = await fetch(
-    `/api/custom-factories/fk-registry/targets/${targetGroup}/${targetScope}/sources`
-  );
-  const result = await response.json();
-  return result.sourceComponents;
-}
-
-// Task: Resolve a single FK value
-async function resolveFKValue(targetGroup, targetScope, targetIdField, fkValue) {
-  const response = await fetch(
-    '/api/custom-factories/fk-resolve',
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        targetGroup,
-        targetScope,
-        targetIdField,
-        fkValue
-      })
-    }
-  );
-  const result = await response.json();
-  if (!result.success) {
-    throw new Error(result.error);
-  }
-  return result.resolved;
-}
-
-// =============================================================================
-// TROUBLESHOOTING
-// =============================================================================
-
-/*
-Issue: "FK value not found" error
-- Check that targetGroup matches the Data sheet name
-- Check that targetScope matches the collection name exactly
-- Check that targetIdField matches the column name in data
-- Verify FK value exists in the target component's rows
-
-Issue: FK columns not being recognized
-- Check column header format: FK_[group]([scope]).[field]
-- No extra spaces around brackets/dots
-- Ensure it's a component column (has "Component" suffix)
-- Verify it comes after the component header it belongs to
-
-Issue: FK Registry shows no targets
-- Upload a component file first (registry populates on upload)
-- Check that foreignKeyColumns is populated in component metadata
-- Verify target components exist with matching names
-
-Issue: FK value exists but resolver can't find it
-- Check that target component rows have the value
-- Verify case sensitivity matches between FK value and target field
-- Check primary key normalization (values should be normalized)
-- Ensure target component is in the expected group/collection
+⚠ KNOWN GAP — not yet following this convention:
+server/routes/servers.js and server/routes/databases.js each hardcode their own
+APP_FK_FIELDS / APP_ACRONYM_FIELDS / APP_NAME_FIELDS arrays (duplicated between
+the two files) to resolve a server/database row's linked Application for the
+"Linked Applications" panel. These arrays only recognize a fixed, enumerated set
+of literal header strings (e.g. 'FK_DATA[Applications].correlation_id'), NOT the
+generic FK_<Tab>[<Subtab>].<Column> parse used everywhere else. A column named
+FK_System Components[Applications].APP_ID will NOT populate a server's Linked
+Applications panel, even though it works correctly for the generic click-through
+navigation described above. Bringing servers.js/databases.js onto Stage
+1-parsing + Stage 2-alias-lookup (instead of an enumerated string whitelist)
+would close this gap — not yet done.
 */

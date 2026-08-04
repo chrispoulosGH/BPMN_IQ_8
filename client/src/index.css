@@ -148,6 +148,24 @@ html, body, #root {
   overflow: hidden;
 }
 
+/* ─── Diagram title annotation (baked into the BPMN XML) ────
+   Targeted by its stable element id — see
+   server/lib/bpmnXmlBuilder.js's titleAnnotationId. */
+g[data-element-id="TextAnnotation_DiagramTitle"] text {
+  font-weight: 700 !important;
+  font-size: 16px !important;
+}
+
+/* When multiple diagrams are stacked on one canvas (App.tsx
+   composeStackedDiagramXml/addDiagramTitle), each stacked section
+   gets its own title annotation with id BPMNDiagramTitle_<index> —
+   a separate, client-side-only mechanism from the one above. Match
+   it too so every stacked title is styled consistently. */
+g[data-element-id^="BPMNDiagramTitle_"] text {
+  font-weight: 700 !important;
+  font-size: 16px !important;
+}
+
 /* ─── Factory Tabs ─────────────────────────────────────────── */
 .factory-tabs {
   height: 100%;

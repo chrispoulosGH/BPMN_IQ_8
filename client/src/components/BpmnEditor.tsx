@@ -4,9 +4,10 @@ import {
   BpmnPropertiesPanelModule,
   BpmnPropertiesProviderModule,
 } from 'bpmn-js-properties-panel';
-import { Modal, Tag } from 'antd';
-import { getTaskNames, getServers, getServer, getApplicationServers, getDatabases, getDatabase, getApplicationDatabases, getApplicationReferenceForNeighborhood } from '../api';
-import type { ApplicationItem, ServerItem, DatabaseItem, CapabilityMatch } from '../types';
+import { Modal } from 'antd';
+import { getTaskNames, getServers, getDatabases, getApplicationReferenceForNeighborhood, getSystemComponentLinkedTypes, getSystemComponentRecordsLinkedToApplication } from '../api';
+import type { LinkedSystemComponentRecord } from '../api';
+import type { ApplicationItem, CapabilityMatch } from '../types';
 import bpmniqModdle from '../bpmniq-moddle.json';
 import {
   buildExactApplicationIdentifierSet,
@@ -139,20 +140,19 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
     const [editingDiagramName, setEditingDiagramName] = useState(false);
     const [editNameValue, setEditNameValue] = useState('');
     const [newDiagramName, setNewDiagramName] = useState('');
-    const [serverModalOpen, setServerModalOpen] = useState(false);
-    const [serverModalAppName, setServerModalAppName] = useState('');
-    const [serverList, setServerList] = useState<ServerItem[]>([]);
-    const [serverListLoading, setServerListLoading] = useState(false);
-    const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
-    const [selectedServer, setSelectedServer] = useState<ServerItem | null>(null);
-    const [selectedServerLoading, setSelectedServerLoading] = useState(false);
-    const [databaseModalOpen, setDatabaseModalOpen] = useState(false);
-    const [databaseModalAppName, setDatabaseModalAppName] = useState('');
-    const [databaseList, setDatabaseList] = useState<DatabaseItem[]>([]);
-    const [databaseListLoading, setDatabaseListLoading] = useState(false);
-    const [selectedDatabaseId, setSelectedDatabaseId] = useState<string | null>(null);
-    const [selectedDatabase, setSelectedDatabase] = useState<DatabaseItem | null>(null);
-    const [selectedDatabaseLoading, setSelectedDatabaseLoading] = useState(false);
+    // Generic "what's linked to this application" modal — drives both the
+    // right-click menu options and the dialog contents entirely from
+    // discoverComponentTypesLinkedToTarget() (server) rather than a fixed
+    // list of type names, so a new uploaded type with an FK_ column to
+    // Applications shows up automatically.
+    const [linkedComponentTypes, setLinkedComponentTypes] = useState<string[]>([]);
+    const linkedComponentTypesRef = useRef<string[]>([]);
+    const [linkedRecordsModalOpen, setLinkedRecordsModalOpen] = useState(false);
+    const [linkedRecordsModalType, setLinkedRecordsModalType] = useState('');
+    const [linkedRecordsModalAppName, setLinkedRecordsModalAppName] = useState('');
+    const [linkedRecordsList, setLinkedRecordsList] = useState<LinkedSystemComponentRecord[]>([]);
+    const [linkedRecordsLoading, setLinkedRecordsLoading] = useState(false);
+    const [selectedLinkedRecordId, setSelectedLinkedRecordId] = useState<string | null>(null);
 
     // Keep the latest values in refs to avoid stale closures
     xmlRef.current = xml;
@@ -161,6 +161,19 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
     if (allTaskNames.length) taskNamesRef.current = allTaskNames;
     const actorNamesRef = useRef<string[]>(allActorNames);
     actorNamesRef.current = allActorNames;
+    linkedComponentTypesRef.current = linkedComponentTypes;
+
+    // Discover which System Components types (Servers, Software, any future
+    // upload) have an FK_ column pointing at Applications — drives the
+    // right-click menu below. Fetched once; the bpmn-js event handlers read
+    // it via the ref since they're set up outside React's render cycle.
+    useEffect(() => {
+      let cancelled = false;
+      getSystemComponentLinkedTypes('Applications')
+        .then((types) => { if (!cancelled) setLinkedComponentTypes(types); })
+        .catch(() => { if (!cancelled) setLinkedComponentTypes([]); });
+      return () => { cancelled = true; };
+    }, []);
 
     const getAppMetaMatches = (appName: string) => findExactApplicationMatches(allApplicationsRef.current, appName);
 
@@ -321,7 +334,7 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
       return uuidLike || mongoIdLike || longOpaqueToken;
     };
 
-    const renderServerValue = (value: unknown) => {
+    const renderFieldValue = (value: unknown) => {
       if (value === null || value === undefined || value === '') return '—';
       if (Array.isArray(value)) {
         if (!value.length) return '—';
@@ -334,117 +347,34 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
       return String(value);
     };
 
-    const renderDatabaseValue = (value: unknown) => {
-      if (value === null || value === undefined || value === '') return '—';
-      if (Array.isArray(value)) {
-        if (!value.length) return '—';
-        return <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{JSON.stringify(value, null, 2)}</pre>;
-      }
-      if (typeof value === 'object') {
-        return <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{JSON.stringify(value, null, 2)}</pre>;
-      }
-      if (typeof value === 'boolean') return value ? 'true' : 'false';
-      return String(value);
-    };
-
-    const loadServersForApp = async (appName: string, taskId?: string, explicitApp?: ApplicationItem | null) => {
+    // Generic replacement for the old per-type loadServersForApp/loadDatabasesForApp —
+    // works for any componentType discovered by getSystemComponentLinkedTypes(), so a
+    // future type needs zero changes here. The list response already carries each
+    // record's full `values`, so there's no separate detail fetch on selection.
+    const loadLinkedRecordsForApp = async (componentType: string, appName: string, taskId?: string, explicitApp?: ApplicationItem | null) => {
       let app = explicitApp || getAppMeta(appName);
       if (!app && taskId) {
         app = await ensureResolvedDiagramApplication(appName, taskId);
       }
 
       const correlationId = String(app?.correlationId || '').trim();
-      const shouldUseCorrelationId = !!correlationId;
-      console.log('[BpmnEditor] loadServersForApp input:', {
-        appName,
-        resolvedName: app?.name || null,
-        resolvedCorrelationId: correlationId || null,
-        selectedMode: shouldUseCorrelationId ? 'correlationId' : 'unmatched',
-      });
 
-      setServerModalOpen(true);
-      setServerModalAppName(getAppDisplayName(appName));
-      setServerListLoading(true);
-      setSelectedServerId(null);
-      setSelectedServer(null);
+      setLinkedRecordsModalType(componentType);
+      setLinkedRecordsModalOpen(true);
+      setLinkedRecordsModalAppName(getAppDisplayName(appName));
+      setLinkedRecordsLoading(true);
+      setSelectedLinkedRecordId(null);
       try {
-        const rows = shouldUseCorrelationId
-          ? await getApplicationServers(correlationId)
+        const rows = correlationId
+          ? await getSystemComponentRecordsLinkedToApplication(componentType, correlationId)
           : [];
-        console.log('[BpmnEditor] loadServersForApp request:', shouldUseCorrelationId
-          ? { endpoint: '/servers/by-application/:correlationId', correlationId }
-          : { endpoint: 'unmatched', params: null });
-        console.log('[BpmnEditor] loadServersForApp response count:', rows.length);
-        setServerList(rows);
+        setLinkedRecordsList(rows);
       } catch {
-        console.error('[BpmnEditor] loadServersForApp failed');
-        setServerList([]);
+        setLinkedRecordsList([]);
       } finally {
-        setServerListLoading(false);
+        setLinkedRecordsLoading(false);
       }
     };
-
-    const loadDatabasesForApp = async (appName: string, taskId?: string, explicitApp?: ApplicationItem | null) => {
-      let app = explicitApp || getAppMeta(appName);
-      if (!app && taskId) {
-        app = await ensureResolvedDiagramApplication(appName, taskId);
-      }
-
-      const correlationId = String(app?.correlationId || '').trim();
-      const shouldUseCorrelationId = !!correlationId;
-
-      console.log('[BpmnEditor] loadDatabasesForApp input:', {
-        appName,
-        resolvedName: app?.name || null,
-        resolvedCorrelationId: correlationId || null,
-        selectedMode: shouldUseCorrelationId ? 'correlationId' : 'unmatched',
-      });
-
-      setDatabaseModalOpen(true);
-      setDatabaseModalAppName(getAppDisplayName(appName));
-      setDatabaseListLoading(true);
-      setSelectedDatabaseId(null);
-      setSelectedDatabase(null);
-      try {
-        const rows = shouldUseCorrelationId
-          ? await getApplicationDatabases(correlationId)
-          : [];
-        console.log('[BpmnEditor] loadDatabasesForApp request:', shouldUseCorrelationId
-          ? { endpoint: '/databases/by-application/:correlationId', correlationId }
-          : { endpoint: 'unmatched', params: null });
-        console.log('[BpmnEditor] loadDatabasesForApp response count:', rows.length);
-        setDatabaseList(rows);
-      } catch {
-        console.error('[BpmnEditor] loadDatabasesForApp failed');
-        setDatabaseList([]);
-      } finally {
-        setDatabaseListLoading(false);
-      }
-    };
-
-    useEffect(() => {
-      if (!selectedServerId) {
-        setSelectedServer(null);
-        return;
-      }
-      setSelectedServerLoading(true);
-      getServer(selectedServerId)
-        .then((row) => setSelectedServer(row))
-        .catch(() => setSelectedServer(null))
-        .finally(() => setSelectedServerLoading(false));
-    }, [selectedServerId]);
-
-    useEffect(() => {
-      if (!selectedDatabaseId) {
-        setSelectedDatabase(null);
-        return;
-      }
-      setSelectedDatabaseLoading(true);
-      getDatabase(selectedDatabaseId)
-        .then((row) => setSelectedDatabase(row))
-        .catch(() => setSelectedDatabase(null))
-        .finally(() => setSelectedDatabaseLoading(false));
-    }, [selectedDatabaseId]);
 
     useImperativeHandle(ref, () => ({
       getXml: async () => {
@@ -827,8 +757,9 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
         };
 
         menu.appendChild(makeItem('Edit applications', () => showAppPopover(element, m)));
-        menu.appendChild(makeItem('Servers', () => { void loadServersForApp(appName, element.id, resolvedMeta); }));
-        menu.appendChild(makeItem('Databases', () => { void loadDatabasesForApp(appName, element.id, resolvedMeta); }));
+        for (const componentType of linkedComponentTypesRef.current) {
+          menu.appendChild(makeItem(componentType, () => { void loadLinkedRecordsForApp(componentType, appName, element.id, resolvedMeta); }));
+        }
 
         document.body.appendChild(menu);
         appActionMenuRef.current = menu;
@@ -2024,30 +1955,29 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
         )}
 
         <Modal
-          title={`Associated Servers${serverModalAppName ? ` - ${serverModalAppName}` : ''}`}
-          open={serverModalOpen}
-          onCancel={() => setServerModalOpen(false)}
+          title={`${linkedRecordsModalType}${linkedRecordsModalAppName ? ` - ${linkedRecordsModalAppName}` : ''}`}
+          open={linkedRecordsModalOpen}
+          onCancel={() => setLinkedRecordsModalOpen(false)}
           footer={null}
           width={1200}
           destroyOnClose
         >
           <div className="grid grid-cols-12 gap-3" style={{ minHeight: 520 }}>
             <div className="col-span-4 border border-gray-200 rounded overflow-hidden">
-              <div className="px-3 py-2 text-xs text-gray-500 border-b bg-gray-50">Servers ({serverList.length})</div>
+              <div className="px-3 py-2 text-xs text-gray-500 border-b bg-gray-50">{linkedRecordsModalType} ({linkedRecordsList.length})</div>
               <div style={{ maxHeight: 480, overflowY: 'auto' }}>
-                {serverListLoading ? (
-                  <div className="p-4 text-sm text-gray-500">Loading servers...</div>
-                ) : !serverList.length ? (
-                  <div className="p-4 text-sm text-gray-500">No servers associated with this application.</div>
+                {linkedRecordsLoading ? (
+                  <div className="p-4 text-sm text-gray-500">Loading {linkedRecordsModalType.toLowerCase()}...</div>
+                ) : !linkedRecordsList.length ? (
+                  <div className="p-4 text-sm text-gray-500">No {linkedRecordsModalType.toLowerCase()} associated with this application.</div>
                 ) : (
-                  serverList.map((server) => (
+                  linkedRecordsList.map((record) => (
                     <button
-                      key={server._id}
-                      className={`w-full text-left px-3 py-2 border-b border-gray-100 hover:bg-blue-50 ${selectedServerId === server._id ? 'bg-blue-50' : ''}`}
-                      onClick={() => setSelectedServerId(server._id)}
+                      key={record.id}
+                      className={`w-full text-left px-3 py-2 border-b border-gray-100 hover:bg-blue-50 ${selectedLinkedRecordId === record.id ? 'bg-blue-50' : ''}`}
+                      onClick={() => setSelectedLinkedRecordId(record.id)}
                     >
-                      <div className="text-sm font-medium text-gray-800">{server.name}</div>
-                      <div className="text-xs text-gray-500">{server.hostName || server.ipAddress || server.fqdn || 'No host identifier'}</div>
+                      <div className="text-sm font-medium text-gray-800">{record.name}</div>
                     </button>
                   ))
                 )}
@@ -2055,163 +1985,32 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
             </div>
 
             <div className="col-span-8 border border-gray-200 rounded overflow-hidden">
-              <div className="px-3 py-2 text-xs text-gray-500 border-b bg-gray-50">Server Properties</div>
+              <div className="px-3 py-2 text-xs text-gray-500 border-b bg-gray-50">Properties</div>
               <div className="p-3" style={{ maxHeight: 480, overflowY: 'auto' }}>
-                {selectedServerLoading ? (
-                  <div className="text-sm text-gray-500">Loading properties...</div>
-                ) : !selectedServer ? (
-                  <div className="text-sm text-gray-500">Select a server to view properties.</div>
-                ) : (
-                  <>
-                    <div className="text-base font-semibold text-gray-800">{selectedServer.name}</div>
-                    <div className="text-xs text-gray-500 mb-3">{selectedServer.hostName || selectedServer.ipAddress || selectedServer.fqdn || 'No host identifier'}</div>
-
-                    <div className="mb-3">
-                      <div className="text-xs uppercase tracking-wide text-gray-500 mb-1">Health Notes</div>
-                      {selectedServer.healthNotes?.length ? (
-                        <div className="space-y-2">
-                          {selectedServer.healthNotes.map((note, idx) => (
-                            <div key={`${note.label}-${idx}`} className="border border-gray-200 rounded p-2 bg-gray-50">
-                              <div className="flex items-center gap-2 mb-1">
-                                <Tag color={note.severity === 'critical' ? 'red' : note.severity === 'high' ? 'volcano' : note.severity === 'medium' ? 'gold' : 'blue'}>{note.label}</Tag>
-                                {note.severity ? <span className="text-xs text-gray-500">{note.severity}</span> : null}
-                              </div>
-                              <div className="text-xs text-gray-700">{note.note}</div>
-                              {note.rationale ? <div className="text-xs text-gray-500 mt-1">Why: {note.rationale}</div> : null}
-                            </div>
-                          ))}
-                        </div>
-                      ) : <div className="text-xs text-gray-500">No health notes</div>}
-                    </div>
-
-                    <div className="mb-3">
-                      <div className="text-xs uppercase tracking-wide text-gray-500 mb-1">Linked Applications</div>
-                      {selectedServer.linkedApplications?.length ? (
-                        <div className="space-y-1">
-                          {selectedServer.linkedApplications.map((app, idx) => (
-                            <div key={`${app.name || app.correlationId || 'app'}-${idx}`} className="text-xs text-gray-700 border border-gray-200 rounded px-2 py-1 bg-gray-50">
-                              {[(app.acronym || '').trim() || app.name, app.relationType, app.correlationId && !isKeyLikeString(String(app.correlationId)) ? `(${app.correlationId})` : ''].filter(Boolean).join(' ')}
-                            </div>
-                          ))}
-                        </div>
-                      ) : <div className="text-xs text-gray-500">No linked applications</div>}
-                    </div>
-
-                    <div>
-                      <div className="text-xs uppercase tracking-wide text-gray-500 mb-1">Other Properties</div>
+                {(() => {
+                  const selectedRecord = linkedRecordsList.find((record) => record.id === selectedLinkedRecordId) || null;
+                  if (!selectedRecord) {
+                    return <div className="text-sm text-gray-500">Select a record to view properties.</div>;
+                  }
+                  return (
+                    <>
+                      <div className="text-base font-semibold text-gray-800 mb-3">{selectedRecord.name}</div>
                       <table className="w-full text-xs border border-gray-200">
                         <tbody>
-                          {Object.entries(selectedServer)
-                            .filter(([key, value]) => key !== 'healthNotes' && key !== 'linkedApplications' && !(typeof value === 'string' && isKeyLikeString(value)))
+                          {Object.entries(selectedRecord.values)
+                            .filter(([, value]) => !(typeof value === 'string' && isKeyLikeString(value)))
                             .sort(([a], [b]) => a.localeCompare(b))
                             .map(([key, value]) => (
                               <tr key={key} className="border-t border-gray-200">
                                 <td className="w-1/3 px-2 py-1 text-gray-500 align-top">{toLabel(key)}</td>
-                                <td className="px-2 py-1 text-gray-700 align-top">{renderServerValue(value)}</td>
+                                <td className="px-2 py-1 text-gray-700 align-top">{renderFieldValue(value)}</td>
                               </tr>
                             ))}
                         </tbody>
                       </table>
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
-        </Modal>
-
-        <Modal
-          title={`Associated Databases${databaseModalAppName ? ` - ${databaseModalAppName}` : ''}`}
-          open={databaseModalOpen}
-          onCancel={() => setDatabaseModalOpen(false)}
-          footer={null}
-          width={1200}
-          destroyOnClose
-        >
-          <div className="grid grid-cols-12 gap-3" style={{ minHeight: 520 }}>
-            <div className="col-span-4 border border-gray-200 rounded overflow-hidden">
-              <div className="px-3 py-2 text-xs text-gray-500 border-b bg-gray-50">Databases ({databaseList.length})</div>
-              <div style={{ maxHeight: 480, overflowY: 'auto' }}>
-                {databaseListLoading ? (
-                  <div className="p-4 text-sm text-gray-500">Loading databases...</div>
-                ) : !databaseList.length ? (
-                  <div className="p-4 text-sm text-gray-500">No databases associated with this application.</div>
-                ) : (
-                  databaseList.map((database) => (
-                    <button
-                      key={database._id}
-                      className={`w-full text-left px-3 py-2 border-b border-gray-100 hover:bg-blue-50 ${selectedDatabaseId === database._id ? 'bg-blue-50' : ''}`}
-                      onClick={() => setSelectedDatabaseId(database._id)}
-                    >
-                      <div className="text-sm font-medium text-gray-800">{database.name}</div>
-                      <div className="text-xs text-gray-500">{database.databaseClassName || database.normalizedVendor || database.version || 'No class metadata'}</div>
-                    </button>
-                  ))
-                )}
-              </div>
-            </div>
-
-            <div className="col-span-8 border border-gray-200 rounded overflow-hidden">
-              <div className="px-3 py-2 text-xs text-gray-500 border-b bg-gray-50">Database Properties</div>
-              <div className="p-3" style={{ maxHeight: 480, overflowY: 'auto' }}>
-                {selectedDatabaseLoading ? (
-                  <div className="text-sm text-gray-500">Loading properties...</div>
-                ) : !selectedDatabase ? (
-                  <div className="text-sm text-gray-500">Select a database to view properties.</div>
-                ) : (
-                  <>
-                    <div className="text-base font-semibold text-gray-800">{selectedDatabase.name}</div>
-                    <div className="text-xs text-gray-500 mb-3">{[selectedDatabase.databaseClassName, selectedDatabase.normalizedVendor || selectedDatabase.vendor, selectedDatabase.version].filter(Boolean).join(' | ') || 'No database metadata'}</div>
-
-                    <div className="mb-3">
-                      <div className="text-xs uppercase tracking-wide text-gray-500 mb-1">Health Notes</div>
-                      {selectedDatabase.healthNotes?.length ? (
-                        <div className="space-y-2">
-                          {selectedDatabase.healthNotes.map((note, idx) => (
-                            <div key={`${note.label}-${idx}`} className="border border-gray-200 rounded p-2 bg-gray-50">
-                              <div className="flex items-center gap-2 mb-1">
-                                <Tag color={note.severity === 'critical' ? 'red' : note.severity === 'high' ? 'volcano' : note.severity === 'medium' ? 'gold' : 'blue'}>{note.label}</Tag>
-                                {note.severity ? <span className="text-xs text-gray-500">{note.severity}</span> : null}
-                              </div>
-                              <div className="text-xs text-gray-700">{note.note}</div>
-                              {note.rationale ? <div className="text-xs text-gray-500 mt-1">Why: {note.rationale}</div> : null}
-                            </div>
-                          ))}
-                        </div>
-                      ) : <div className="text-xs text-gray-500">No health notes</div>}
-                    </div>
-
-                    <div className="mb-3">
-                      <div className="text-xs uppercase tracking-wide text-gray-500 mb-1">Linked Applications</div>
-                      {selectedDatabase.linkedApplications?.length ? (
-                        <div className="space-y-1">
-                          {selectedDatabase.linkedApplications.map((app, idx) => (
-                            <div key={`${app.name || app.correlationId || 'app'}-${idx}`} className="text-xs text-gray-700 border border-gray-200 rounded px-2 py-1 bg-gray-50">
-                              {[app.acronym || app.name, app.serviceName, app.correlationId && !isKeyLikeString(String(app.correlationId)) ? `(${app.correlationId})` : ''].filter(Boolean).join(' ')}
-                            </div>
-                          ))}
-                        </div>
-                      ) : <div className="text-xs text-gray-500">No linked applications</div>}
-                    </div>
-
-                    <div>
-                      <div className="text-xs uppercase tracking-wide text-gray-500 mb-1">Other Properties</div>
-                      <table className="w-full text-xs border border-gray-200">
-                        <tbody>
-                          {Object.entries(selectedDatabase)
-                            .filter(([key, value]) => key !== 'healthNotes' && key !== 'linkedApplications' && !(typeof value === 'string' && isKeyLikeString(value)))
-                            .sort(([a], [b]) => a.localeCompare(b))
-                            .map(([key, value]) => (
-                              <tr key={key} className="border-t border-gray-200">
-                                <td className="w-1/3 px-2 py-1 text-gray-500 align-top">{toLabel(key)}</td>
-                                <td className="px-2 py-1 text-gray-700 align-top">{renderDatabaseValue(value)}</td>
-                              </tr>
-                            ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </>
-                )}
+                    </>
+                  );
+                })()}
               </div>
             </div>
           </div>

@@ -20,6 +20,8 @@ const customFactoriesRouter = require('./routes/customFactories');
 const componentsRouter = require('./routes/components');
 const componentSummariesRouter = require('./routes/componentSummaries');
 const canonicalRouter = require('./routes/canonical');
+const systemComponentsRouter = require('./routes/systemComponents');
+const referenceDataRouter = require('./routes/referenceData');
 const Session = require('./models/Session');
 const User = require('./models/User');
 const Diagram = require('./models/Diagram');
@@ -110,6 +112,8 @@ app.use('/api/custom-factories', customFactoriesRouter);
 app.use('/api/components', componentsRouter);
 app.use('/api/component-summaries', componentSummariesRouter);
 app.use('/api/canonical', canonicalRouter);
+app.use('/api/system-components', systemComponentsRouter);
+app.use('/api/reference', referenceDataRouter);
 const materializeRouter = require('./routes/materialize');
 app.use('/api/materialize', materializeRouter);
 

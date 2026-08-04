@@ -579,6 +579,10 @@ function isIgnoredMetadataColumn(columnName) {
   return ignoredPatterns.some((pattern) => pattern.test(normalized));
 }
 
+// Parses "FK_<TargetTab>[<TargetSubtab>].<ColumnName>" headers generically —
+// see server/services/FK-MAPPING-GUIDE.js for the full convention (Stage 1
+// parsing here; Stage 2 field-alias resolution lives per-target-subtab, e.g.
+// applicationReferenceLookup.js for System Components > Applications).
 function parseForeignKeyColumnHeader(header) {
   const trimmedHeader = getNormalizedText(header);
   if (!FK_COLUMN_PREFIX.test(trimmedHeader)) return null;
@@ -2840,9 +2844,37 @@ router.post('/upload', requireAdminWrite, handleSpreadsheetUpload, async (req, r
             'SVR_OS Qualifier',
           ];
           const SVR_LOC_COLUMN = 'SVR_LOC Qualifier';
-          const aggregateColumns = Array.from(new Set(uploadColumns
+          let aggregateColumns = Array.from(new Set(uploadColumns
             .map((column) => String(column || '').trim())
-            .filter((column) => /aggregate$/i.test(column))));
+            .filter((column) => /aggregat(?:e|or)$/i.test(column))));
+
+          // Some data types (e.g. a flat upload where every column happens to use
+          // the "... Component" suffix) have no explicit "... Aggregate" columns
+          // at all, which used to mean an empty summary screen. Fall back to
+          // auto-detecting categorical columns by cardinality — any column whose
+          // values repeat enough across rows to be worth a distribution tile —
+          // so every data type gets summaries regardless of its column naming.
+          if (!aggregateColumns.length) {
+            const distinctValuesByColumn = new Map(uploadColumns.map((column) => [column, new Set()]));
+            let cardinalityRowCount = 0;
+            for (const factory of uploadedFactories) {
+              for (const row of (factory.rows || [])) {
+                cardinalityRowCount++;
+                const vals = (row.values && typeof row.values === 'object') ? row.values : row;
+                for (const column of uploadColumns) {
+                  const rawVal = vals?.[column];
+                  const val = rawVal == null ? '' : String(rawVal).trim();
+                  if (val) distinctValuesByColumn.get(column).add(val);
+                }
+              }
+            }
+            const maxDistinct = Math.max(2, Math.min(25, Math.ceil(cardinalityRowCount * 0.3)));
+            aggregateColumns = uploadColumns.filter((column) => {
+              const distinct = distinctValuesByColumn.get(column).size;
+              return distinct >= 2 && distinct <= maxDistinct && distinct < cardinalityRowCount;
+            });
+          }
+
           const STREET_TOKENS = new Set([
             'ST', 'STREET', 'AVE', 'AV', 'AVENUE', 'RD', 'ROAD', 'DR', 'DRIVE', 'BLVD', 'BOULEVARD',
             'PKWY', 'PARKWAY', 'HWY', 'HIGHWAY', 'LN', 'LANE', 'CT', 'COURT', 'PL', 'PLACE', 'TER',

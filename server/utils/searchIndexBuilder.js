@@ -137,7 +137,10 @@ async function rebuildSearchIndex(neighborhoodName, options = {}) {
 
     function getRowName(row, rowValues = getRowValues(row)) {
       const componentKey = Object.keys(rowValues).find((key) => /(?:^|\s)component$/i.test(String(key).trim()));
-      return String(rowValues.name || row.name || row.primaryKey || (componentKey && rowValues[componentKey]) || 'unnamed').trim();
+      // Prefer the raw name/component column over row.primaryKey — primaryKey may be a
+      // composite (e.g. "name|serverId|appId") when a row's real uniqueness depends on
+      // what it's linked to, not just its own name, and that composite isn't meant for display.
+      return String(rowValues.name || row.name || (componentKey && rowValues[componentKey]) || row.primaryKey || 'unnamed').trim();
     }
 
     const LINEAGE_FIELD_ALIASES = new Map([

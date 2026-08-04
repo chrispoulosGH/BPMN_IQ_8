@@ -13,17 +13,37 @@ const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/bpmn_iq';
 function primaryKeyFromRow(row) {
   if (!row) return null;
   const values = row.values && typeof row.values === 'object' ? row.values : row;
-  // Support multiple possible shapes: { values: { name } } or { name }
-  if (values.name || values.Name) return values.name || values.Name;
-  const componentKey = Object.keys(values).find((key) => /(?:^|\s)component$/i.test(String(key).trim()));
-  if (componentKey && String(values[componentKey] || '').trim()) return String(values[componentKey]).trim();
-  if (row.name || row.Name) return row.name || row.Name;
-  // Fall back to row data before wrapper metadata such as owner/state.
-  for (const k of Object.keys(values)) {
-    const v = values[k];
-    if (typeof v === 'string' && v.trim()) return v.trim();
-  }
-  return null;
+
+  const baseKey = (() => {
+    // Support multiple possible shapes: { values: { name } } or { name }
+    if (values.name || values.Name) return String(values.name || values.Name).trim();
+    const componentKey = Object.keys(values).find((key) => /(?:^|\s)component$/i.test(String(key).trim()));
+    if (componentKey && String(values[componentKey] || '').trim()) return String(values[componentKey]).trim();
+    if (row.name || row.Name) return String(row.name || row.Name).trim();
+    // Fall back to row data before wrapper metadata such as owner/state.
+    for (const k of Object.keys(values)) {
+      const v = values[k];
+      if (typeof v === 'string' && v.trim()) return v.trim();
+    }
+    return null;
+  })();
+  if (!baseKey) return null;
+
+  // A row's real identity includes what it's linked to, not just its own name.
+  // Without this, rows that legitimately share a name (e.g. the same software
+  // title installed on many different servers) collapse into a single canonical
+  // doc during upsert, silently losing every linkage but the last one processed.
+  // FK_ columns are exactly a row's join keys, so fold their values into the
+  // primary key whenever present — this can only make the key MORE specific,
+  // never less, so it's safe for rows that were already uniquely named.
+  const fkValues = Object.keys(values)
+    .filter((key) => /^FK_/i.test(String(key).trim()))
+    .sort()
+    .map((key) => String(values[key] ?? '').trim())
+    .filter(Boolean);
+  if (!fkValues.length) return baseKey;
+
+  return [baseKey, ...fkValues].join('|');
 }
 
 function componentTypeFromRow(row, batch) {
@@ -99,7 +119,7 @@ function getMaterializationConfig(domain = 'component') {
   };
 }
 
-async function materializeFromBatches({ neighborhoodName, batchIds = null, batchSize = 500, domain = 'component' } = {}) {
+async function materializeFromBatches({ neighborhoodName, batchIds = null, batchSize = 500, domain = 'component', skipClear = false, skipPostProcess = false } = {}) {
   if (mongoose.connection.readyState === 0) {
     await mongoose.connect(MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true });
   }
@@ -110,22 +130,39 @@ async function materializeFromBatches({ neighborhoodName, batchIds = null, batch
   if (neighborhoodName) query.neighborhoodName = neighborhoodName;
   if (Array.isArray(batchIds) && batchIds.length) query._id = { $in: batchIds.map(id => (typeof id === 'string' ? new mongoose.Types.ObjectId(id) : id)) };
 
-  // Component/data load should reflect current spreadsheet truth for the neighborhood.
-  // Clear canonical docs in-scope before re-materializing from selected batch rows.
-  if (neighborhoodName) {
+  let totalProcessed = 0;
+  const batchCollectionNames = Array.isArray(config.batchCollectionNames) && config.batchCollectionNames.length
+    ? config.batchCollectionNames
+    : [config.batchCollectionName];
+
+  // Component/data load should reflect current spreadsheet truth — but only for the
+  // component/data TYPE(s) actually present in the batches being (re)materialized here.
+  // A neighborhood can hold several independently-uploaded types at once (e.g. under
+  // "System Components": Applications, Servers, Software, Databases); clearing by
+  // neighborhoodName alone would wipe every other type's canonical docs whenever just
+  // one type gets reloaded. Scope the clear to the batches' own componentType(s).
+  if (neighborhoodName && !skipClear) {
     try {
-      const deleted = await config.CanonicalModel.deleteMany({ neighborhoodName });
-      console.log(`[MATERIALIZER TRACE] Cleared canonical ${config.domain} docs before rematerialize`, { neighborhoodName, deleted: deleted?.deletedCount || 0 });
+      const typesInScope = new Set();
+      for (const batchCollectionName of batchCollectionNames) {
+        const types = await db.collection(batchCollectionName).distinct('componentType', query);
+        for (const type of types) {
+          const trimmed = String(type || '').trim();
+          if (trimmed) typesInScope.add(trimmed);
+        }
+      }
+
+      if (typesInScope.size) {
+        const deleted = await config.CanonicalModel.deleteMany({ neighborhoodName, componentType: { $in: [...typesInScope] } });
+        console.log(`[MATERIALIZER TRACE] Cleared canonical ${config.domain} docs before rematerialize`, { neighborhoodName, componentTypes: [...typesInScope], deleted: deleted?.deletedCount || 0 });
+      } else {
+        console.log(`[MATERIALIZER TRACE] Skipped clearing canonical ${config.domain} docs — no componentType found on batches in scope`, { neighborhoodName, query });
+      }
     } catch (err) {
       console.error('[MATERIALIZER] Failed clearing canonical docs before rematerialize:', err && err.message);
       throw err;
     }
   }
-
-  let totalProcessed = 0;
-  const batchCollectionNames = Array.isArray(config.batchCollectionNames) && config.batchCollectionNames.length
-    ? config.batchCollectionNames
-    : [config.batchCollectionName];
 
   const matStart = Date.now();
   let batchDocCount = 0;
@@ -175,14 +212,19 @@ async function materializeFromBatches({ neighborhoodName, batchIds = null, batch
   console.log(`[MATERIALIZER TRACE] bulkWrite phase done: ${batchDocCount} batch docs, ${totalProcessed} rows in ${Date.now() - matStart}ms`);
   const result = { processed: totalProcessed };
 
-  // Automatically run postProcess (rebuild ComponentSearchIndex) when neighborhoodName provided
-  try {
-    console.log('[MATERIALIZER TRACE] Starting automatic postProcess...');
-    const ppStart = Date.now();
-    await materializeFromBatches.postProcess({ neighborhoodName, domain });
-    console.log(`[MATERIALIZER TRACE] Automatic postProcess done in ${Date.now() - ppStart}ms`);
-  } catch (err) {
-    console.error('[MATERIALIZER] automatic postProcess failed:', err && err.message);
+  // Automatically run postProcess (rebuild ComponentSearchIndex) when neighborhoodName provided.
+  // Callers processing one logical upload as several chunked calls (to keep each Mongo
+  // cursor short-lived) should pass skipPostProcess on all but the last chunk, then invoke
+  // materializeFromBatches.postProcess() once themselves after the final chunk.
+  if (!skipPostProcess) {
+    try {
+      console.log('[MATERIALIZER TRACE] Starting automatic postProcess...');
+      const ppStart = Date.now();
+      await materializeFromBatches.postProcess({ neighborhoodName, domain });
+      console.log(`[MATERIALIZER TRACE] Automatic postProcess done in ${Date.now() - ppStart}ms`);
+    } catch (err) {
+      console.error('[MATERIALIZER] automatic postProcess failed:', err && err.message);
+    }
   }
 
   return result;

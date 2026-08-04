@@ -230,6 +230,24 @@ export const getDatabase = (id: string): Promise<DatabaseItem> =>
 export const deleteDatabase = (id: string): Promise<{ success: boolean }> =>
   api.delete(`/databases/${encodeURIComponent(id)}`).then((r) => r.data);
 
+// ── System Components — generic FK linkage (data-driven, any type) ────
+export interface LinkedSystemComponentRecord {
+  id: string;
+  name: string;
+  values: Record<string, unknown>;
+}
+
+export const getSystemComponentLinkedTypes = (target: string = 'Applications'): Promise<string[]> =>
+  api.get('/system-components/linked-types', { params: { target } }).then((r) => r.data.types || []);
+
+export const getSystemComponentRecordsLinkedToApplication = (
+  componentType: string,
+  correlationId: string,
+): Promise<LinkedSystemComponentRecord[]> =>
+  api
+    .get(`/system-components/${encodeURIComponent(componentType)}/linked-to-application/${encodeURIComponent(correlationId)}`)
+    .then((r) => r.data);
+
 // ── Custom Factories / Neighborhoods ──────────────────────
 export const getFactoryNeighborhoods = (): Promise<FactoryNeighborhoodSummary[]> =>
   api.get('/custom-factories/neighborhoods').then((r) => r.data);

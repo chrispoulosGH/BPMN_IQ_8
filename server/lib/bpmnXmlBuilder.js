@@ -221,6 +221,23 @@ function buildBpmnXmlForFlow({ flowName, breadcrumb, tasks }) {
     )),
   ].join('\n');
 
+  // ── diagram title annotation ───────────────────────────────────────────
+  // A floating (unassociated) text annotation baked into the canvas itself,
+  // so the diagram's name travels with the XML (visible even if exported or
+  // opened in another BPMN tool) rather than only existing as HTML chrome
+  // rendered around the canvas. Styled bold via the stable element id
+  // (see the `g[data-element-id="TextAnnotation_DiagramTitle"] text` rule
+  // in client/src/index.css).
+  const titleAnnotationId = toId('TextAnnotation', 'DiagramTitle', usedIds);
+  const titleWidth = Math.min(TITLE_WIDTH_MAX, Math.max(TITLE_WIDTH_MIN, flowName.length * 9 + 40));
+  const titleX = Math.round(LANE_X + Math.max(0, (diagramWidth - titleWidth) / 2));
+  const titleY = 8;
+  const titleAnnotationXml = `    <bpmn:textAnnotation id="${titleAnnotationId}">\n      <bpmn:text>${escapeXml(flowName)}</bpmn:text>\n    </bpmn:textAnnotation>`;
+  const titleAnnotationShapeXml =
+    `      <bpmndi:BPMNShape id="${titleAnnotationId}_di" bpmnElement="${titleAnnotationId}">\n` +
+    `        <dc:Bounds x="${titleX}" y="${titleY}" width="${Math.round(titleWidth)}" height="${TITLE_HEIGHT}"/>\n` +
+    `      </bpmndi:BPMNShape>`;
+
   const laneShapesXml = laneOrder.map(({ laneId }) => (
     `      <bpmndi:BPMNShape id="${laneId}_di" bpmnElement="${laneId}" isHorizontal="true" stroke="gray">\n` +
     `        <dc:Bounds x="${LANE_X}" y="${laneY(laneId)}" width="${diagramWidth}" height="${LANE_HEIGHT}"/>\n` +
@@ -290,9 +307,11 @@ ${laneSetXml}
 ${flowNodesXml}
 ${sequenceFlowsXml}
 ${annotationsXml}
+${titleAnnotationXml}
   </bpmn:process>
   <bpmndi:BPMNDiagram id="BPMNDiagram_${processId}" name="${escapeXml(diagramName)}">
     <bpmndi:BPMNPlane id="BPMNPlane_${processId}" bpmnElement="${processId}">
+${titleAnnotationShapeXml}
 ${laneShapesXml}
 ${flowNodeShapesXml}
 ${sequenceFlowEdgesXml}

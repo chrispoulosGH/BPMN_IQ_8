@@ -1,38 +1,12 @@
 const express = require('express');
 const DataSearchIndex = require('../models/DataSearchIndex');
 const { getNeighborhoodName } = require('../utils/neighborhoodScope');
+const { findLinkedApplicationsFromFieldByValue } = require('../utils/applicationReferenceLookup');
 
 const router = express.Router();
 const SYSTEM_COMPONENTS_NEIGHBORHOOD = 'System Components';
 
 const DATABASE_COMPONENT_REGEX = /database/i;
-const APP_FK_FIELDS = [
-  'FK_DATA[Applications].correlation_id',
-  'FK_Data[Applications].CORRELATION_ID',
-  'FK_DATA[Application].correlation_id',
-  'FK_Data[Application].CORRELATION_ID',
-  'fk_data_applications_correlation_id',
-  'app_correlation_id',
-  'application_correlation_id',
-];
-
-const APP_ACRONYM_FIELDS = [
-  'FK_DATA[Applications].application_acronym',
-  'FK_Data[Applications].X_ATT2_ITAP_U_APPL_ACRON_NM_Qualifier',
-  'APP_ACRON_NM Qualifier',
-  'app_x_att2_itap_u_appl_acron_nm Qualifier',
-  'application_acronym',
-  'app_acronym',
-];
-
-const APP_NAME_FIELDS = [
-  'FK_DATA[Applications].application_component',
-  'FK_Data[Applications].Application Component',
-  'APP_NM Aggregate',
-  'app_name Aggregate',
-  'application_name',
-  'app_name',
-];
 
 const DB_NAME_FIELDS = ['database_name', 'instance_name', 'name'];
 const DB_INSTANCE_FIELDS = ['instance_name', 'instance'];
@@ -78,12 +52,7 @@ function valueFromFieldByValue(fieldByValue, aliases) {
 }
 
 function linkedApplicationsFromFieldByValue(fieldByValue) {
-  const correlationId = valueFromFieldByValue(fieldByValue, APP_FK_FIELDS);
-  const acronym = valueFromFieldByValue(fieldByValue, APP_ACRONYM_FIELDS);
-  const name = valueFromFieldByValue(fieldByValue, APP_NAME_FIELDS);
-
-  if (!correlationId && !acronym && !name) return [];
-  return [{ correlationId: correlationId || null, acronym: acronym || null, name: name || null }];
+  return findLinkedApplicationsFromFieldByValue(fieldByValue);
 }
 
 function mapIndexDocToDatabaseItem(doc) {

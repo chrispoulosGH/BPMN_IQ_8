@@ -5,6 +5,13 @@ import { FolderOutlined, TableOutlined, SearchOutlined, CloseOutlined, BarsOutli
 
 import { getCustomFactories, getComponentHierarchies, getCustomFactory, getCustomFactoryForModel, getApplicationByCorrelationId, getApplicationByName, getFactoryNeighborhoods, getLeafComponent, getCanonicalFactories } from '../api';
 import type { CustomFactory, CustomFactoryRow, HierarchyPath } from '../types';
+import { useLinkedSystemComponents } from '../hooks/useLinkedSystemComponents';
+import LinkedRecordsModal from './LinkedRecordsModal';
+
+// Applications live in the "System Components" reference catalog regardless
+// of which model's tree a node is being viewed from — matches
+// REFERENCE_DATA_NEIGHBORHOOD_NAME in App.tsx.
+const SYSTEM_COMPONENTS_NEIGHBORHOOD = 'System Components';
 
 interface ComponentsViewerProps {
   neighborhoodName: string;
@@ -22,6 +29,8 @@ export default function ComponentsViewer({
   onApplicationLinkClick,
 }: ComponentsViewerProps) {
   const { message } = AntApp.useApp();
+  const { linkedComponentTypes, modalState: linkedRecordsModalState, loadLinkedRecords, closeModal: closeLinkedRecordsModal } = useLinkedSystemComponents('Applications');
+  const [appContextMenu, setAppContextMenu] = useState<{ x: number; y: number; rowName: string } | null>(null);
   const [hierarchies, setHierarchies] = useState<HierarchyPath[]>([]);
   const [models, setModels] = useState<string[]>([]);
   const [activeModelName, setActiveModelName] = useState<string>(neighborhoodName || '');
@@ -460,6 +469,38 @@ export default function ComponentsViewer({
     setViewMode('table');
   }, [activeTabKey]);
 
+  // Close the application right-click menu on outside click / Escape.
+  useEffect(() => {
+    if (!appContextMenu) return;
+    const closeMenu = (e?: KeyboardEvent) => {
+      if (!e || e.key === 'Escape') setAppContextMenu(null);
+    };
+    const handleClick = () => setAppContextMenu(null);
+    document.addEventListener('mousedown', handleClick);
+    document.addEventListener('keydown', closeMenu);
+    return () => {
+      document.removeEventListener('mousedown', handleClick);
+      document.removeEventListener('keydown', closeMenu);
+    };
+  }, [appContextMenu]);
+
+  // Resolve the right-clicked node's rowName against the System Components
+  // Applications catalog, then load whatever componentType the user picked
+  // from the (data-driven) menu.
+  const handleAppContextMenuSelect = async (componentType: string, rowName: string) => {
+    setAppContextMenu(null);
+    let correlationId: string | null = null;
+    let displayName = rowName;
+    try {
+      const appData = await getApplicationByName(rowName, SYSTEM_COMPONENTS_NEIGHBORHOOD);
+      correlationId = appData?.correlationId || null;
+      displayName = appData?.acronym || appData?.name || rowName;
+    } catch {
+      // No match in the System Components catalog — loadLinkedRecords will show an empty list.
+    }
+    void loadLinkedRecords(componentType, displayName, correlationId);
+  };
+
   // Helper to extract all keys from tree data recursively
   const getAllTreeKeys = (nodes: DataNode[]): string[] => {
     const keys: string[] = [];
@@ -517,8 +558,19 @@ export default function ComponentsViewer({
           const textColor = textColors[depth % textColors.length];
 
           const badgeColor = getColorForModel(activeModelName);
+          // Same "is this an Application node" check already used elsewhere in
+          // this file (handleNodeSelect) — matches singular/plural, case-insensitive.
+          const isApplicationNode = /^applications?$/i.test(String(node.componentName || '').trim());
           const nodeTitle = (
-            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', width: '100%', padding: '4px 8px' }}>
+            <div
+              style={{ display: 'flex', gap: '12px', alignItems: 'center', width: '100%', padding: '4px 8px' }}
+              onContextMenu={isApplicationNode ? (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setAppContextMenu({ x: e.clientX, y: e.clientY, rowName: node.rowName });
+              } : undefined}
+              title={isApplicationNode ? 'Right-click for linked System Components (Servers, Software, ...)' : undefined}
+            >
               <div
                 style={{
                   minWidth: '120px',
@@ -1334,6 +1386,7 @@ export default function ComponentsViewer({
             
             const bgColor = bgColors[p.depth % bgColors.length];
             const textColor = textColors[p.depth % textColors.length];
+            const isApplicationNode = /^applications?$/i.test(String(label || '').trim());
 
             return (
               <button
@@ -1361,6 +1414,12 @@ export default function ComponentsViewer({
                     );
                   }
                 }}
+                onContextMenu={isApplicationNode ? (e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setAppContextMenu({ x: e.clientX, y: e.clientY, rowName: String(nodeData?.rowName || '') });
+                } : undefined}
+                title={isApplicationNode ? 'Right-click for linked System Components (Servers, Software, ...)' : undefined}
                 style={{
                   position: 'absolute',
                   left: pos.x,
@@ -1697,6 +1756,47 @@ export default function ComponentsViewer({
           )}
         </Spin>
       </Drawer>
+
+      {appContextMenu && (
+        <div
+          style={{
+            position: 'fixed',
+            left: appContextMenu.x,
+            top: appContextMenu.y,
+            zIndex: 100000,
+            minWidth: 180,
+            background: '#fff',
+            border: '1px solid #d9d9d9',
+            borderRadius: 8,
+            boxShadow: '0 6px 16px rgba(0,0,0,.15)',
+            padding: 6,
+            fontFamily: "'IBM Plex Sans', Arial, sans-serif",
+            fontSize: 12,
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <div style={{ padding: '6px 8px', color: '#6b7280', borderBottom: '1px solid #f0f0f0', marginBottom: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {appContextMenu.rowName}
+          </div>
+          {linkedComponentTypes.length === 0 ? (
+            <div style={{ padding: '6px 8px', color: '#9ca3af' }}>No linked System Components data</div>
+          ) : (
+            linkedComponentTypes.map((componentType) => (
+              <div
+                key={componentType}
+                style={{ padding: '6px 8px', borderRadius: 6, cursor: 'pointer' }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = '#f0f5ff'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                onClick={() => handleAppContextMenuSelect(componentType, appContextMenu.rowName)}
+              >
+                {componentType}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
+      <LinkedRecordsModal state={linkedRecordsModalState} onClose={closeLinkedRecordsModal} />
     </Card>
   );
 }

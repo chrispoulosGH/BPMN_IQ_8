@@ -13,3 +13,7 @@ Thumbs.db
 .DS_Store
 client/node_modules/
 server/node_modules/
+
+# Local tool state / secrets
+.claude/
+cookies_fktest.txt

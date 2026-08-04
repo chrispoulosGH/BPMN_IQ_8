@@ -1030,9 +1030,11 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   }, [neighborhoodTabs]);
 
   // Build the list of Data subtabs from the summary list, then lazily load rows per active type.
+  // Visibility is derived from what's actually been uploaded (batchCount > 0 below) rather
+  // than a fixed whitelist, so any data type — not just the three original ones — shows up
+  // once it has data. DATA_TAB_KEYS still seeds the default display order for those three.
   const visibleDataTabs = useMemo(() => {
     const entries = dataTypeSummaries
-      .filter((summary) => DATA_TAB_KEYS.includes(summary.key))
       .map((summary) => {
         const key = summary.key;
         const groupFactories = dataFactoriesByType[key] || [];
@@ -1164,21 +1166,22 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
 
   const loadDataTypeSummaries = useCallback(async () => {
     try {
-      const summarySources = [REFERENCE_DATA_NEIGHBORHOOD_NAME, activeNeighborhoodTab || DEFAULT_NEIGHBORHOOD_NAME].filter((value, index, all) => all.indexOf(value) === index);
+      // System Components subtabs should only reflect System Components' own
+      // uploaded data types — not whatever model happens to be active elsewhere
+      // in the app (a model's own component taxonomy, e.g. Business Capability/
+      // Domain/Journey/Task, is unrelated and must not leak in here).
+      const types = await getDataFactoryTypes(REFERENCE_DATA_NEIGHBORHOOD_NAME);
       const merged = new Map<string, { key: string; dataType: string; batchCount: number }>();
-      for (const neighborhoodName of summarySources) {
-        const types = await getDataFactoryTypes(neighborhoodName);
-        for (const entry of types) {
-          const rawType = String(entry?.dataType || '').trim();
-          if (!rawType) continue;
-          const key = getDataTypeTabKey(rawType);
-          const existing = merged.get(key);
-          merged.set(key, {
-            key,
-            dataType: existing?.dataType || rawType,
-            batchCount: (existing?.batchCount || 0) + Number(entry?.batchCount || 0),
-          });
-        }
+      for (const entry of types) {
+        const rawType = String(entry?.dataType || '').trim();
+        if (!rawType) continue;
+        const key = getDataTypeTabKey(rawType);
+        const existing = merged.get(key);
+        merged.set(key, {
+          key,
+          dataType: existing?.dataType || rawType,
+          batchCount: (existing?.batchCount || 0) + Number(entry?.batchCount || 0),
+        });
       }
       setDataTypeSummaries(Array.from(merged.values()));
     } catch {
@@ -2907,7 +2910,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
       label: dataTabLabel(componentType, <span>{getDataTypeDisplayName(componentType)}</span>),
       children: renderScrollablePane(
         <SystemComponentSummary
-          dataType={getDataTypeDisplayName(componentType)}
+          dataType={tab.dataType}
           batchCount={tab.batchCount}
           dataRows={loadedFactories.flatMap((factory) => factory.rows || [])}
           dataColumns={tab.dataColumns}

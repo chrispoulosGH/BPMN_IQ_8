@@ -1,11 +1,22 @@
-# start.ps1 — Start BPMN IQ 2.0 (Server + Client)
+# start.ps1 - Start BPMN IQ 2.0 (Server + Client)
 $ErrorActionPreference = "Stop"
 
 Write-Host "=== BPMN IQ 2.0 Startup ===" -ForegroundColor Cyan
-Write-Host "[OK] Using MongoDB connection on port 27018." -ForegroundColor Green
 
 $env:NODE_OPTIONS = ""
-$env:MONGO_URI = "mongodb://127.0.0.1:27018/bpmn_iq"
+
+# Respect server/.env's MONGO_URI instead of forcing local Mongo - this script no
+# longer sets $env:MONGO_URI itself, since a pre-set env var takes precedence over
+# .env and would silently override whatever connection the user configured there.
+$envFile = Join-Path $PSScriptRoot "server\.env"
+$mongoUriDisplay = "server/.env (not found - falls back to mongodb://127.0.0.1:27018/bpmn_iq)"
+if (Test-Path $envFile) {
+	$mongoLine = Get-Content $envFile | Where-Object { $_ -match '^\s*MONGO_URI\s*=' } | Select-Object -First 1
+	if ($mongoLine) {
+		$mongoUriDisplay = ($mongoLine -replace '^\s*MONGO_URI\s*=\s*', '').Trim()
+	}
+}
+Write-Host "[OK] Using MongoDB connection from $mongoUriDisplay" -ForegroundColor Green
 
 function Stop-ProcessOnPort {
 	param(
