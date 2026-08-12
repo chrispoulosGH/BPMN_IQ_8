@@ -468,6 +468,7 @@ export interface ComponentHierarchy {
   rowName: string;
   rowId?: string;
   componentId?: string;
+  qualifiers?: Record<string, string>;
 }
 
 export interface HierarchyPath {

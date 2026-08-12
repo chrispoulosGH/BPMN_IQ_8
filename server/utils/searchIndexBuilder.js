@@ -143,6 +143,28 @@ async function rebuildSearchIndex(neighborhoodName, options = {}) {
       return String(rowValues.name || row.name || (componentKey && rowValues[componentKey]) || row.primaryKey || 'unnamed').trim();
     }
 
+    // Every uploaded column that isn't the row's own identity ("*Component" header,
+    // name/Name), an FK_ link, or internal bookkeeping (__lineage, dataType, ...) is a
+    // descriptive attribute of that row — shown in tree views as small qualifier text
+    // inside the component box. Generic/data-driven so it works for any component type's
+    // column set, not just a hardcoded list.
+    function getQualifierValues(rowValues) {
+      const qualifiers = {};
+      for (const [key, rawValue] of Object.entries(rowValues || {})) {
+        const trimmedKey = String(key || '').trim();
+        if (!trimmedKey) continue;
+        if (/^(name)$/i.test(trimmedKey)) continue;
+        if (/(?:^|\s)component$/i.test(trimmedKey)) continue;
+        if (/^FK_/i.test(trimmedKey)) continue;
+        if (/^__/.test(trimmedKey)) continue;
+        if (/^(dataType|modelName|primaryKey)$/i.test(trimmedKey)) continue;
+        const value = rawValue == null ? '' : String(rawValue).trim();
+        if (!value) continue;
+        qualifiers[trimmedKey] = value;
+      }
+      return qualifiers;
+    }
+
     const LINEAGE_FIELD_ALIASES = new Map([
       ['lineofbusiness', 'lineOfBusiness'],
       ['lob', 'lineOfBusiness'],
@@ -205,6 +227,7 @@ async function rebuildSearchIndex(neighborhoodName, options = {}) {
     const buildAllHierarchyPaths = async (component, row, visitedRowKeys = new Set(), forcedLineageVariant = null) => {
       const rowValues = getRowValues(row);
       const rowName = getRowName(row, rowValues);
+      const qualifiers = getQualifierValues(rowValues);
       const currentRowKey = `${component.name}:${String(row._id)}`;
       const activeVariant = forcedLineageVariant || null;
       const cacheKey = `${currentRowKey}::${activeVariant ? JSON.stringify(activeVariant) : 'none'}`;
@@ -215,14 +238,14 @@ async function rebuildSearchIndex(neighborhoodName, options = {}) {
 
       // Prevent infinite loops
       if (visitedRowKeys.has(currentRowKey)) {
-        return [[{ componentName: component.name, componentId: String(component._id), rowName, rowId: String(row._id) }]];
+        return [[{ componentName: component.name, componentId: String(component._id), rowName, rowId: String(row._id), qualifiers }]];
       }
 
       // Use canonical parentRefs when available (preferred), otherwise fall back to parentName
       const parentRefs = Array.isArray(row.parentRefs) && row.parentRefs.length > 0 ? row.parentRefs.map(String) : [];
 
       // Helper to produce a single-node fallback path
-      const singleNode = [{ componentName: component.name, componentId: String(component._id), rowName, rowId: String(row._id) }];
+      const singleNode = [{ componentName: component.name, componentId: String(component._id), rowName, rowId: String(row._id), qualifiers }];
 
       if (parentRefs.length === 0) {
         // No explicit parentRefs - fall back to legacy parentName parsing
@@ -269,7 +292,8 @@ async function rebuildSearchIndex(neighborhoodName, options = {}) {
                 componentName: component.name,
                 componentId: String(component._id),
                 rowName,
-                rowId: String(row._id)
+                rowId: String(row._id),
+                qualifiers
               }];
               hierarchies.push(fullPath);
             });
@@ -327,7 +351,8 @@ async function rebuildSearchIndex(neighborhoodName, options = {}) {
               componentName: component.name,
               componentId: String(component._id),
               rowName,
-              rowId: String(row._id)
+              rowId: String(row._id),
+              qualifiers
             }];
             hierarchies.push(fullPath);
           });
@@ -400,6 +425,7 @@ async function rebuildSearchIndex(neighborhoodName, options = {}) {
             componentId: mongoose.isValidObjectId(node.componentId) ? node.componentId : null,
             rowName: node.rowName,
             rowId: mongoose.isValidObjectId(node.rowId) ? node.rowId : null,
+            qualifiers: node.qualifiers || {},
           }))), // Structured hierarchy data with component names
           dataType: rowValues.dataType || row.dataType || dataType,
           updatedAt: new Date(),

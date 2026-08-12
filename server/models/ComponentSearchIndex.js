@@ -7,6 +7,10 @@ const hierarchyNodeSchema = new mongoose.Schema(
     componentId: { type: mongoose.Schema.Types.ObjectId },
     rowName: { type: String, required: true },
     rowId: { type: mongoose.Schema.Types.ObjectId },
+    // Every non-identity, non-FK column on this row (e.g. "actor_qualifier",
+    // "bpmn_task_qualifier") — shown as small attribute text inside the
+    // component's tree-view box. See getQualifierValues in searchIndexBuilder.js.
+    qualifiers: { type: mongoose.Schema.Types.Mixed, default: {} },
   },
   { _id: false }
 );

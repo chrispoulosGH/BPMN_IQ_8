@@ -3,15 +3,90 @@ import { App as AntApp, Card, Space, Spin, Tree, Button, Segmented, Tabs, Empty,
 import type { DataNode } from 'antd/es/tree';
 import { FolderOutlined, TableOutlined, SearchOutlined, CloseOutlined, BarsOutlined, UnorderedListOutlined } from '@ant-design/icons';
 
-import { getCustomFactories, getComponentHierarchies, getCustomFactory, getCustomFactoryForModel, getApplicationByCorrelationId, getApplicationByName, getFactoryNeighborhoods, getLeafComponent, getCanonicalFactories } from '../api';
+import { getCustomFactories, getComponentHierarchies, getCustomFactory, getCustomFactoryForModel, getApplicationByCorrelationId, getApplicationByName, getFactoryNeighborhoods, getLeafComponent, getCanonicalFactories, getSystemComponentLinkedTypes, getSystemComponentRecordsLinkedToApplication } from '../api';
+import type { LinkedSystemComponentRecord } from '../api';
 import type { CustomFactory, CustomFactoryRow, HierarchyPath } from '../types';
-import { useLinkedSystemComponents } from '../hooks/useLinkedSystemComponents';
-import LinkedRecordsModal from './LinkedRecordsModal';
 
 // Applications live in the "System Components" reference catalog regardless
 // of which model's tree a node is being viewed from — matches
 // REFERENCE_DATA_NEIGHBORHOOD_NAME in App.tsx.
 const SYSTEM_COMPONENTS_NEIGHBORHOOD = 'System Components';
+
+// "actor_qualifier" -> "Actor", "bpmn_task_type_qualifier" -> "Bpmn Task Type"
+const qualifierLabel = (key: string) =>
+  key
+    .replace(/[_\s]*qualifier$/i, '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/(?:^|\s)\S/g, (ch) => ch.toUpperCase())
+    .trim();
+
+// Field-value formatting for a linked System Component record's raw values —
+// same rules previously used by the (now-removed) LinkedRecordsModal popup.
+const toLabel = (key: string) =>
+  key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .replace(/^./, (ch) => ch.toUpperCase());
+
+const isKeyLikeString = (value: string): boolean => {
+  const text = value.trim();
+  if (!text) return false;
+  const uuidLike = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(text);
+  const mongoIdLike = /^[0-9a-f]{24}$/i.test(text);
+  const longOpaqueToken = /^[A-Za-z0-9_-]{20,}$/i.test(text) && /\d/.test(text) && /[A-Za-z]/.test(text);
+  return uuidLike || mongoIdLike || longOpaqueToken;
+};
+
+const renderFieldValue = (value: unknown) => {
+  if (value === null || value === undefined || value === '') return '—';
+  if (Array.isArray(value)) {
+    if (!value.length) return '—';
+    return <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{JSON.stringify(value, null, 2)}</pre>;
+  }
+  if (typeof value === 'object') {
+    return <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{JSON.stringify(value, null, 2)}</pre>;
+  }
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  return String(value);
+};
+
+// Colors for synthetic "linked System Component" tree nodes — deliberately
+// distinct from the hierarchy's own depth-cycled palette, so the linked-data
+// branch under an Application reads as a different kind of thing.
+const LINK_TYPE_BG = '#FEF3C7';
+const LINK_TYPE_TEXT = '#B45309';
+const LINK_RECORD_BG = '#ECFDF5';
+const LINK_RECORD_TEXT = '#0891B2';
+
+const buildBadgeNodeTitle = (badge: string, label: string, bg: string, color: string) => (
+  <div style={{ display: 'flex', gap: '12px', alignItems: 'center', width: '100%', padding: '4px 8px' }}>
+    <div
+      style={{
+        minWidth: '120px',
+        maxWidth: '120px',
+        textAlign: 'left',
+        color,
+        fontSize: '12px',
+        fontWeight: 600,
+        textTransform: 'uppercase',
+        letterSpacing: '0.5px',
+        padding: '4px 8px',
+        backgroundColor: bg,
+        borderRadius: '4px',
+        flexShrink: 0,
+      }}
+    >
+      {badge}
+    </div>
+    <div style={{ fontSize: '13px', color: '#1E293B', fontWeight: 500, flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <div style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</div>
+    </div>
+  </div>
+);
+
+const buildPlaceholderNodeTitle = (label: string) => (
+  <div style={{ padding: '4px 20px', fontSize: '12px', color: '#9CA3AF', fontStyle: 'italic' }}>{label}</div>
+);
 
 interface ComponentsViewerProps {
   neighborhoodName: string;
@@ -29,8 +104,7 @@ export default function ComponentsViewer({
   onApplicationLinkClick,
 }: ComponentsViewerProps) {
   const { message } = AntApp.useApp();
-  const { linkedComponentTypes, modalState: linkedRecordsModalState, loadLinkedRecords, closeModal: closeLinkedRecordsModal } = useLinkedSystemComponents('Applications');
-  const [appContextMenu, setAppContextMenu] = useState<{ x: number; y: number; rowName: string } | null>(null);
+  const [selectedSystemComponentRecord, setSelectedSystemComponentRecord] = useState<LinkedSystemComponentRecord | null>(null);
   const [hierarchies, setHierarchies] = useState<HierarchyPath[]>([]);
   const [models, setModels] = useState<string[]>([]);
   const [activeModelName, setActiveModelName] = useState<string>(neighborhoodName || '');
@@ -43,6 +117,7 @@ export default function ComponentsViewer({
   const [selectedNodeKey, setSelectedNodeKey] = useState<React.Key | null>(null);
   const [searchHitNodeKey, setSearchHitNodeKey] = useState<React.Key | null>(null);
   const [selectedComponent, setSelectedComponent] = useState<CustomFactory | null>(null);
+  const [selectedNodeQualifiers, setSelectedNodeQualifiers] = useState<Record<string, string>>({});
   const [showMetadataDrawer, setShowMetadataDrawer] = useState(false);
   const [loadingMetadata, setLoadingMetadata] = useState(false);
   const [activeTabKey, setActiveTabKey] = useState<string | undefined>(undefined);
@@ -55,10 +130,15 @@ export default function ComponentsViewer({
   const deferredSearchText = useDeferredValue(searchText);
   const selectedNodeRef = useRef<HTMLDivElement>(null);
   const horizontalTreeContainerRef = useRef<HTMLDivElement>(null);
-  const horizontalTreeNodeRefMap = useRef<Map<React.Key, HTMLButtonElement>>(new Map());
+  const horizontalTreeNodeRefMap = useRef<Map<React.Key, HTMLElement>>(new Map());
   const pendingHorizontalRevealKeyRef = useRef<React.Key | null>(null);
   const horizontalPanStateRef = useRef<{ pointerId: number; startX: number; startY: number; startScrollLeft: number; startScrollTop: number; moved: boolean; } | null>(null);
   const [isHorizontalPanning, setIsHorizontalPanning] = useState(false);
+  // Tracks which tree nodes have already had their linked-System-Components children
+  // fetched, so re-expanding a node doesn't re-fetch (and an empty result isn't
+  // mistaken for "not yet loaded").
+  const loadedNodeKeysRef = useRef<Set<React.Key>>(new Set());
+  const linkedApplicationTypesRef = useRef<string[] | null>(null);
 
   const renderHighlightedText = (text: string, query: string) => {
     const safeText = String(text || '');
@@ -317,6 +397,8 @@ export default function ComponentsViewer({
 
     if (!nodeKey) {
       setShowMetadataDrawer(false);
+      setSelectedNodeQualifiers({});
+      setSelectedSystemComponentRecord(null);
       return;
     }
 
@@ -333,6 +415,34 @@ export default function ComponentsViewer({
     };
 
     const selectedNodeInfo = findNodeByKey(treeData, nodeKey);
+    setSelectedNodeQualifiers(selectedNodeInfo?.qualifiers || {});
+
+    // Clicking an Application (or a linked-type node under one) both selects it and
+    // reveals its linked System Components — driven explicitly here rather than via
+    // AntD's built-in expandAction="click", which raced against our async treeData
+    // update and made the node snap back to collapsed right after loading.
+    if (selectedNodeInfo?.isApplicationNode || selectedNodeInfo?.isSystemComponentTypeNode) {
+      if (loadedNodeKeysRef.current.has(nodeKey)) {
+        // Already loaded — a click now just toggles expand/collapse like any other node.
+        setExpandedKeys((prev) => (prev.includes(nodeKey) ? prev.filter((k) => k !== nodeKey) : [...prev, nodeKey]));
+      } else {
+        const children = await loadChildrenForNode(nodeKey, selectedNodeInfo);
+        if (children) setTreeData((prev) => setNodeChildren(prev, nodeKey, children));
+        setExpandedKeys((prev) => (prev.includes(nodeKey) ? prev : [...prev, nodeKey]));
+      }
+    }
+
+    // A linked System Component record (e.g. a specific server or software install
+    // under an Application) — populate the right column with its raw field values
+    // instead of trying to resolve it as a model-hierarchy component.
+    if (selectedNodeInfo?.isSystemComponentRecord && selectedNodeInfo.record) {
+      setSelectedSystemComponentRecord(selectedNodeInfo.record);
+      setSelectedComponent(null);
+      setShowMetadataDrawer(true);
+      return;
+    }
+    setSelectedSystemComponentRecord(null);
+
     const componentId = selectedNodeInfo?.componentId ? String(selectedNodeInfo.componentId) : undefined;
 
     if (componentId) {
@@ -469,38 +579,6 @@ export default function ComponentsViewer({
     setViewMode('table');
   }, [activeTabKey]);
 
-  // Close the application right-click menu on outside click / Escape.
-  useEffect(() => {
-    if (!appContextMenu) return;
-    const closeMenu = (e?: KeyboardEvent) => {
-      if (!e || e.key === 'Escape') setAppContextMenu(null);
-    };
-    const handleClick = () => setAppContextMenu(null);
-    document.addEventListener('mousedown', handleClick);
-    document.addEventListener('keydown', closeMenu);
-    return () => {
-      document.removeEventListener('mousedown', handleClick);
-      document.removeEventListener('keydown', closeMenu);
-    };
-  }, [appContextMenu]);
-
-  // Resolve the right-clicked node's rowName against the System Components
-  // Applications catalog, then load whatever componentType the user picked
-  // from the (data-driven) menu.
-  const handleAppContextMenuSelect = async (componentType: string, rowName: string) => {
-    setAppContextMenu(null);
-    let correlationId: string | null = null;
-    let displayName = rowName;
-    try {
-      const appData = await getApplicationByName(rowName, SYSTEM_COMPONENTS_NEIGHBORHOOD);
-      correlationId = appData?.correlationId || null;
-      displayName = appData?.acronym || appData?.name || rowName;
-    } catch {
-      // No match in the System Components catalog — loadLinkedRecords will show an empty list.
-    }
-    void loadLinkedRecords(componentType, displayName, correlationId);
-  };
-
   // Helper to extract all keys from tree data recursively
   const getAllTreeKeys = (nodes: DataNode[]): string[] => {
     const keys: string[] = [];
@@ -515,7 +593,7 @@ export default function ComponentsViewer({
   };
 
   // Build hierarchical tree from component hierarchies with ModelCatalog styling
-  const treeData = useMemo<DataNode[]>(() => {
+  const baseTreeData = useMemo<DataNode[]>(() => {
     if (hierarchies.length === 0) {
       console.log(`[TreeBuilder] No hierarchies to render for ${activeModelName}`);
       return [];
@@ -558,19 +636,11 @@ export default function ComponentsViewer({
           const textColor = textColors[depth % textColors.length];
 
           const badgeColor = getColorForModel(activeModelName);
-          // Same "is this an Application node" check already used elsewhere in
-          // this file (handleNodeSelect) — matches singular/plural, case-insensitive.
+          // Same "is this an Application node" check used to decide whether this node
+          // should lazily expand into linked System Components (Servers, Software, ...).
           const isApplicationNode = /^applications?$/i.test(String(node.componentName || '').trim());
           const nodeTitle = (
-            <div
-              style={{ display: 'flex', gap: '12px', alignItems: 'center', width: '100%', padding: '4px 8px' }}
-              onContextMenu={isApplicationNode ? (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                setAppContextMenu({ x: e.clientX, y: e.clientY, rowName: node.rowName });
-              } : undefined}
-              title={isApplicationNode ? 'Right-click for linked System Components (Servers, Software, ...)' : undefined}
-            >
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', width: '100%', padding: '4px 8px' }}>
               <div
                 style={{
                   minWidth: '120px',
@@ -599,7 +669,10 @@ export default function ComponentsViewer({
             key: pathKey,
             title: nodeTitle,
             children: [],
-            isLeaf: depth === nodes.length - 1,
+            // Application nodes are never true leaves — they can always expand into
+            // their linked System Components (Servers, Software, ...), even when they're
+            // the deepest level of the model hierarchy itself.
+            isLeaf: isApplicationNode ? false : depth === nodes.length - 1,
             // Store node metadata for quick lookup on selection
             data: {
               componentName: node.componentName,
@@ -607,9 +680,11 @@ export default function ComponentsViewer({
               rowId: node.rowId,
               componentId: node.componentId,
               modelName: activeModelName,
+              qualifiers: node.qualifiers,
+              isApplicationNode,
             },
           } as DataNode & { data: any };
-          
+
           // TRACE: Log Care node creation
           if (node.rowName === 'Care') {
             console.log(`[TreeBuilder] ✅ CREATED Care node:`, { pathKey, isLeaf: newNode.isLeaf });
@@ -645,6 +720,91 @@ export default function ComponentsViewer({
       return String(aValue).localeCompare(String(bValue));
     });
   }, [hierarchies]);
+
+  // treeData starts as the hierarchy-derived structure above, but is real state so
+  // that expanding an Application node can graft in lazily-fetched linked System
+  // Components children without rebuilding the whole tree.
+  const [treeData, setTreeData] = useState<DataNode[]>([]);
+  useEffect(() => {
+    setTreeData(baseTreeData);
+    loadedNodeKeysRef.current.clear();
+  }, [baseTreeData]);
+
+  // Immutably replaces the children of the node with the given key, anywhere in the tree.
+  const setNodeChildren = (nodes: DataNode[], key: React.Key, children: DataNode[]): DataNode[] =>
+    nodes.map((n) => {
+      if (n.key === key) return { ...n, children };
+      if (n.children && n.children.length) return { ...n, children: setNodeChildren(n.children, key, children) };
+      return n;
+    });
+
+  const getLinkedApplicationTypes = async (): Promise<string[]> => {
+    if (linkedApplicationTypesRef.current) return linkedApplicationTypesRef.current;
+    const types = await getSystemComponentLinkedTypes('Applications').catch(() => []);
+    linkedApplicationTypesRef.current = types;
+    return types;
+  };
+
+  // Lazily fetches the children for an Application node (linked System Component
+  // types) or a linked-type node (the actual records) the first time it's expanded.
+  // Returns null when this node has nothing to lazily load (a normal hierarchy node,
+  // or one already loaded).
+  const loadChildrenForNode = async (nodeKey: React.Key, data: any): Promise<DataNode[] | null> => {
+    if (loadedNodeKeysRef.current.has(nodeKey)) return null;
+
+    if (data?.isApplicationNode) {
+      loadedNodeKeysRef.current.add(nodeKey);
+      let correlationId: string | null = null;
+      try {
+        const appData = await getApplicationByName(data.rowName, SYSTEM_COMPONENTS_NEIGHBORHOOD);
+        correlationId = appData?.correlationId || null;
+      } catch {
+        // Not found in the System Components catalog — linked-type nodes will show "no records".
+      }
+      const types = await getLinkedApplicationTypes();
+      if (!types.length) {
+        return [{
+          key: `${nodeKey}::no-links`,
+          title: buildPlaceholderNodeTitle('No linked System Components'),
+          isLeaf: true,
+          selectable: false,
+          data: { isPlaceholder: true },
+        } as DataNode & { data: any }];
+      }
+      return types.map((componentType) => ({
+        key: `${nodeKey}::type::${componentType}`,
+        title: buildBadgeNodeTitle('LINKED', componentType, LINK_TYPE_BG, LINK_TYPE_TEXT),
+        isLeaf: false,
+        children: [],
+        selectable: false,
+        data: { isSystemComponentTypeNode: true, componentType, correlationId, componentName: componentType, rowName: componentType },
+      }));
+    }
+
+    if (data?.isSystemComponentTypeNode) {
+      loadedNodeKeysRef.current.add(nodeKey);
+      const records = data.correlationId
+        ? await getSystemComponentRecordsLinkedToApplication(data.componentType, data.correlationId).catch(() => [])
+        : [];
+      if (!records.length) {
+        return [{
+          key: `${nodeKey}::empty`,
+          title: buildPlaceholderNodeTitle(`No ${String(data.componentType || '').toLowerCase()} linked`),
+          isLeaf: true,
+          selectable: false,
+          data: { isPlaceholder: true },
+        } as DataNode & { data: any }];
+      }
+      return records.map((record: LinkedSystemComponentRecord) => ({
+        key: `${nodeKey}::record::${record.id}`,
+        title: buildBadgeNodeTitle(data.componentType, record.name, LINK_RECORD_BG, LINK_RECORD_TEXT),
+        isLeaf: true,
+        data: { isSystemComponentRecord: true, record, componentName: data.componentType, rowName: record.name },
+      }));
+    }
+
+    return null;
+  };
 
   // Flatten tree nodes to suggestions for typeahead
   const flatTreeNodes = useMemo(() => {
@@ -873,41 +1033,16 @@ export default function ComponentsViewer({
     onApplicationLinkClick(component.name, correlationId, undefined);
   };
 
-  // Auto-expand tree on load - expand root node
+  // Auto-expand tree on load - expand root node.
+  // Depends on baseTreeData (the hierarchy-derived source), not treeData — treeData
+  // also changes when a lazily-loaded node's linked System Components get grafted
+  // in, and re-running this on every one of those would reset expandedKeys back down
+  // to just the root, collapsing whatever the user just expanded.
   useEffect(() => {
-    if (treeData && treeData.length > 0) {
-      setExpandedKeys([treeData[0].key]);
+    if (baseTreeData && baseTreeData.length > 0) {
+      setExpandedKeys([baseTreeData[0].key]);
     }
-  }, [treeData]);
-
-  // Auto-expand tree on search
-  useEffect(() => {
-    if (!treeData || treeData.length === 0) return;
-
-    if (searchText.trim()) {
-      // Expand all nodes when searching
-      const allKeys = treeData
-        .flatMap((node) => {
-          const keys: React.Key[] = [node.key];
-          const collect = (n: DataNode) => {
-            if (n.children) {
-              n.children.forEach((child) => {
-                keys.push(child.key);
-                collect(child);
-              });
-            }
-          };
-          collect(node);
-          return keys;
-        });
-      setExpandedKeys(allKeys);
-    } else {
-      // Default: expand root level to show component types
-      if (treeData.length > 0) {
-        setExpandedKeys([treeData[0].key]);
-      }
-    }
-  }, [treeData, searchText]);
+  }, [baseTreeData]);
 
   // Keep hierarchies in sync with components - if components are deleted, clear hierarchies
   useEffect(() => {
@@ -994,7 +1129,10 @@ export default function ComponentsViewer({
     setIsHorizontalPanning(false);
   };
 
-  // Filter tree data based on search text
+  // Filter tree data based on search text — matches at any hierarchy level (Domain,
+  // Subdomain, Business Process Flow, Task, Application), and a match keeps its full
+  // branch down through Application so the whole path is visible, not just the
+  // matched node itself.
   const filteredTreeData = useMemo<DataNode[]>(() => {
     if (!searchText.trim()) return treeData;
 
@@ -1002,17 +1140,22 @@ export default function ComponentsViewer({
 
     const filterNode = (node: DataNode): DataNode | null => {
       const nodeData = (node as DataNode & {
-        data?: { rowName?: string };
+        data?: { rowName?: string; isSystemComponentTypeNode?: boolean; isSystemComponentRecord?: boolean; isPlaceholder?: boolean };
       }).data;
+
+      // Linked System Components are reached by explicit click, not search.
+      if (nodeData?.isSystemComponentTypeNode || nodeData?.isSystemComponentRecord || nodeData?.isPlaceholder) {
+        return null;
+      }
+
       const nodeText = String(nodeData?.rowName ?? '').toLowerCase();
       const matches = nodeText.includes(normalized);
 
       if (matches) {
-        return {
-          ...node,
-          children: [],
-          isLeaf: true,
-        };
+        // Keep the matched node's subtree exactly as-is — including any linked System
+        // Components the user has already manually expanded — so filtering never hides
+        // content they explicitly loaded, and the expand arrow keeps working on it.
+        return node;
       }
 
       const filteredChildren = node.children
@@ -1035,6 +1178,30 @@ export default function ComponentsViewer({
       .map((node) => filterNode(node))
       .filter((node) => node !== null) as DataNode[];
   }, [treeData, searchText]);
+
+  // Auto-expand tree on search — expand exactly the branches that survived filtering
+  // (ancestors of a match, plus the match's own path down through Application), not
+  // the entire tree.
+  useEffect(() => {
+    if (!searchText.trim()) {
+      if (baseTreeData.length > 0) setExpandedKeys([baseTreeData[0].key]);
+      return;
+    }
+    const allKeys = filteredTreeData.flatMap((node) => {
+      const keys: React.Key[] = [node.key];
+      const collect = (n: DataNode) => {
+        if (n.children) {
+          n.children.forEach((child) => {
+            keys.push(child.key);
+            collect(child);
+          });
+        }
+      };
+      collect(node);
+      return keys;
+    });
+    setExpandedKeys(allKeys);
+  }, [filteredTreeData, searchText, baseTreeData]);
 
   const firstFilteredNodeKey = useMemo<React.Key | null>(() => {
     if (!searchText.trim()) return null;
@@ -1357,7 +1524,7 @@ export default function ComponentsViewer({
                 const c1 = x1 + 60;
                 const c2 = x2 - 60;
                 const path = `M ${x1} ${y1} C ${c1} ${y1}, ${c2} ${y2}, ${x2} ${y2}`;
-                
+
                 const lineColor = textColors[p.depth % textColors.length];
 
                 return (
@@ -1375,18 +1542,48 @@ export default function ComponentsViewer({
 
           {positioned.map((p) => {
             const pos = positionById.get(p.node.key)!;
+            const nodeData = (p.node as any).data;
             const isSelected = selectedNodeKey === p.node.key;
-            const nodeSearchText = String(((p.node as any).data?.rowName || '')).toLowerCase();
+            const nodeSearchText = String(nodeData?.rowName || '').toLowerCase();
             const isSearchHit = Boolean(searchText.trim()) && nodeSearchText.includes(searchText.trim().toLowerCase());
             const isExpanded = expandedKeys.includes(p.node.key);
             const hasChildren = p.node.children && p.node.children.length > 0;
-            const nodeData = (p.node as any).data;
             const label = nodeData?.componentName || 'Label';
             const value = nodeData?.rowName || (typeof p.node.title === 'function' ? p.node.title({ title: 'Node' } as any) : p.node.title);
-            
+            const isLazyNode = Boolean(nodeData?.isApplicationNode || nodeData?.isSystemComponentTypeNode);
+            const isSelectable = !nodeData?.isSystemComponentTypeNode && !nodeData?.isPlaceholder;
+            const isExpandable = hasChildren || (isLazyNode && !loadedNodeKeysRef.current.has(p.node.key));
+
             const bgColor = bgColors[p.depth % bgColors.length];
             const textColor = textColors[p.depth % textColors.length];
-            const isApplicationNode = /^applications?$/i.test(String(label || '').trim());
+
+            // Single shared expand/collapse path for both the whole-box click and the
+            // arrow's own click — lazily fetches linked System Components the first
+            // time an Application or type node is expanded, then behaves as a normal
+            // toggle once children are present.
+            const expandOrToggleNode = async () => {
+              if (!hasChildren && isLazyNode && !loadedNodeKeysRef.current.has(p.node.key)) {
+                const children = await loadChildrenForNode(p.node.key, nodeData);
+                if (children) {
+                  setTreeData((prev) => setNodeChildren(prev, p.node.key, children));
+                  pendingHorizontalRevealKeyRef.current = children[0]?.key ?? p.node.key;
+                  setExpandedKeys((previousKeys) => (previousKeys.includes(p.node.key) ? previousKeys : [...previousKeys, p.node.key]));
+                }
+                return;
+              }
+
+              if (hasChildren) {
+                if (!isExpanded) {
+                  const firstChildKey = p.node.children?.[0]?.key;
+                  pendingHorizontalRevealKeyRef.current = firstChildKey || p.node.key;
+                }
+                setExpandedKeys((previousKeys) =>
+                  previousKeys.includes(p.node.key)
+                    ? previousKeys.filter((key) => key !== p.node.key)
+                    : [...previousKeys, p.node.key]
+                );
+              }
+            };
 
             return (
               <button
@@ -1399,27 +1596,11 @@ export default function ComponentsViewer({
                   }
                 }}
                 type="button"
-                onClick={() => {
+                onClick={async () => {
                   if (horizontalPanStateRef.current?.moved) return;
-                  handleNodeSelect([p.node.key]);
-                  if (hasChildren) {
-                    if (!isExpanded) {
-                      const firstChildKey = p.node.children?.[0]?.key;
-                      pendingHorizontalRevealKeyRef.current = firstChildKey || p.node.key;
-                    }
-                    setExpandedKeys((previousKeys) =>
-                      previousKeys.includes(p.node.key)
-                        ? previousKeys.filter((key) => key !== p.node.key)
-                        : [...previousKeys, p.node.key]
-                    );
-                  }
+                  if (isSelectable) handleNodeSelect([p.node.key]);
+                  await expandOrToggleNode();
                 }}
-                onContextMenu={isApplicationNode ? (e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  setAppContextMenu({ x: e.clientX, y: e.clientY, rowName: String(nodeData?.rowName || '') });
-                } : undefined}
-                title={isApplicationNode ? 'Right-click for linked System Components (Servers, Software, ...)' : undefined}
                 style={{
                   position: 'absolute',
                   left: pos.x,
@@ -1473,21 +1654,13 @@ export default function ComponentsViewer({
                     {renderHighlightedText(String(value || ''), searchText)}
                   </div>
                 </div>
-                {hasChildren && (
+                {isExpandable && (
                   <span
-                    onClick={(e) => {
+                    onClick={async (e) => {
                       e.stopPropagation();
                       if (horizontalPanStateRef.current?.moved) return;
-                      if (!isExpanded) {
-                        const firstChildKey = p.node.children?.[0]?.key;
-                        pendingHorizontalRevealKeyRef.current = firstChildKey || p.node.key;
-                        setSelectedNodeKey(p.node.key);
-                      }
-                      setExpandedKeys(prev =>
-                        prev.includes(p.node.key)
-                          ? prev.filter(k => k !== p.node.key)
-                          : [...prev, p.node.key]
-                      );
+                      if (isSelectable) setSelectedNodeKey(p.node.key);
+                      await expandOrToggleNode();
                     }}
                     style={{
                       gridColumn: '2 / 3',
@@ -1525,6 +1698,17 @@ export default function ComponentsViewer({
               onExpand={setExpandedKeys}
               selectedKeys={selectedNodeKey ? [selectedNodeKey] : []}
               onSelect={handleNodeSelect}
+              loadData={async (node) => {
+                const children = await loadChildrenForNode(node.key, (node as any).data);
+                if (children) {
+                  setTreeData((prev) => setNodeChildren(prev, node.key, children));
+                  // Explicitly keep this node expanded ourselves rather than relying on
+                  // AntD's own post-loadData expand — with controlled expandedKeys that
+                  // implicit behavior raced against our treeData update and the node
+                  // snapped back to collapsed right after loading.
+                  setExpandedKeys((prev) => (prev.includes(node.key) ? prev : [...prev, node.key]));
+                }
+              }}
               style={{ padding: '8px 0' }}
             />
           ) : (
@@ -1583,7 +1767,7 @@ export default function ComponentsViewer({
 
       {/* Metadata Drawer */}
       <Drawer
-        title="Component Metadata"
+        title={selectedSystemComponentRecord ? selectedSystemComponentRecord.name : 'Component Metadata'}
         placement="right"
         onClose={() => setShowMetadataDrawer(false)}
         open={showMetadataDrawer}
@@ -1591,7 +1775,23 @@ export default function ComponentsViewer({
         loading={loadingMetadata}
       >
         <Spin spinning={loadingMetadata}>
-          {selectedComponent ? (
+          {selectedSystemComponentRecord ? (
+            <div>
+              <div style={{ marginBottom: '16px', padding: '12px', backgroundColor: LINK_RECORD_BG, borderLeft: `3px solid ${LINK_RECORD_TEXT}`, borderRadius: '4px' }}>
+                <strong>{selectedSystemComponentRecord.name}</strong>
+              </div>
+              <Descriptions bordered size="small" column={1}>
+                {Object.entries(selectedSystemComponentRecord.values)
+                  .filter(([, value]) => !(typeof value === 'string' && isKeyLikeString(value)))
+                  .sort(([a], [b]) => a.localeCompare(b))
+                  .map(([key, value]) => (
+                    <Descriptions.Item key={key} label={toLabel(key)}>
+                      {renderFieldValue(value)}
+                    </Descriptions.Item>
+                  ))}
+              </Descriptions>
+            </div>
+          ) : selectedComponent ? (
             <div>
               <div style={{ marginBottom: '16px', padding: '12px', backgroundColor: '#f0f5ff', borderLeft: '3px solid #1890ff', borderRadius: '4px' }}>
                 <strong>Description:</strong>
@@ -1599,6 +1799,22 @@ export default function ComponentsViewer({
                   {getComponentDescription(selectedComponent)}
                 </div>
               </div>
+
+              {Object.entries(selectedNodeQualifiers).filter(([, value]) => String(value || '').trim()).length > 0 && (
+                <>
+                  <Divider style={{ margin: '12px 0' }}>Attributes</Divider>
+                  <Descriptions bordered size="small" column={1} style={{ marginBottom: '16px' }}>
+                    {Object.entries(selectedNodeQualifiers)
+                      .filter(([, value]) => String(value || '').trim())
+                      .map(([key, value]) => (
+                        <Descriptions.Item key={key} label={qualifierLabel(key)}>
+                          {value}
+                        </Descriptions.Item>
+                      ))}
+                  </Descriptions>
+                </>
+              )}
+
               <Divider style={{ margin: '12px 0' }} />
 
               <Descriptions bordered size="small" column={1} style={{ marginBottom: '16px' }}>
@@ -1757,46 +1973,6 @@ export default function ComponentsViewer({
         </Spin>
       </Drawer>
 
-      {appContextMenu && (
-        <div
-          style={{
-            position: 'fixed',
-            left: appContextMenu.x,
-            top: appContextMenu.y,
-            zIndex: 100000,
-            minWidth: 180,
-            background: '#fff',
-            border: '1px solid #d9d9d9',
-            borderRadius: 8,
-            boxShadow: '0 6px 16px rgba(0,0,0,.15)',
-            padding: 6,
-            fontFamily: "'IBM Plex Sans', Arial, sans-serif",
-            fontSize: 12,
-          }}
-          onMouseDown={(e) => e.stopPropagation()}
-        >
-          <div style={{ padding: '6px 8px', color: '#6b7280', borderBottom: '1px solid #f0f0f0', marginBottom: 4, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {appContextMenu.rowName}
-          </div>
-          {linkedComponentTypes.length === 0 ? (
-            <div style={{ padding: '6px 8px', color: '#9ca3af' }}>No linked System Components data</div>
-          ) : (
-            linkedComponentTypes.map((componentType) => (
-              <div
-                key={componentType}
-                style={{ padding: '6px 8px', borderRadius: 6, cursor: 'pointer' }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = '#f0f5ff'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-                onClick={() => handleAppContextMenuSelect(componentType, appContextMenu.rowName)}
-              >
-                {componentType}
-              </div>
-            ))
-          )}
-        </div>
-      )}
-
-      <LinkedRecordsModal state={linkedRecordsModalState} onClose={closeLinkedRecordsModal} />
     </Card>
   );
 }
