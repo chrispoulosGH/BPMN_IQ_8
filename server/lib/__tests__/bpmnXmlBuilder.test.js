@@ -121,7 +121,7 @@ describe('buildBpmnXmlForFlow', () => {
 
     const taskId = findAll(doc, NS.bpmn, 'task').find((t) => t.getAttribute('name') === 'Process Payment').getAttribute('id');
     const noAppsTaskId = findAll(doc, NS.bpmn, 'task').find((t) => t.getAttribute('name') === 'No Apps Here').getAttribute('id');
-    const annotations = findAll(doc, NS.bpmn, 'textAnnotation').filter((a) => !/DiagramTitle/.test(a.getAttribute('id')));
+    const annotations = findAll(doc, NS.bpmn, 'textAnnotation');
     const associations = findAll(doc, NS.bpmn, 'association');
 
     // One annotation column for the task that has an application; none for the task without.
@@ -148,7 +148,7 @@ describe('buildBpmnXmlForFlow', () => {
     });
     const doc = parse(xml);
     const taskId = findAll(doc, NS.bpmn, 'task')[0].getAttribute('id');
-    const annotations = findAll(doc, NS.bpmn, 'textAnnotation').filter((a) => !/DiagramTitle/.test(a.getAttribute('id')));
+    const annotations = findAll(doc, NS.bpmn, 'textAnnotation');
     const associations = findAll(doc, NS.bpmn, 'association').filter((a) => a.getAttribute('targetRef') === taskId);
 
     expect(associations).toHaveLength(2);
@@ -156,14 +156,6 @@ describe('buildBpmnXmlForFlow', () => {
       .map((a) => annotations.find((an) => an.getAttribute('id') === a.getAttribute('sourceRef')))
       .map((a) => findAll(a, NS.bpmn, 'text')[0].textContent);
     expect(texts).toEqual(['App One', 'App Two']);
-  });
-
-  it('bakes the flow name into a floating diagram-title textAnnotation', () => {
-    const { xml } = buildBpmnXmlForFlow({ flowName: 'Titled Flow', tasks: [{ name: 'T', actor: 'A' }] });
-    const doc = parse(xml);
-    const title = findAll(doc, NS.bpmn, 'textAnnotation').find((a) => /DiagramTitle/.test(a.getAttribute('id')));
-    expect(title).toBeDefined();
-    expect(findAll(title, NS.bpmn, 'text')[0].textContent).toBe('Titled Flow');
   });
 
   it('disambiguates two tasks that normalize to the same element id', () => {

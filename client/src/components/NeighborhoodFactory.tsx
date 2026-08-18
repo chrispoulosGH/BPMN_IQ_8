@@ -47,6 +47,16 @@ interface FactoryRowViewState {
 
 function displayValue(value: unknown) {
   if (value === null || value === undefined || value === '') return '—';
+  // Guard against object/array values ever reaching String() directly —
+  // that yields the useless "[object Object]" (and "[object Object],..."
+  // for arrays) rather than crashing, so it's easy to miss in review.
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return '—';
+    }
+  }
   return String(value);
 }
 
@@ -101,7 +111,18 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
   const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
   const [factoryRowViewState, setFactoryRowViewState] = useState<Record<string, FactoryRowViewState>>({});
   const [visibleColumns, setVisibleColumns] = useState<Record<string, Set<string>>>({});
-  
+  // "__"-prefixed keys (e.g. __lineage, __lineageVariants) are internal
+  // bookkeeping written by the upload/materialization pipeline for diagram
+  // generation to disambiguate shared components — not user-facing data.
+  // Their values are objects/arrays, so showing them as a column renders
+  // "[object Object]", and editing them as a plain text field would corrupt
+  // the data. Every place that lists a factory's columns should use this
+  // filtered list instead of selectedFactory.columns directly.
+  const publicFactoryColumns = useMemo(
+    () => (selectedFactory?.columns || []).filter((column) => !column.startsWith('__')),
+    [selectedFactory],
+  );
+
   // File input refs for fallback file selection
   const neighborhoodFileInputRef = useRef<HTMLInputElement>(null);
   const uploadFileInputRef = useRef<HTMLInputElement>(null);
@@ -558,7 +579,7 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
 
   const rowColumns: ColumnsType<CustomFactoryRow> = useMemo(() => {
     const factoryId = selectedFactory?._id || '';
-    const allColumns = selectedFactory?.columns || [];
+    const allColumns = publicFactoryColumns;
     const currentVisibleColumns = getVisibleColumns(factoryId, allColumns);
     const foreignKeyByFieldName = new Map<string, ForeignKeyColumn>();
     (selectedFactory?.foreignKeyColumns || []).forEach((fk) => {
@@ -715,7 +736,7 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
         ) : null,
       },
     ];
-  }, [canManageFactories, selectedFactory, getVisibleColumns]);
+  }, [canManageFactories, publicFactoryColumns, selectedFactory, getVisibleColumns]);
 
   const filteredRows = useMemo(() => {
     if (!selectedFactory) return [];
@@ -728,7 +749,7 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
       if (!normalizedSearch) return true;
 
       const columnsToSearch = rowSearchColumn === ALL_COLUMNS_OPTION
-        ? selectedFactory.columns
+        ? publicFactoryColumns
         : [rowSearchColumn];
 
       return columnsToSearch.some((column) => {
@@ -736,7 +757,7 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
         return parsedSearch.exact ? candidate === normalizedSearch : candidate.includes(normalizedSearch);
       });
     });
-  }, [ALL_COLUMNS_OPTION, deferredRowSearchText, rowSearchColumn, rowStatusFilter, selectedFactory]);
+  }, [ALL_COLUMNS_OPTION, deferredRowSearchText, publicFactoryColumns, rowSearchColumn, rowStatusFilter, selectedFactory]);
 
   if (mode === 'action') {
     return (
@@ -1103,7 +1124,7 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
                 }}
                 options={[
                   { label: 'All uploaded columns', value: ALL_COLUMNS_OPTION },
-                  ...selectedFactory.columns.map((column) => ({ label: column, value: column })),
+                  ...publicFactoryColumns.map((column) => ({ label: column, value: column })),
                 ]}
               />
               <Input.Search
@@ -1134,14 +1155,14 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
                   { label: 'published', value: 'published' },
                 ]}
               />
-              {selectedFactory?._id && selectedFactory?.columns && selectedFactory.columns.length > 0 ? (
+              {selectedFactory?._id && publicFactoryColumns.length > 0 ? (
                 <Dropdown
                   menu={{
-                    items: selectedFactory.columns.map((column) => ({
+                    items: publicFactoryColumns.map((column) => ({
                       key: column,
                       label: (
                         <Checkbox
-                          checked={getVisibleColumns(selectedFactory._id, selectedFactory.columns).has(column)}
+                          checked={getVisibleColumns(selectedFactory._id, publicFactoryColumns).has(column)}
                           onChange={() => toggleColumnVisibility(selectedFactory._id, column)}
                           onClick={(e) => e.stopPropagation()}
                         >
@@ -1290,7 +1311,7 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
         width={720}
       >
         <Form form={rowForm} layout="vertical" onFinish={handleSaveRow} className="mt-4">
-          {(selectedFactory?.columns || []).map((column) => (
+          {publicFactoryColumns.map((column) => (
             <Form.Item
               key={column}
               name={column}

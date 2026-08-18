@@ -110,7 +110,7 @@ export default function ComponentsViewer({
   const [activeModelName, setActiveModelName] = useState<string>(neighborhoodName || '');
   const [components, setComponents] = useState<CustomFactory[]>([]);
   const [loading, setLoading] = useState(false);
-  const [viewMode, setViewMode] = useState<'table' | 'tree-vertical' | 'tree-horizontal'>('tree-vertical');
+  const [viewMode, setViewMode] = useState<'table' | 'tree-vertical' | 'tree-horizontal'>('tree-horizontal');
   const [expandedKeys, setExpandedKeys] = useState<React.Key[]>([]);
   const [searchText, setSearchText] = useState('');
   const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
@@ -573,12 +573,6 @@ export default function ComponentsViewer({
     }
   }, [components, activeTabKey]);
 
-  // When the user selects a component tab, always start in the table view.
-  useEffect(() => {
-    if (!activeTabKey) return;
-    setViewMode('table');
-  }, [activeTabKey]);
-
   // Helper to extract all keys from tree data recursively
   const getAllTreeKeys = (nodes: DataNode[]): string[] => {
     const keys: string[] = [];
@@ -927,6 +921,7 @@ export default function ComponentsViewer({
 
   // Handle clicking on an ancestry path cell to navigate to that component with row filtered
   const handleAncestryPathCellClick = (componentId: string, rowName: string) => {
+    setViewMode('table');
     setActiveTabKey(componentId);
     setHighlightedComponentId(componentId);
     setHighlightedRowName(rowName);
@@ -1304,6 +1299,7 @@ export default function ComponentsViewer({
           style={{ flex: 1, display: 'flex', flexDirection: 'column' }}
           activeKey={activeTabKey}
           onChange={(key) => {
+            setViewMode('table');
             setActiveTabKey(key);
             // Clear highlight when switching tabs to show all tabs again
             setHighlightedComponentId(null);
@@ -1731,9 +1727,9 @@ export default function ComponentsViewer({
           value={viewMode}
           onChange={(value) => setViewMode(value as 'table' | 'tree-vertical' | 'tree-horizontal')}
           options={[
-            { label: <><TableOutlined /> Table</>, value: 'table' },
-            { label: <><UnorderedListOutlined /> Tree</>, value: 'tree-vertical' },
             { label: <><BarsOutlined /> Tree (Horizontal)</>, value: 'tree-horizontal' },
+            { label: <><UnorderedListOutlined /> Tree</>, value: 'tree-vertical' },
+            { label: <><TableOutlined /> Table</>, value: 'table' },
           ]}
         />
         {(viewMode === 'tree-vertical' || viewMode === 'tree-horizontal') ? (

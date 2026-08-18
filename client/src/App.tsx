@@ -366,7 +366,37 @@ interface CompositeDiagramItem {
   xml: string;
 }
 
-const STACK_GAP = 280;
+// One entry per diagram stacked onto the composite canvas — used to render a
+// canvas-anchored title banner over each section (see CompositeSectionTitle
+// prop on BpmnEditor) instead of baking the title into the section's XML.
+interface CompositeSectionTitle {
+  prefix: string; // '' for the first (unprefixed) section, else 'stack_<index>'
+  name: string;
+  breadcrumb?: string;
+}
+
+// Vertical gap (model-space units, same convention as lane height/task width
+// elsewhere) inserted above each stacked diagram after the first. Chosen so
+// that, at a typical 1:1 fit-viewport scale, the next diagram's title box
+// (a ~65px-tall floating overlay, offset TITLE_SCREEN_GAP_PX above its own
+// first lane — see BpmnEditor.tsx) lands ~100 screen px below the previous
+// diagram's bottom lane edge (halved from an original ~200px target):
+// STACK_GAP + TOP_Y(60) - TITLE_SCREEN_GAP_PX(10) - titleBoxHeight(~65) ≈ 100.
+// This is an approximation, not an exact runtime measurement, so it drifts
+// from 100px at other zoom levels or with unusually tall titles.
+const STACK_GAP = 115;
+
+function buildDiagramBreadcrumb(diagram: CompositeDiagramItem['diagram']): string | undefined {
+  const parts = [
+    diagram.lineOfBusiness,
+    diagram.channel,
+    diagram.product,
+    diagram.domain,
+    diagram.subdomain,
+    diagram.businessFlow,
+  ].filter(Boolean);
+  return parts.length > 1 ? parts.join(' | ') : undefined;
+}
 
 function parseXmlDocument(xml: string) {
   return new DOMParser().parseFromString(xml, 'application/xml');
@@ -447,65 +477,20 @@ function shiftDiagramXml(xml: string, offsetY: number, diagramIndex: number) {
   return serializeXmlDocument(doc);
 }
 
-function addDiagramTitle(xml: string, title: string, diagramIndex: number) {
-  const doc = parseXmlDocument(xml);
-  const definitions = doc.getElementsByTagName('bpmn:definitions')[0] || doc.documentElement;
-  const plane = doc.getElementsByTagName('bpmndi:BPMNPlane')[0];
-  const process = doc.getElementsByTagName('bpmn:process')[0];
-  if (!definitions || !plane || !process) return xml;
-
-  const shapes = Array.from(doc.getElementsByTagName('bpmndi:BPMNShape'));
-  const bounds = shapes
-    .map((shape) => shape.getElementsByTagName('dc:Bounds')[0])
-    .filter(Boolean)
-    .map((node) => ({
-      x: Number(node.getAttribute('x') || '0'),
-      y: Number(node.getAttribute('y') || '0'),
-      width: Number(node.getAttribute('width') || '0'),
-      height: Number(node.getAttribute('height') || '0'),
-    }));
-
-  if (!bounds.length) return xml;
-
-  const minX = Math.min(...bounds.map((box) => box.x));
-  const maxX = Math.max(...bounds.map((box) => box.x + box.width));
-  const minY = Math.min(...bounds.map((box) => box.y));
-  const titleWidth = Math.min(560, Math.max(360, (maxX - minX) - 120));
-  const titleHeight = 42;
-  const titleX = Math.round((minX + maxX - titleWidth) / 2);
-  const titleY = Math.max(0, minY - 54);
-  const titleId = `BPMNDiagramTitle_${diagramIndex}`;
-
-  const titleAnnotation = doc.createElement('bpmn:textAnnotation');
-  titleAnnotation.setAttribute('id', titleId);
-  const titleText = doc.createElement('bpmn:text');
-  titleText.textContent = title;
-  titleAnnotation.appendChild(titleText);
-  process.insertBefore(titleAnnotation, process.firstChild);
-
-  const titleShape = doc.createElement('bpmndi:BPMNShape');
-  titleShape.setAttribute('id', `${titleId}_di`);
-  titleShape.setAttribute('bpmnElement', titleId);
-  const titleBounds = doc.createElement('dc:Bounds');
-  titleBounds.setAttribute('x', String(titleX));
-  titleBounds.setAttribute('y', String(titleY));
-  titleBounds.setAttribute('width', String(titleWidth));
-  titleBounds.setAttribute('height', String(titleHeight));
-  titleShape.appendChild(titleBounds);
-  plane.insertBefore(titleShape, plane.firstChild);
-
-  return serializeXmlDocument(doc);
-}
-
-function composeStackedDiagramXml(items: CompositeDiagramItem[]) {
-  if (!items.length) return EMPTY_DIAGRAM;
-  if (items.length === 1) return items[0].xml;
+// Stacks multiple diagrams' XML onto one canvas. Each section used to get its
+// title baked in as a floating bpmn:textAnnotation (BPMNDiagramTitle_<index>);
+// titles are now rendered as canvas-anchored HTML overlays in BpmnEditor.tsx
+// instead (see the `sections` return value and BpmnEditor's sectionTitles
+// prop), keyed by the same id prefix namespaceDiagramXml applies per section.
+function composeStackedDiagramXml(items: CompositeDiagramItem[]): { xml: string; sections: CompositeSectionTitle[] | null } {
+  if (!items.length) return { xml: EMPTY_DIAGRAM, sections: null };
+  if (items.length === 1) return { xml: items[0].xml, sections: null };
 
   const baseDoc = parseXmlDocument(items[0].xml);
   const definitions = baseDoc.getElementsByTagName('bpmn:definitions')[0] || baseDoc.documentElement;
   const process = baseDoc.getElementsByTagName('bpmn:process')[0];
   const plane = baseDoc.getElementsByTagName('bpmndi:BPMNPlane')[0];
-  if (!definitions || !process || !plane) return items[0].xml;
+  if (!definitions || !process || !plane) return { xml: items[0].xml, sections: null };
 
   const importFragment = (fragmentXml: string) => {
     const fragmentDoc = parseXmlDocument(fragmentXml);
@@ -521,20 +506,25 @@ function composeStackedDiagramXml(items: CompositeDiagramItem[]) {
     });
   };
 
+  const sections: CompositeSectionTitle[] = [];
   let offsetY = 0;
   items.forEach((item, index) => {
     const namespaced = index === 0 ? item.xml : namespaceDiagramXml(item.xml, `stack_${index}`);
     const shifted = index === 0 ? namespaced : shiftDiagramXml(namespaced, offsetY, index);
-    const titled = addDiagramTitle(shifted, item.diagram.businessFlow || item.diagram.name || 'Untitled', index);
-    importFragment(titled);
-    const doc = parseXmlDocument(titled);
+    importFragment(shifted);
+    sections.push({
+      prefix: index === 0 ? '' : `stack_${index}`,
+      name: item.diagram.businessFlow || item.diagram.name || 'Untitled',
+      breadcrumb: buildDiagramBreadcrumb(item.diagram),
+    });
+    const doc = parseXmlDocument(shifted);
     const bounds = Array.from(doc.getElementsByTagName('dc:Bounds'))
       .map((node) => Number(node.getAttribute('y') || '0') + Number(node.getAttribute('height') || '0'));
     const maxY = bounds.length ? Math.max(...bounds) : 0;
     offsetY = maxY + STACK_GAP;
   });
 
-  return serializeXmlDocument(baseDoc);
+  return { xml: serializeXmlDocument(baseDoc), sections };
 }
 
 interface SystemComponentsPaneProps {
@@ -864,6 +854,10 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
     } catch { /* ignore */ }
     return [];
   });
+  const neighborhoodTabOrderRef = useRef<string[]>(neighborhoodTabOrder);
+  useEffect(() => {
+    neighborhoodTabOrderRef.current = neighborhoodTabOrder;
+  }, [neighborhoodTabOrder]);
 
   useEffect(() => {
     try { localStorage.setItem('bpmniq_outer_tab_order', JSON.stringify(outerTabOrder)); } catch { /* ignore */ }
@@ -988,7 +982,15 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
     try {
       const data = await getFactoryNeighborhoods();
       setNeighborhoodTabs(data);
-      const fallbackName = data[0]?.name ?? '';
+      const order = neighborhoodTabOrderRef.current;
+      const sortedByDisplayOrder = [...data].sort((left, right) => {
+        const leftIndex = order.indexOf(left.name);
+        const rightIndex = order.indexOf(right.name);
+        const safeLeft = leftIndex === -1 ? Number.MAX_SAFE_INTEGER : leftIndex;
+        const safeRight = rightIndex === -1 ? Number.MAX_SAFE_INTEGER : rightIndex;
+        return safeLeft - safeRight;
+      });
+      const fallbackName = sortedByDisplayOrder[0]?.name ?? '';
       setActiveNeighborhoodTab((current) => {
         if (current && data.some((item) => item.name === current)) return current;
         return fallbackName;
@@ -1005,7 +1007,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
       setActiveFactoryTabs((current) => {
         if (!fallbackName) return current;
         if (current[fallbackName]) return current;
-        return { ...current, [fallbackName]: getModelCatalogTabKey(fallbackName) };
+        return { ...current, [fallbackName]: getModelComponentsTabKey(fallbackName) };
       });
     } catch (error: any) {
       message.error(error.response?.data?.error || error.message || 'Failed to load neighborhoods');
@@ -1013,7 +1015,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
       setLoadingNeighborhoodTabs(false);
       setNeighborhoodTabsResolved(true);
     }
-  }, [getModelCatalogTabKey, message]);
+  }, [getModelComponentsTabKey, message]);
 
   useEffect(() => {
     loadNeighborhoodTabs();
@@ -1136,7 +1138,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
 
         const nextTab = isTopLevelTab
           ? currentTab
-          : (isLegacyComponentTab ? modelComponentsTabKey : modelCatalogTabKey);
+          : modelComponentsTabKey;
 
         if (!nextTab || nextTab === currentTab) return current;
         return { ...current, [neighborhoodName]: nextTab };
@@ -1310,6 +1312,10 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState('');
   const [canvasDiagramName, setCanvasDiagramName] = useState<string | null>(null);
+  // Set only when the composite (stacked) canvas holds more than one diagram —
+  // drives BpmnEditor's per-section canvas-anchored title banners instead of
+  // its single diagramName banner. Null in normal single-diagram view.
+  const [compositeSectionTitles, setCompositeSectionTitles] = useState<CompositeSectionTitle[] | null>(null);
   const [showNewDiagramPrompt, setShowNewDiagramPrompt] = useState(false);
 
   useEffect(() => {
@@ -1423,6 +1429,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
       setDiagramMeta({});
       setActiveFileName(null);
       setCanvasDiagramName(null);
+      setCompositeSectionTitles(null);
       setIsDirty(false);
       return;
     }
@@ -1432,10 +1439,11 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
       xml: '',
     })));
     const withXml = stack.map((item) => ({ ...item, xml: item.diagram.xml }));
-    const composedXml = composeStackedDiagramXml(withXml);
+    const { xml: composedXml, sections } = composeStackedDiagramXml(withXml);
 
     setSelectedDiagramStack(withXml);
     setCurrentXml(composedXml);
+    setCompositeSectionTitles(sections);
     setImportTrigger((t) => t + 1);
     setActiveDiagram(withXml[withXml.length - 1].diagram ? {
       _id: withXml[withXml.length - 1].diagram._id,
@@ -2315,6 +2323,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
     setDiagramMeta(meta);
     setActiveFileName(file.name);
     setCanvasDiagramName(null); // will use meta.businessFlow via diagramName prop
+    setCompositeSectionTitles(null);
     setIsDirty(false);
 
     const bfName = meta.businessFlow || file.name.replace(/\.(bpmn|xml)$/i, '');
@@ -2456,6 +2465,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
         savedXmlRef.current = diagram.xml;
         setActiveFileName(null);
         setCanvasDiagramName(null);
+        setCompositeSectionTitles(null);
         setIsDirty(false);
         message.success(`Loaded from DB: ${diagram.name}`);
         // Show previously assigned capabilities (not as matches)
@@ -2796,6 +2806,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
     setCurrentXml(EMPTY_DIAGRAM);
     setImportTrigger(t => t + 1);
     setDiagramMeta({});
+    setCompositeSectionTitles(null);
     setIsDirty(false);
     setCapMatches([]);
     setSelectedCaps([]);
@@ -3009,7 +3020,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
         </div>
         <Tabs
           className="factory-tabs model-factory-tabs"
-          defaultActiveKey={getModelCatalogTabKey(neighborhood.name)}
+          defaultActiveKey={getModelComponentsTabKey(neighborhood.name)}
           activeKey={(() => {
             const modelCatalogTabKey = getModelCatalogTabKey(neighborhood.name);
             const modelComponentsTabKey = getModelComponentsTabKey(neighborhood.name);
@@ -3017,23 +3028,13 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
             if (currentModelTab === modelCatalogTabKey || currentModelTab === modelComponentsTabKey) {
               return currentModelTab;
             }
-            return modelCatalogTabKey;
+            return modelComponentsTabKey;
           })()}
           onChange={(key) => {
             setActiveFactoryTabs((current) => ({ ...current, [neighborhood.name]: key }));
           }}
           destroyInactiveTabPane
           items={[
-            {
-              key: getModelCatalogTabKey(neighborhood.name),
-              label: fTabLabel(getModelCatalogTabKey(neighborhood.name), <><DatabaseOutlined /> Model</>),
-              children: renderScrollablePane(
-                <ModelCatalog
-                  modelName={neighborhood.name}
-                  requestedSearch={modelCatalogSearchRequest[neighborhood.name] || null}
-                />,
-              ),
-            },
             {
               key: getModelComponentsTabKey(neighborhood.name),
               label: fTabLabel(getModelComponentsTabKey(neighborhood.name), <><AppstoreOutlined /> Model Components</>),
@@ -3083,6 +3084,16 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                       />
                     );
                   }}
+                />,
+              ),
+            },
+            {
+              key: getModelCatalogTabKey(neighborhood.name),
+              label: fTabLabel(getModelCatalogTabKey(neighborhood.name), <><DatabaseOutlined /> Model</>),
+              children: renderScrollablePane(
+                <ModelCatalog
+                  modelName={neighborhood.name}
+                  requestedSearch={modelCatalogSearchRequest[neighborhood.name] || null}
                 />,
               ),
             },
@@ -3279,6 +3290,10 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                             frameworks={neighborhoodTabs}
                             selectedDiagramIds={selectedDiagramIds}
                             externalFilterRequest={diagramBrowserFilterRequest}
+                            onSearchChanged={() => {
+                              setSelectedDiagramIds([]);
+                              void rebuildCompositeCanvas([]);
+                            }}
                             onToggleDiagram={async (id, neighborhoodName) => {
                               if (neighborhoodName) {
                                 setApiNeighborhoodScope(neighborhoodName);
@@ -3316,6 +3331,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                               ].filter(Boolean);
                               return parts.length > 1 ? parts.join(' | ') : undefined;
                             })()}
+                            sectionTitles={compositeSectionTitles}
                             canEditDiagramName={canEditCurrentDiagramName}
                             isInFactory={activeDiagram?.source === 'db'}
                             isAlreadyLoaded={activeDiagram?.source === 'local-match'}

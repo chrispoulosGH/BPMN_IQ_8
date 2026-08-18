@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Empty, Select, Spin, Tag, Tooltip, Typography } from 'antd';
 import { FolderOpenOutlined, PartitionOutlined } from '@ant-design/icons';
 import type { DiagramMeta, FactoryNeighborhoodSummary } from '../types';
@@ -132,12 +132,30 @@ interface DiagramBrowserProps {
     filters?: Record<string, string[]>;
     nonce: number;
   } | null;
+  // Fired whenever the user changes the search criteria (frameworks or any
+  // facet filter) here in the panel, so the parent can clear the canvas of
+  // whatever was previously open before the new result tiles are shown.
+  // Not fired for the initial mount, and not needed for externalFilterRequest-
+  // driven searches — those callers already clear the canvas themselves
+  // before requesting the new filters.
+  onSearchChanged?: () => void;
 }
 
-export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggleDiagram, externalFilterRequest = null }: DiagramBrowserProps) {
+export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggleDiagram, externalFilterRequest = null, onSearchChanged }: DiagramBrowserProps) {
   const [selectedFrameworks, setSelectedFrameworks] = useState<string[]>([]);
   const [filters, setFilters] = useState<Record<string, string[]>>({});
   const [diagrams, setDiagrams] = useState<DiagramMeta[]>([]);
+  const isInitialSearchRef = useRef(true);
+  useEffect(() => {
+    if (isInitialSearchRef.current) {
+      isInitialSearchRef.current = false;
+      return;
+    }
+    onSearchChanged?.();
+    // onSearchChanged is intentionally omitted so callers can pass an
+    // inline callback without re-firing this effect on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedFrameworks, filters]);
   const [frameworkComponentTypes, setFrameworkComponentTypes] = useState<string[]>([]);
   const [supplementalFilterOptions, setSupplementalFilterOptions] = useState<Record<string, string[]>>({});
   const [loading, setLoading] = useState(false);

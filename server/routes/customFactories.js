@@ -4019,10 +4019,15 @@ router.get('/:id', async (req, res) => {
           }
         }
         if (Array.isArray(docs) && docs.length) {
-          // Derive column list from canonical values
+          // Derive column list from canonical values. "__"-prefixed keys
+          // (e.g. __lineage, __lineageVariants — see buildLineageSnapshot)
+          // are internal bookkeeping for diagram generation, not user-facing
+          // data, so leave them out of the exposed column list.
           const columnsSet = new Set();
           docs.forEach((d) => {
-            if (d.values && typeof d.values === 'object') Object.keys(d.values).forEach((k) => columnsSet.add(k));
+            if (d.values && typeof d.values === 'object') {
+              Object.keys(d.values).filter((k) => !k.startsWith('__')).forEach((k) => columnsSet.add(k));
+            }
           });
           const db = mongoose.connection.db;
           const batchDocs = await db.collection('dataComponentBatches')
@@ -4213,10 +4218,13 @@ router.get('/canonical-paged', async (req, res) => {
       updatedAt: d.updatedAt,
     }));
 
-    // Derive columns from returned docs
+    // Derive columns from returned docs. "__"-prefixed keys are internal
+    // lineage bookkeeping (see buildLineageSnapshot), not user-facing data.
     const columnsSet = new Set();
     docs.forEach((d) => {
-      if (d.values && typeof d.values === 'object') Object.keys(d.values).forEach((k) => columnsSet.add(k));
+      if (d.values && typeof d.values === 'object') {
+        Object.keys(d.values).filter((k) => !k.startsWith('__')).forEach((k) => columnsSet.add(k));
+      }
     });
 
     const factory = {

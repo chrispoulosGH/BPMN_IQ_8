@@ -79,11 +79,28 @@ interface BpmnEditorProps {
   onNewDiagram?: () => void;
   onDiagramNameChange?: (name: string) => void;
   diagramBreadcrumb?: string;
+  // When the canvas holds more than one diagram stacked together (the
+  // composite/rollup view), one canvas-anchored title banner is rendered per
+  // section instead of the single diagramName banner — see composeStackedDiagramXml
+  // in App.tsx, which produces the same id-prefix scheme used here to group
+  // each section's elements.
+  sectionTitles?: Array<{ prefix: string; name: string; breadcrumb?: string }> | null;
 }
 
 const DARK_ORANGE = '#cc7000';
 const DEFAULT_STROKE = 'blue';
 const VALID_TASK_TEXT_BLUE = '#1677ff';
+// Vertical gap, in fixed screen pixels (not diagram units, so it stays
+// constant regardless of zoom), between a title banner's bottom edge and the
+// top of the diagram content (its first swim lane) it sits above.
+const TITLE_SCREEN_GAP_PX = 10;
+// Minimum diagram-space distance a start event's left edge must keep from
+// its lane's left edge, so it doesn't sit on top of the lane's rotated
+// actor-name label (matches server/lib/bpmnXmlBuilder.js's
+// LANE_X + LANE_LABEL_MARGIN + 10 for freshly generated diagrams — applied
+// here too so already-saved diagrams get the same clearance on open,
+// without needing to be regenerated).
+const START_EVENT_LANE_CLEARANCE = 40;
 
 /** Returns true for Task, UserTask, ServiceTask, SubProcess, CallActivity, etc. */
 function isActivityType(type?: string): boolean {
@@ -105,7 +122,7 @@ function splitStoredApplicationNames(value: string): string[] {
 }
 
 const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
-  ({ xml, importTrigger, onXmlChange, onDirty, showProperties = true, allApplicationNames = [], allApplications = [], allBusinessFlowNames = [], allTaskNames = [], allActorNames = [], diagramName, diagramStatus, canEditDiagramName = false, isInFactory, isAlreadyLoaded, readOnly, onNavigateToFactory, onTaskSelect, selectedCapability, isCapabilityAssigned = false, onCapabilityAssignToggle, onCapabilityViewInCatalog, onCapabilityBack, onAddToFactory, onDeleteAndReload, onSaveAsNew, onDiagramNameClick, onNewDiagram, onDiagramNameChange, diagramBreadcrumb }, ref) => {
+  ({ xml, importTrigger, onXmlChange, onDirty, showProperties = true, allApplicationNames = [], allApplications = [], allBusinessFlowNames = [], allTaskNames = [], allActorNames = [], diagramName, diagramStatus, canEditDiagramName = false, isInFactory, isAlreadyLoaded, readOnly, onNavigateToFactory, onTaskSelect, selectedCapability, isCapabilityAssigned = false, onCapabilityAssignToggle, onCapabilityViewInCatalog, onCapabilityBack, onAddToFactory, onDeleteAndReload, onSaveAsNew, onDiagramNameClick, onNewDiagram, onDiagramNameChange, diagramBreadcrumb, sectionTitles }, ref) => {
     const canvasRef = useRef<HTMLDivElement>(null);
     const propertiesRef = useRef<HTMLDivElement>(null);
     const modelerRef = useRef<any>(null);
@@ -115,6 +132,8 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
     const taskNamesRef = useRef<string[]>([]);
     const diagramNameRef = useRef(diagramName);
     diagramNameRef.current = diagramName;
+    const sectionTitlesRef = useRef(sectionTitles);
+    sectionTitlesRef.current = sectionTitles;
     const invalidTaskNamesRef = useRef<Set<string>>(new Set());
     const autocompleteRef = useRef<HTMLDivElement | null>(null);
     const appPopoverRef = useRef<HTMLDivElement | null>(null);
@@ -140,6 +159,21 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
     const [editingDiagramName, setEditingDiagramName] = useState(false);
     const [editNameValue, setEditNameValue] = useState('');
     const [newDiagramName, setNewDiagramName] = useState('');
+    // The diagram title banner is anchored to a point in diagram (canvas)
+    // coordinates — just above the top-center of the diagram's content —
+    // rather than fixed to the viewport, so it pans and zooms together with
+    // the diagram itself. titleAnchorRef holds the diagram-space point;
+    // titleScreenPos holds it converted to on-screen pixels for the current
+    // viewbox (recomputed on pan/zoom/edit — see computeTitleAnchor/
+    // updateTitleScreenPosition below).
+    const titleAnchorRef = useRef<{ x: number; y: number } | null>(null);
+    const [titleScreenPos, setTitleScreenPos] = useState<{ left: number; top: number } | null>(null);
+    // Composite (stacked) canvas mode: one anchor/position per section
+    // instead of the single titleAnchorRef/titleScreenPos above — see
+    // computeSectionAnchors/updateSectionScreenPositions and the
+    // sectionTitles prop.
+    const sectionAnchorsRef = useRef<Array<{ x: number; y: number; name: string; breadcrumb?: string }>>([]);
+    const [sectionScreenPositions, setSectionScreenPositions] = useState<Array<{ left: number; top: number; name: string; breadcrumb?: string }>>([]);
     // Generic "what's linked to this application" modal — drives both the
     // right-click menu options and the dialog contents entirely from
     // discoverComponentTypesLinkedToTarget() (server) rather than a fixed
@@ -382,7 +416,7 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
         return out;
       },
       fitViewport: () => {
-        modelerRef.current?.get('canvas')?.zoom('fit-viewport');
+        if (modelerRef.current) fitViewportWithTitleRoom(modelerRef.current);
       },
       zoomIn: () => {
         const canvas = modelerRef.current?.get('canvas');
@@ -519,6 +553,19 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
       modeler.on('commandStack.changed', async () => {
         if (importingRef.current) return;
         onDirty?.();
+        // Content may have moved/resized (new task, dragged lane, etc.) —
+        // keep the canvas-anchored title banner(s) tracking the diagram's top.
+        computeTitleAnchor();
+        updateTitleScreenPosition();
+        computeSectionAnchors();
+        updateSectionScreenPositions();
+      });
+
+      // Keep the title banner(s) pinned to their diagram-space anchor as the
+      // user pans/zooms the canvas.
+      modeler.on('canvas.viewbox.changed', () => {
+        updateTitleScreenPosition();
+        updateSectionScreenPositions();
       });
 
       // Load valid task names for autocomplete
@@ -1388,13 +1435,12 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
         if (importVersionRef.current !== version) return;
         // Guard: ensure modeler is still alive
         if (!modelerRef.current) return;
-        try {
-          const canvas = modeler.get('canvas');
-          canvas.zoom('fit-viewport');
-          // Scroll down slightly so diagram name banner is visible, and right to avoid toolbar overlap
-          const vbox = canvas.viewbox();
-          canvas.viewbox({ x: vbox.x - 120, y: vbox.y - 80, width: vbox.outer.width, height: vbox.outer.height });
-        } catch { /* canvas not ready */ }
+        // Hide any diagram-title textAnnotation baked into older saved XML
+        // before fitting the viewport, so it doesn't skew the fit and isn't
+        // shown alongside the new canvas-anchored title banner below.
+        hideLegacyDiagramTitleAnnotation(modeler);
+        shiftStartEventsClearOfLaneLabel(modeler);
+        fitViewportWithTitleRoom(modeler);
         // Migrate text-annotation apps to extension elements
         migrateTextAnnotationApps(modeler);
         // Validate tasks against Task Factory
@@ -1403,6 +1449,25 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
         validateLaneActors(modeler);
         // Render application overlays
         renderAppOverlaysRef.current();
+        // Position the canvas-anchored title banner(s) for the freshly imported diagram
+        computeTitleAnchor();
+        updateTitleScreenPosition();
+        computeSectionAnchors();
+        updateSectionScreenPositions();
+        // Surrounding panels (properties/search) can still be resizing right
+        // after import — e.g. the properties panel mounting, a filter panel
+        // animating in — so the fit above may have sized against a
+        // not-yet-final container. Re-fit through a short settle window so
+        // both the diagram and the title land correctly without the user
+        // needing to click "fit to view" themselves.
+        if (canvasRef.current) {
+          const settleObserver = new ResizeObserver(() => {
+            if (importVersionRef.current !== version || !modelerRef.current) return;
+            fitViewportWithTitleRoom(modelerRef.current);
+          });
+          settleObserver.observe(canvasRef.current);
+          setTimeout(() => settleObserver.disconnect(), 1500);
+        }
         // Only now allow commandStack changes to propagate to parent
         importingRef.current = false;
       }).catch((err: Error) => {
@@ -1647,6 +1712,201 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
       }
     }
 
+    // Fit the diagram to the viewport, then scroll up/right slightly so the
+    // canvas-anchored title banner (which sits just above the diagram's
+    // content — outside the bounds bpmn-js fits around, since it's an HTML
+    // overlay rather than a diagram element) has room to be visible instead
+    // of landing just above the visible viewport. Used both on import and
+    // whenever the user re-fits via the toolbar, since either can otherwise
+    // leave the title scrolled out of view.
+    function fitViewportWithTitleRoom(modeler: any) {
+      try {
+        const canvas = modeler.get('canvas');
+        canvas.zoom('fit-viewport');
+        const vbox = canvas.viewbox();
+        canvas.viewbox({ x: vbox.x - 120, y: vbox.y - 80, width: vbox.outer.width, height: vbox.outer.height });
+      } catch { /* canvas not ready */ }
+    }
+
+    // Nudge any start event that overlaps its lane's rotated actor-name
+    // label rightward, clear of it. Runs on every import (not just freshly
+    // generated diagrams) so already-saved diagrams get this fixed on open
+    // too. Runs while importingRef.current is still true, so it doesn't
+    // mark the diagram dirty just from being opened.
+    function shiftStartEventsClearOfLaneLabel(modeler: any) {
+      try {
+        const elementRegistry = modeler.get('elementRegistry');
+        const modeling = modeler.get('modeling');
+        const lanes = elementRegistry.filter((el: any) =>
+          el.businessObject?.$type === 'bpmn:Lane' && typeof el.x === 'number'
+        );
+        if (!lanes.length) return;
+        const startEvents = elementRegistry.filter((el: any) =>
+          el.businessObject?.$type === 'bpmn:StartEvent' && typeof el.x === 'number'
+        );
+        for (const startEvent of startEvents) {
+          const lane = lanes.find((l: any) => startEvent.y >= l.y && startEvent.y <= l.y + l.height);
+          if (!lane) continue;
+          const clearX = lane.x + START_EVENT_LANE_CLEARANCE;
+          if (startEvent.x < clearX) {
+            modeling.moveShape(startEvent, { x: clearX - startEvent.x, y: 0 });
+          }
+        }
+      } catch {
+        // best-effort
+      }
+    }
+
+    function hideLegacyDiagramTitleAnnotation(modeler: any) {
+      // Older saved diagrams may still carry the diagram-title textAnnotation
+      // that used to be baked into the BPMN XML (server/lib/bpmnXmlBuilder.js).
+      // The title is now rendered as a canvas-anchored HTML overlay instead
+      // (see the diagram title banner in the JSX below), so hide any leftover
+      // baked annotation rather than showing both.
+      try {
+        const elementRegistry = modeler.get('elementRegistry');
+        const canvas = modeler.get('canvas');
+        const legacyTitleElements = elementRegistry.filter((el: any) =>
+          el.businessObject?.$type?.includes('TextAnnotation') && /DiagramTitle/.test(el.id)
+        );
+        for (const el of legacyTitleElements) {
+          const gfx = canvas.getGraphics(el);
+          if (gfx) gfx.style.display = 'none';
+        }
+      } catch {
+        // best-effort
+      }
+    }
+
+    // Diagram title anchor — the point in diagram (canvas) coordinates where
+    // the title banner is pinned, positioned just above the top-center of
+    // the diagram's content. Recomputed after import and whenever the
+    // diagram's content changes so the anchor tracks edits (new/moved/resized
+    // elements).
+    function computeTitleAnchor() {
+      const modeler = modelerRef.current;
+      if (!modeler) return;
+      try {
+        const elementRegistry = modeler.get('elementRegistry');
+        const shapes = elementRegistry.getAll().filter((el: any) =>
+          el.parent
+          && typeof el.x === 'number'
+          && typeof el.width === 'number'
+          && !el.labelTarget
+          && !/DiagramTitle/.test(el.id)
+        );
+        if (!shapes.length) {
+          titleAnchorRef.current = { x: 0, y: 0 };
+          return;
+        }
+        let minX = Infinity;
+        let minY = Infinity;
+        for (const el of shapes) {
+          minX = Math.min(minX, el.x);
+          minY = Math.min(minY, el.y);
+        }
+        // Left-justified: anchor on the diagram's left edge (lane edge) rather
+        // than its horizontal center — see the translate(0, -100%) below.
+        // Anchored exactly at the first lane's top edge (minY); the fixed
+        // TITLE_SCREEN_GAP_PX screen-pixel gap is applied when converting to
+        // screen coordinates, so it stays constant regardless of zoom.
+        titleAnchorRef.current = { x: minX, y: minY };
+      } catch {
+        // best-effort
+      }
+    }
+
+    // Convert the diagram-space title anchor into on-screen pixel
+    // coordinates (relative to the canvas container) using the current
+    // viewbox, so the title banner tracks panning and zooming exactly like
+    // the diagram itself.
+    function updateTitleScreenPosition() {
+      const modeler = modelerRef.current;
+      const anchor = titleAnchorRef.current;
+      if (!modeler || !anchor) return;
+      try {
+        const canvas = modeler.get('canvas');
+        const viewbox = canvas.viewbox();
+        setTitleScreenPos({
+          left: (anchor.x - viewbox.x) * viewbox.scale,
+          top: (anchor.y - viewbox.y) * viewbox.scale - TITLE_SCREEN_GAP_PX,
+        });
+      } catch {
+        // best-effort
+      }
+    }
+
+    // Composite (stacked) canvas: one anchor per section instead of one for
+    // the whole diagram. Sections are told apart by the id prefix
+    // composeStackedDiagramXml applies per section ('' for the first,
+    // unprefixed section, 'stack_<index>_' for the rest).
+    function computeSectionAnchors() {
+      const modeler = modelerRef.current;
+      const sections = sectionTitlesRef.current;
+      if (!modeler || !sections?.length) {
+        sectionAnchorsRef.current = [];
+        return;
+      }
+      try {
+        const elementRegistry = modeler.get('elementRegistry');
+        const allShapes = elementRegistry.getAll().filter((el: any) =>
+          el.parent
+          && typeof el.x === 'number'
+          && typeof el.width === 'number'
+          && !el.labelTarget
+          // Exclude leftover legacy diagram-title annotations (see
+          // hideLegacyDiagramTitleAnnotation) — an older saved section still
+          // carrying one would otherwise drag that section's anchor upward,
+          // since the annotation gets shifted down with the rest of the
+          // section but sits above its real content.
+          && !/DiagramTitle/.test(el.id)
+        );
+        sectionAnchorsRef.current = sections.map((section) => {
+          const shapes = allShapes.filter((el: any) => (
+            section.prefix ? el.id.startsWith(`${section.prefix}_`) : !/^stack_\d+_/.test(el.id)
+          ));
+          if (!shapes.length) {
+            return { x: 0, y: 0, name: section.name, breadcrumb: section.breadcrumb };
+          }
+          let minX = Infinity;
+          let minY = Infinity;
+          for (const el of shapes) {
+            minX = Math.min(minX, el.x);
+            minY = Math.min(minY, el.y);
+          }
+          // Left-justified: anchor on the section's left edge (lane edge)
+          // rather than its horizontal center. Anchored exactly at the
+          // section's first lane top edge — the fixed TITLE_SCREEN_GAP_PX
+          // screen-pixel gap is applied in updateSectionScreenPositions.
+          return { x: minX, y: minY, name: section.name, breadcrumb: section.breadcrumb };
+        });
+      } catch {
+        // best-effort
+      }
+    }
+
+    // Screen-space counterpart of updateTitleScreenPosition, for every
+    // section anchor at once.
+    function updateSectionScreenPositions() {
+      const modeler = modelerRef.current;
+      if (!modeler || !sectionAnchorsRef.current.length) {
+        setSectionScreenPositions((current) => (current.length ? [] : current));
+        return;
+      }
+      try {
+        const canvas = modeler.get('canvas');
+        const viewbox = canvas.viewbox();
+        setSectionScreenPositions(sectionAnchorsRef.current.map((anchor) => ({
+          left: (anchor.x - viewbox.x) * viewbox.scale,
+          top: (anchor.y - viewbox.y) * viewbox.scale - TITLE_SCREEN_GAP_PX,
+          name: anchor.name,
+          breadcrumb: anchor.breadcrumb,
+        })));
+      } catch {
+        // best-effort
+      }
+    }
+
     const validAppSet = buildExactApplicationIdentifierSet(allApplications);
     const isSelectedAppValid = selectedApp ? validAppSet.has(normalizeApplicationLookupValue(selectedApp.name)) : true;
     const isSelectedTaskValid = selectedTask ? !invalidTaskNamesRef.current.has(selectedTask.name.toLowerCase().trim()) : true;
@@ -1656,10 +1916,15 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
 
     return (
       <div className="flex h-full w-full overflow-hidden relative">
-        {diagramName && !editingDiagramName && (
+        {!sectionTitles?.length && diagramName && !editingDiagramName && (
           <div
-            className="absolute top-2 left-1/2 -translate-x-1/2 z-20"
-            style={{ cursor: 'pointer' }}
+            className="absolute z-20"
+            style={{
+              left: titleScreenPos ? `${titleScreenPos.left}px` : '0',
+              top: titleScreenPos ? `${titleScreenPos.top}px` : '8px',
+              transform: 'translate(0, -100%)',
+              cursor: 'pointer',
+            }}
             onClick={() => {
               onCapabilityBack?.();
               setDiagramSelected(true);
@@ -1676,18 +1941,25 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
             }}
             title={canEditDiagramName ? 'Click for properties, double-click to edit name' : 'Click for properties'}
           >
-            <div className={`bg-white/90 backdrop-blur-sm border rounded-md px-5 py-2 shadow-sm ${isInFactory ? 'border-gray-200' : 'border-orange-300'}`} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+            <div className={`bg-white/90 backdrop-blur-sm border rounded-md px-5 py-2 shadow-sm ${isInFactory ? 'border-gray-200' : 'border-orange-300'}`} style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+              <span className="text-xl font-bold" style={{ color: diagramNameColor, textAlign: 'left' }}>{diagramName}</span>
               {diagramBreadcrumb && (
-                <div style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 400, letterSpacing: '0.02em', marginBottom: 2, textAlign: 'center', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 480 }}>
+                <div style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 400, letterSpacing: '0.02em', marginTop: 2, textAlign: 'left', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 480 }}>
                   {diagramBreadcrumb}
                 </div>
               )}
-              <span className="text-xl font-bold" style={{ color: diagramNameColor, textAlign: 'center' }}>{diagramName}</span>
             </div>
           </div>
         )}
-        {editingDiagramName && (
-          <div className="absolute top-2 left-1/2 -translate-x-1/2 z-20">
+        {!sectionTitles?.length && editingDiagramName && (
+          <div
+            className="absolute z-20"
+            style={{
+              left: titleScreenPos ? `${titleScreenPos.left}px` : '0',
+              top: titleScreenPos ? `${titleScreenPos.top}px` : '8px',
+              transform: 'translate(0, -100%)',
+            }}
+          >
             <div className="bg-white border border-blue-400 rounded-md px-3 py-1.5 shadow-md flex items-center gap-2">
               <input
                 className="text-xl font-bold text-gray-700 border-none outline-none bg-transparent min-w-[200px]"
@@ -1713,6 +1985,29 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
             </div>
           </div>
         )}
+        {/* Composite (stacked) canvas: one display-only, canvas-anchored title
+            banner per section — see sectionTitles prop. */}
+        {sectionTitles?.length ? sectionScreenPositions.map((pos, index) => (
+          <div
+            key={sectionTitles[index]?.prefix || index}
+            className="absolute z-20"
+            style={{
+              left: `${pos.left}px`,
+              top: `${pos.top}px`,
+              transform: 'translate(0, -100%)',
+              pointerEvents: 'none',
+            }}
+          >
+            <div className="bg-white/90 backdrop-blur-sm border border-gray-200 rounded-md px-5 py-2 shadow-sm" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+              <span className="text-xl font-bold" style={{ color: '#000000', textAlign: 'left' }}>{pos.name}</span>
+              {pos.breadcrumb && (
+                <div style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 400, letterSpacing: '0.02em', marginTop: 2, textAlign: 'left', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 480 }}>
+                  {pos.breadcrumb}
+                </div>
+              )}
+            </div>
+          </div>
+        )) : null}
         <div ref={canvasRef} className="bpmn-canvas absolute inset-0" />
         {/* New Diagram button on canvas */}
         {!readOnly && onNewDiagram && (
