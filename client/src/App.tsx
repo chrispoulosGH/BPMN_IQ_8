@@ -15,6 +15,7 @@ import {
   Empty,
   Tag,
   Form,
+  Segmented,
 } from 'antd';
 import {
   SaveOutlined,
@@ -58,6 +59,7 @@ import CapabilityMatchPanel from './components/CapabilityMatchPanel';
 import TaskFactory from './components/TaskFactory';
 import ReferenceFactory from './components/ReferenceFactory';
 import SystemComponentSummary from './components/SystemComponentSummary';
+import SystemComponentTable from './components/SystemComponentTable';
 import NeighborhoodFactory from './components/NeighborhoodFactory';
 import ModelCatalog from './components/ModelCatalog';
 import ComponentsViewer from './components/ComponentsViewer';
@@ -688,6 +690,11 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   }, []);
   const [activeFactoryTabs, setActiveFactoryTabs] = useState<Record<string, string>>({});
   const [activeModelComponentTabs, setActiveModelComponentTabs] = useState<Record<string, string>>({});
+  // Drives ComponentsViewer's requestedComponent prop — an explicit "jump to
+  // this component's table view" request (from handleNavigateToFactory),
+  // keyed by model/neighborhood name. Unlike activeModelComponentTabs above,
+  // ComponentsViewer actually reads this one.
+  const [modelComponentNavRequest, setModelComponentNavRequest] = useState<Record<string, { componentId: string; nonce: number }>>({});
   const activeTab = activeFactoryTabs[activeNeighborhoodTab]
     || getModelCatalogTabKey(activeNeighborhoodTab);
   
@@ -1396,7 +1403,12 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   const [factorySearch, setFactorySearch] = useState<Record<string, string>>({});
   const [factoryAdd, setFactoryAdd] = useState<Record<string, string | TaskAddData>>({});
   const [modelCatalogSearchRequest, setModelCatalogSearchRequest] = useState<Record<string, { text: string; column?: string; exact?: boolean; trigger: number }>>({});
-  const [requestedApplicationDetail, setRequestedApplicationDetail] = useState<{ correlationId: string; nonce: number } | null>(null);
+  // System Components tab: which view (dashboard tiles vs. searchable row
+  // table) each data type shows, and a pending search request to pin that
+  // table to a specific column/value — e.g. "View in Application Component"
+  // searching by correlation ID so exactly one record shows.
+  const [dataTabViewMode, setDataTabViewMode] = useState<Record<string, 'dashboard' | 'table'>>({});
+  const [systemComponentTableSearchRequest, setSystemComponentTableSearchRequest] = useState<Record<string, { column: string; text: string; nonce: number }>>({});
   const [diagramBrowserFilterRequest, setDiagramBrowserFilterRequest] = useState<{ frameworks?: string[]; filters?: Record<string, string[]>; nonce: number } | null>(null);
   // Selected task in diagram (for right sidebar link)
   const [selectedDiagramTask, setSelectedDiagramTask] = useState<{ name: string; id: string } | null>(null);
@@ -1660,6 +1672,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
       setActiveNeighborhoodTab(targetModel);
       setActiveFactoryTabs((current) => ({ ...current, [targetModel]: getModelComponentsTabKey(targetModel) }));
       setActiveModelComponentTabs((current) => ({ ...current, [targetModel]: resolvedTabKey }));
+      setModelComponentNavRequest((current) => ({ ...current, [targetModel]: { componentId: resolvedTabKey, nonce: Date.now() } }));
     };
 
     void run();
@@ -1672,6 +1685,30 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
     getModelComponentsTabKey,
     resolveModelFactoryTabKey,
   ]);
+
+  // Applications are global reference data (System Components), not a
+  // per-framework Model Component, so "View in Application Component" (from
+  // the diagram properties panel) and any FK_ column link to an application
+  // land here instead of handleNavigateToFactory: switch to System
+  // Components > Applications, force its Table view, and pin the search to
+  // an exact correlation-ID match so exactly one record shows.
+  const handleApplicationLinkClick = useCallback((_applicationName: string, correlationId?: string | null) => {
+    if (!correlationId) return;
+    setActiveOuterTab('data');
+    setActiveDataTab('applications');
+    setDataTabViewMode((current) => ({ ...current, applications: 'table' }));
+    // "correlationId" here is a hint, not necessarily a literal column name —
+    // System Components columns keep their raw uploaded header (e.g. "APP_ID
+    // Qualifier"), unlike the per-framework Model Components factories.
+    // SystemComponentTable resolves it against its own (always-current)
+    // dataColumns, which is more reliable than resolving it here against
+    // dataFactoriesByType — that can still be empty on a first-ever visit to
+    // this tab, before its lazy load has run.
+    setSystemComponentTableSearchRequest((current) => ({
+      ...current,
+      applications: { column: 'correlationId', text: correlationId, nonce: Date.now() },
+    }));
+  }, []);
 
   const handleCapabilityClick = useCallback((capability: CapabilityMatch, nextSelected: CapabilityMatch[]) => {
     setSelectedCaps(nextSelected);
@@ -2916,34 +2953,61 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
     const componentType = tab.key;
     const isLoaded = dataFactoriesByType[componentType] !== undefined;
     const loadedFactories = dataFactoriesByType[componentType] || [];
+    const dataRows = loadedFactories.flatMap((factory) => factory.rows || []);
+    const viewMode = dataTabViewMode[componentType] || 'dashboard';
     return {
       key: componentType,
       label: dataTabLabel(componentType, <span>{getDataTypeDisplayName(componentType)}</span>),
       children: renderScrollablePane(
-        <SystemComponentSummary
-          dataType={tab.dataType}
-          batchCount={tab.batchCount}
-          dataRows={loadedFactories.flatMap((factory) => factory.rows || [])}
-          dataColumns={tab.dataColumns}
-          isLoaded={isLoaded}
-          neighborhoodName={REFERENCE_DATA_NEIGHBORHOOD_NAME}
-          readOnly={readOnly}
-          onDeleteAllComponents={() => handleDeleteDataComponentType(
-            componentType,
-            tab.dataTypeValues.length ? tab.dataTypeValues : [tab.dataType],
-          )}
-          deleteLoading={deleteComponentTypeLoading === componentType}
-        />,
+        <div className="flex h-full min-h-0 flex-col">
+          <div style={{ padding: '12px 24px 0' }}>
+            <Segmented
+              size="small"
+              value={viewMode}
+              onChange={(value) => setDataTabViewMode((current) => ({ ...current, [componentType]: value as 'dashboard' | 'table' }))}
+              options={[
+                { label: 'Dashboard', value: 'dashboard' },
+                { label: 'Table', value: 'table' },
+              ]}
+            />
+          </div>
+          <div className="flex-1 min-h-0">
+            {viewMode === 'table' ? (
+              <SystemComponentTable
+                dataRows={dataRows}
+                dataColumns={tab.dataColumns}
+                requestedSearch={systemComponentTableSearchRequest[componentType] || null}
+              />
+            ) : (
+              <SystemComponentSummary
+                dataType={tab.dataType}
+                batchCount={tab.batchCount}
+                dataRows={dataRows}
+                dataColumns={tab.dataColumns}
+                isLoaded={isLoaded}
+                neighborhoodName={REFERENCE_DATA_NEIGHBORHOOD_NAME}
+                readOnly={readOnly}
+                onDeleteAllComponents={() => handleDeleteDataComponentType(
+                  componentType,
+                  tab.dataTypeValues.length ? tab.dataTypeValues : [tab.dataType],
+                )}
+                deleteLoading={deleteComponentTypeLoading === componentType}
+              />
+            )}
+          </div>
+        </div>,
       ),
     };
   }), [
     dataFactoriesByType,
     dataTabLabel,
+    dataTabViewMode,
     deleteComponentTypeLoading,
     getDataTypeDisplayName,
     handleDeleteDataComponentType,
     readOnly,
     renderScrollablePane,
+    systemComponentTableSearchRequest,
     visibleDataTabs,
   ]);
 
@@ -3042,20 +3106,11 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                 <ComponentsViewer
                   neighborhoodName={neighborhood.name}
                   availableComponentIds={(neighborhoodFactories[neighborhood.name] || []).map((f) => f._id)}
+                  requestedComponent={modelComponentNavRequest[neighborhood.name] || null}
                   onComponentTabSelect={(componentId, componentName) => {
                     setActiveModelComponentTabs((current) => ({ ...current, [neighborhood.name]: componentId }));
                   }}
-                  onApplicationLinkClick={(applicationName, correlationId, rowSearchText) => {
-                    if (!correlationId) return;
-                    const applicationSearch = encodeExactFactorySearch(`correlation_id:${correlationId}`);
-                    setFactorySearch((current) => ({
-                      ...current,
-                      applications: applicationSearch,
-                    }));
-                    setActiveOuterTab('data');
-                    setActiveDataTab('applications');
-                    setRequestedApplicationDetail({ correlationId, nonce: Date.now() });
-                  }}
+                  onApplicationLinkClick={handleApplicationLinkClick}
                   renderComponentContent={(componentId, componentName, highlightedRowName) => {
                     const factoryComponent = (neighborhoodFactories[neighborhood.name] || []).find((f) => f._id === componentId);
                     if (!factoryComponent) return <div>Component not found</div>;
@@ -3067,19 +3122,22 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                         fixedFactoryId={componentId}
                         defaultRowSearch={highlightedRowName || factorySearch[componentId]}
                         defaultRowSearchColumn="name"
+                        defaultAddData={factoryAdd[componentId]}
                         hideFactoryList
                         onNeighborhoodsChanged={loadNeighborhoodTabs}
                         onFactoryDeleted={() => loadNeighborhoodFactoriesFor(neighborhood.name)}
-                        onApplicationLinkClick={(applicationName, correlationId, rowSearchText) => {
-                          if (!correlationId) return;
-                          const applicationSearch = encodeExactFactorySearch(`correlation_id:${correlationId}`);
-                          setFactorySearch((current) => ({
-                            ...current,
-                            applications: applicationSearch,
-                          }));
-                          setActiveOuterTab('data');
-                          setActiveDataTab('applications');
-                          setRequestedApplicationDetail({ correlationId, nonce: Date.now() });
+                        onApplicationLinkClick={handleApplicationLinkClick}
+                        onRowsChanged={() => {
+                          // Task/actor names feed the diagram editor's on-canvas
+                          // validity coloring and the task-rename autocomplete
+                          // (allTaskNames/allActorNames) — refresh them so a row
+                          // just added here (e.g. via "Add to Task Component")
+                          // is immediately selectable there, not just after a
+                          // full reload. Only matters when it's the same scope
+                          // as whatever diagram is currently open.
+                          if (neighborhood.name === scopedNeighborhoodName) {
+                            refreshReferenceData(scopedNeighborhoodName);
+                          }
                         }}
                       />
                     );
@@ -3123,7 +3181,6 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
     setActiveNeighborhoodTab,
     setActiveOuterTab,
     setFactorySearch,
-    setRequestedApplicationDetail,
     sortedNeighborhoodTabItems,
   ]);
 
@@ -3337,6 +3394,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                             isAlreadyLoaded={activeDiagram?.source === 'local-match'}
                             readOnly={readOnly}
                             onNavigateToFactory={handleNavigateToFactory}
+                            onApplicationLinkClick={handleApplicationLinkClick}
                             onTaskSelect={(task) => {
                               setSelectedDiagramTask(task);
                               setSelectedCapability(null);

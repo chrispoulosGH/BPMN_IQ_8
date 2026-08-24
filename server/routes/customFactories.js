@@ -3071,15 +3071,158 @@ router.post('/upload', requireAdminWrite, handleSpreadsheetUpload, async (req, r
   }
 });
 
+// Canonical-backed factories (the "Prefer canonical-backed factories for
+// display" path — see getCustomFactories in client/src/api.ts) are exposed
+// to the client under a synthetic id "<neighborhoodName>:<componentType>"
+// (see the GET /:id route below), not a real Component ObjectId. Detects
+// that shape the same way GET /:id does — trying every colon split point,
+// since neighborhoodName itself could contain one — and confirms it via an
+// existence check rather than assuming the first split is right.
+async function resolveCanonicalFactoryId(factoryId) {
+  const idString = String(factoryId || '');
+  if (!idString.includes(':')) return null;
+  const idParts = idString.split(':');
+  for (let splitIndex = 1; splitIndex < idParts.length; splitIndex += 1) {
+    const neighborhoodName = idParts.slice(0, splitIndex).join(':');
+    const componentType = idParts.slice(splitIndex).join(':');
+    const exists = await CanonicalComponent.exists({ neighborhoodName, componentType });
+    if (exists) return { neighborhoodName, componentType };
+  }
+  return null;
+}
+
+// Re-fetches a canonical-backed factory's rows/columns and shapes them into
+// the same legacy-factory response shape the client's CustomFactory type
+// expects (mirrors the conversion in the GET /:id canonical branch below).
+async function buildCanonicalFactoryPayload(neighborhoodName, componentType, factoryId) {
+  const docs = await CanonicalComponent.find({ neighborhoodName, componentType }).sort({ primaryKey: 1 }).limit(1000).lean();
+  const columnsSet = new Set();
+  docs.forEach((d) => {
+    if (d.values && typeof d.values === 'object') {
+      Object.keys(d.values).filter((k) => !k.startsWith('__')).forEach((k) => columnsSet.add(k));
+    }
+  });
+  const db = mongoose.connection.db;
+  const batchDocs = await db.collection('dataComponentBatches')
+    .find({
+      neighborhoodName,
+      $or: [
+        { componentType: { $regex: `^${escapeRegExp(componentType)}$`, $options: 'i' } },
+        { name: { $regex: `^${escapeRegExp(componentType)}$`, $options: 'i' } },
+      ],
+    })
+    .project({ foreignKeyColumns: 1 })
+    .toArray();
+  const fkByField = new Map();
+  batchDocs.forEach((doc) => {
+    (doc.foreignKeyColumns || []).forEach((fk) => {
+      const key = String(fk.fieldName || fk.sourceColumnName || fk.name || '').trim().toLowerCase();
+      if (!key || fkByField.has(key)) return;
+      fkByField.set(key, fk);
+    });
+  });
+  return {
+    _id: factoryId,
+    neighborhoodName,
+    name: componentType,
+    sourceColumnName: componentType,
+    parentFactoryName: '',
+    columns: Array.from(columnsSet),
+    qualifierColumns: [],
+    foreignKeyColumns: Array.from(fkByField.values()),
+    owner: '',
+    createdBy: '',
+    sourceFileName: '',
+    createdAt: null,
+    updatedAt: null,
+    rows: docs.map((d) => ({ _id: String(d._id), values: d.values || {}, owner: '', state: 'staged', sourcedFrom: 'canonical', createdBy: '', updatedBy: '', parentFactoryName: '', parentName: '', createdAt: d.createdAt, updatedAt: d.updatedAt })),
+    rowCount: docs.length,
+  };
+}
+
+// Creates a new row. Canonical-backed factories get a new CanonicalComponent
+// document; legacy factories get a new subdocument pushed onto Component.rows.
+router.post('/:factoryId/rows', requireAdminWrite, async (req, res) => {
+  try {
+    const values = req.body?.values && typeof req.body.values === 'object' ? req.body.values : {};
+    const primaryKey = String(values[PRIMARY_KEY_COLUMN] || '').trim();
+    if (!primaryKey) return res.status(400).json({ error: `${PRIMARY_KEY_COLUMN} is required` });
+
+    const canonicalRef = await resolveCanonicalFactoryId(req.params.factoryId);
+    if (canonicalRef) {
+      const { neighborhoodName, componentType } = canonicalRef;
+      const existing = await CanonicalComponent.findOne({
+        neighborhoodName,
+        componentType,
+        primaryKey: { $regex: `^${escapeRegExp(primaryKey)}$`, $options: 'i' },
+      });
+      if (existing) return res.status(409).json({ error: `A ${componentType} named "${primaryKey}" already exists` });
+
+      await CanonicalComponent.create({ neighborhoodName, componentType, primaryKey, values });
+      // Tree Views/search read a precomputed index, not CanonicalComponent
+      // directly — without this, a row created here would never show up
+      // there. Fire-and-forget so the response isn't held up by a full
+      // neighborhood reindex.
+      rebuildSearchIndex(neighborhoodName).catch((err) => {
+        console.error('[CREATE ROW] search index rebuild failed:', err && err.message);
+      });
+      return res.json(serializeFactory(await buildCanonicalFactoryPayload(neighborhoodName, componentType, req.params.factoryId)));
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(req.params.factoryId)) return res.status(404).json({ error: 'Component not found' });
+    const factory = await Component.findById(req.params.factoryId);
+    if (!factory) return res.status(404).json({ error: 'Component not found' });
+
+    const existingRow = factory.rows.find((factoryRow) => getNormalizedPrimaryKeyValue(factoryRow.values.get(PRIMARY_KEY_COLUMN)) === getNormalizedPrimaryKeyValue(primaryKey));
+    if (existingRow) return res.status(409).json({ error: `A ${factory.name} named "${primaryKey}" already exists` });
+
+    const candidateRows = [
+      ...factory.rows.map((factoryRow) => Object.fromEntries(factory.columns.map((column) => [column, factoryRow.values.get(column) ?? '']))),
+      Object.fromEntries(factory.columns.map((column) => [column, values[column] ?? ''])),
+    ];
+    validateComponentRows(candidateRows, factory.columns);
+
+    factory.rows.push({
+      values: Object.fromEntries(factory.columns.map((column) => [column, values[column] ?? ''])),
+      owner: String(req.body?.owner || '').trim(),
+      state: String(req.body?.state || 'staged').trim() || 'staged',
+      sourcedFrom: 'manual',
+      createdBy: getCurrentUserId(req),
+      updatedBy: getCurrentUserId(req),
+    });
+    await factory.save();
+    res.status(201).json(serializeFactory(factory.toObject()));
+  } catch (err) {
+    if (err?.code === 11000) return res.status(409).json({ error: `A row named "${req.body?.values?.[PRIMARY_KEY_COLUMN]}" already exists` });
+    res.status(err?.status || 500).json({ error: err.message });
+  }
+});
+
 router.put('/:factoryId/rows/:rowId', requireAdminWrite, async (req, res) => {
   try {
+    const nextValues = req.body?.values && typeof req.body.values === 'object' ? req.body.values : {};
+
+    const canonicalRef = await resolveCanonicalFactoryId(req.params.factoryId);
+    if (canonicalRef) {
+      const { neighborhoodName, componentType } = canonicalRef;
+      const doc = await CanonicalComponent.findOne({ _id: req.params.rowId, neighborhoodName, componentType });
+      if (!doc) return res.status(404).json({ error: 'Factory row not found' });
+      doc.values = { ...doc.values, ...nextValues };
+      const nextPrimaryKey = String(nextValues[PRIMARY_KEY_COLUMN] || '').trim();
+      if (nextPrimaryKey) doc.primaryKey = nextPrimaryKey;
+      await doc.save();
+      rebuildSearchIndex(neighborhoodName).catch((err) => {
+        console.error('[UPDATE ROW] search index rebuild failed:', err && err.message);
+      });
+      return res.json(serializeFactory(await buildCanonicalFactoryPayload(neighborhoodName, componentType, req.params.factoryId)));
+    }
+
     if (!mongoose.Types.ObjectId.isValid(req.params.factoryId)) return res.status(404).json({ error: 'Component not found' });
     const factory = await Component.findById(req.params.factoryId);
     if (!factory) return res.status(404).json({ error: 'Component not found' });
     const row = factory.rows.id(req.params.rowId);
     if (!row) return res.status(404).json({ error: 'Factory row not found' });
 
-    const nextValues = req.body?.values && typeof req.body.values === 'object' ? req.body.values : {};
     const candidateRows = factory.rows.map((factoryRow) => {
       const values = Object.fromEntries(factory.columns.map((column) => [column, factoryRow.values.get(column) ?? '']));
       if (String(factoryRow._id) === String(row._id)) {
@@ -3108,6 +3251,17 @@ router.put('/:factoryId/rows/:rowId', requireAdminWrite, async (req, res) => {
 
 router.delete('/:factoryId/rows/:rowId', requireAdminWrite, async (req, res) => {
   try {
+    const canonicalRef = await resolveCanonicalFactoryId(req.params.factoryId);
+    if (canonicalRef) {
+      const { neighborhoodName, componentType } = canonicalRef;
+      const doc = await CanonicalComponent.findOneAndDelete({ _id: req.params.rowId, neighborhoodName, componentType });
+      if (!doc) return res.status(404).json({ error: 'Component row not found' });
+      rebuildSearchIndex(neighborhoodName).catch((err) => {
+        console.error('[DELETE ROW] search index rebuild failed:', err && err.message);
+      });
+      return res.json(serializeFactory(await buildCanonicalFactoryPayload(neighborhoodName, componentType, req.params.factoryId)));
+    }
+
     if (!mongoose.Types.ObjectId.isValid(req.params.factoryId)) return res.status(404).json({ error: 'Component not found' });
     const factory = await Component.findById(req.params.factoryId);
     if (!factory) return res.status(404).json({ error: 'Component not found' });
@@ -3702,6 +3856,13 @@ router.get('/hierarchies/tree', async (req, res) => {
     const neighborhoodName = String(req.query?.neighborhoodName || DEFAULT_NEIGHBORHOOD_NAME).trim();
     const componentName = String(req.query?.componentName || 'Application').trim();
     const compact = String(req.query?.compact || '').trim().toLowerCase() === 'true';
+    // When set, also surface rows that dead-end before reaching
+    // `componentName` — e.g. a Task with no linked Application — as their
+    // own terminal branch instead of omitting them entirely. Off by default
+    // so callers that deliberately want only paths reaching a specific type
+    // (e.g. the Value Streams matrix, which asks for Journey/Value Stream
+    // specifically) keep their existing behavior unchanged.
+    const includeChildless = String(req.query?.includeChildless || '').trim().toLowerCase() === 'true';
     const headerModelName = String(req.headers['x-model-name'] || req.headers['X-Model-Name'] || '').trim();
 
     let requiredRootComponentName = '';
@@ -3721,17 +3882,15 @@ router.get('/hierarchies/tree', async (req, res) => {
       componentName: { $regex: new RegExp(`^${escapeRegExp(componentName)}$`, 'i') },
     };
 
-    const entries = await ComponentSearchIndex.find(compact ? componentScope : componentScope)
+    const entries = await ComponentSearchIndex.find(componentScope)
     .sort({ rowName: 1 })
     .lean();
-    
+
     // Extract unique hierarchies that contain the requested component
     const hierarchyMap = new Map();
     const allPaths = [];
-    
-    entries.forEach((entry) => {
-      const hierarchies = entry.cachedHierarchies || [];
 
+    const collectPaths = (entry, hierarchies, { requireComponent } = {}) => {
       const selectedHierarchies = compact
         ? Array.from(new Map(hierarchies.map((hierarchy) => {
             const fullPathKey = hierarchy.map((node) => `${node.componentName}:${node.rowId || node.rowName}`).join('>');
@@ -3739,11 +3898,12 @@ router.get('/hierarchies/tree', async (req, res) => {
           })).values())
         : hierarchies;
       selectedHierarchies.forEach((hierarchy) => {
-        const containsComponent = hierarchy.some(
-          (node) => String(node.componentName || '').trim().toLowerCase() === componentName.toLowerCase()
-        );
-        
-        if (!containsComponent) return;
+        if (requireComponent) {
+          const containsComponent = hierarchy.some(
+            (node) => String(node.componentName || '').trim().toLowerCase() === componentName.toLowerCase()
+          );
+          if (!containsComponent) return;
+        }
 
         if (requiredRootComponentName) {
           const firstNodeComponent = String(hierarchy?.[0]?.componentName || '').trim().toLowerCase();
@@ -3751,9 +3911,9 @@ router.get('/hierarchies/tree', async (req, res) => {
             return;
           }
         }
-        
+
         const pathKey = hierarchy.map(node => node.rowName).join('|');
-        
+
         if (!hierarchyMap.has(pathKey)) {
           hierarchyMap.set(pathKey, hierarchy);
           allPaths.push({
@@ -3766,8 +3926,32 @@ router.get('/hierarchies/tree', async (req, res) => {
           });
         }
       });
-    });
-    
+    };
+
+    entries.forEach((entry) => collectPaths(entry, entry.cachedHierarchies || [], { requireComponent: true }));
+
+    if (includeChildless) {
+      // Rows that already appear as a NON-final node in some path have a
+      // deeper representation reaching them — don't also add their own
+      // shorter terminal entry (that would show e.g. every Task twice: once
+      // via its Application's full path, once on its own).
+      const rowIdsWithChildrenAnywhere = new Set();
+      const allEntries = await ComponentSearchIndex.find({ neighborhoodName }).lean();
+      allEntries.forEach((entry) => {
+        (entry.cachedHierarchies || []).forEach((hierarchy) => {
+          hierarchy.slice(0, -1).forEach((node) => {
+            if (node.rowId) rowIdsWithChildrenAnywhere.add(String(node.rowId));
+          });
+        });
+      });
+
+      allEntries.forEach((entry) => {
+        const rowIdStr = entry.rowId ? String(entry.rowId) : null;
+        if (rowIdStr && rowIdsWithChildrenAnywhere.has(rowIdStr)) return;
+        collectPaths(entry, entry.cachedHierarchies || []);
+      });
+    }
+
     res.json({
       totalPaths: allPaths.length,
       uniqueCount: hierarchyMap.size,

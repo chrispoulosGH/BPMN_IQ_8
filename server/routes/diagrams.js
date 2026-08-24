@@ -2,11 +2,13 @@ const express = require('express');
 const router = express.Router();
 const Diagram = require('../models/Diagram');
 const Component = require('../models/Component');
+const CanonicalComponent = require('../models/CanonicalComponent');
 const Model = require('../models/Model');
 const Actor = require('../models/Actor');
 const { Product, Domain, Subdomain, LineOfBusiness } = require('../models/ReferenceData');
 const { DEFAULT_NEIGHBORHOOD_NAME, getNeighborhoodName, buildNeighborhoodFilter } = require('../utils/neighborhoodScope');
 const { listApplicationReferences } = require('../utils/applicationReferenceLookup');
+const { rebuildSearchIndex } = require('../utils/searchIndexBuilder');
 
 /** Strip title/status housekeeping text annotations from the XML (they clutter the canvas) */
 function stripTitleAnnotations(xml) {
@@ -165,6 +167,173 @@ function extractTasks(xml) {
   }
 
   return tasks;
+}
+
+/**
+ * Per-task detail needed only for syncing into the Task factory (below) —
+ * kept separate from extractTasks() so that function's well-established
+ * output (and its tests) stay untouched. Returns the task's raw BPMN element
+ * type (e.g. "userTask", for the bpmn_task_type_qualifier column) and the
+ * name of the lane/actor it sits in (for actor_qualifier), alongside its name.
+ */
+function extractTaskDetailsForSync(xml) {
+  if (!xml) return [];
+  const taskTypes = /task|subProcess/i;
+  const elRegex = /<bpmn2?:(\w+)\b([^>]*)\/?>/gi;
+  const details = new Map(); // id -> { id, name, type }
+  let m;
+  while ((m = elRegex.exec(xml)) !== null) {
+    const [, type, attrsRaw] = m;
+    if (!taskTypes.test(type)) continue;
+    const id = (String(attrsRaw || '').match(/\bid="([^"]+)"/i) || [])[1];
+    if (!id) continue;
+    const name = (String(attrsRaw || '').match(/\bname="([^"]*)"/i) || [])[1];
+    details.set(id, { id, name: decodeXmlValue(name || id), type });
+  }
+
+  // Map each lane's flowNodeRef task ids to that lane's name.
+  const laneForTaskId = new Map();
+  const laneBlockRegex = /<bpmn2?:lane\b[^>]*\bname="([^"]+)"[^>]*>([\s\S]*?)<\/bpmn2?:lane>/gi;
+  let lm;
+  while ((lm = laneBlockRegex.exec(xml)) !== null) {
+    const [, laneNameRaw, body] = lm;
+    const laneName = decodeXmlValue(laneNameRaw);
+    const refRegex = /<bpmn2?:flowNodeRef>([^<]+)<\/bpmn2?:flowNodeRef>/gi;
+    let rm;
+    while ((rm = refRegex.exec(body)) !== null) {
+      laneForTaskId.set(rm[1].trim(), laneName);
+    }
+  }
+
+  return [...details.values()].map((detail) => ({
+    name: detail.name,
+    type: detail.type,
+    actor: laneForTaskId.get(detail.id) || null,
+  }));
+}
+
+/**
+ * After a diagram is created/updated, make sure every task in its XML also
+ * exists as a row in this neighborhood's Task factory (Model Components) —
+ * otherwise a task added straight on the canvas only ever lives in that one
+ * diagram's own XML/snapshot, and Tree Views/search (which read the Task
+ * factory, not diagrams) never pick it up until someone manually runs
+ * "Add to Task Component" for it. Best-effort: a sync problem here should
+ * never fail the diagram save itself.
+ */
+async function syncDiagramTasksToTaskFactory(neighborhoodName, diagramMeta, xml) {
+  try {
+    if (!neighborhoodName || !xml) return;
+    const taskDetails = extractTaskDetailsForSync(xml).filter((task) => task.name && task.name.trim());
+    if (!taskDetails.length) return;
+
+    // diagramMeta fields (parsed from the diagram title annotation) can carry
+    // un-decoded XML entities (e.g. "After-Sales &#38; Service" instead of
+    // "After-Sales & Service") — decode defensively so a lineage value here
+    // actually matches the cleanly-named Domain/Subdomain/etc rows it's
+    // meant to link up with; otherwise the hierarchy climb silently stops
+    // one level early with no error.
+    const businessFlow = decodeXmlValue(String(diagramMeta.businessFlow || diagramMeta.name || '').trim());
+    const lineageEntry = {};
+    if (diagramMeta.lineOfBusiness) lineageEntry.lineOfBusiness = decodeXmlValue(diagramMeta.lineOfBusiness);
+    if (diagramMeta.channel) lineageEntry.channel = decodeXmlValue(diagramMeta.channel);
+    if (diagramMeta.product) lineageEntry.product = decodeXmlValue(diagramMeta.product);
+    if (diagramMeta.domain) lineageEntry.domain = decodeXmlValue(diagramMeta.domain);
+    if (diagramMeta.subdomain) lineageEntry.subdomain = decodeXmlValue(diagramMeta.subdomain);
+    if (businessFlow) lineageEntry.businessFlow = businessFlow;
+    const hasLineage = Object.keys(lineageEntry).length > 0;
+
+    // Prefer the canonical-backed Task factory — that's what "New Task" /
+    // "Add to Task Component" actually write to — falling back to a legacy
+    // Component-backed factory for neighborhoods that still use one.
+    const canonicalSample = await CanonicalComponent.findOne(
+      { neighborhoodName, componentType: { $regex: /^tasks?$/i } },
+      { componentType: 1 }
+    ).lean();
+
+    let changed = false;
+
+    if (canonicalSample) {
+      const componentType = canonicalSample.componentType;
+      for (const task of taskDetails) {
+        const taskName = task.name.trim();
+        const existing = await CanonicalComponent.findOne({
+          neighborhoodName,
+          componentType,
+          primaryKey: { $regex: `^${escapeRegExp(taskName)}$`, $options: 'i' },
+        });
+
+        if (!existing) {
+          await CanonicalComponent.create({
+            neighborhoodName,
+            componentType,
+            primaryKey: taskName,
+            values: {
+              name: taskName,
+              ...(task.type ? { bpmn_task_type_qualifier: task.type } : {}),
+              ...(task.actor ? { actor_qualifier: task.actor } : {}),
+              ...(hasLineage ? { __lineage: lineageEntry, __lineageVariants: [lineageEntry] } : {}),
+            },
+          });
+          changed = true;
+          continue;
+        }
+
+        // Already a known task — only touch it to record a *new* business
+        // flow using it (so it shows up under that parent in the Tree View
+        // too), never overwriting qualifiers a person may have set by hand.
+        if (!hasLineage) continue;
+        const values = existing.values && typeof existing.values === 'object' ? existing.values : {};
+        const variants = Array.isArray(values.__lineageVariants) ? values.__lineageVariants : [];
+        const alreadyTracked = variants.some(
+          (variant) => variant && String(variant.businessFlow || '').trim().toLowerCase() === businessFlow.toLowerCase()
+        );
+        if (!alreadyTracked) {
+          existing.values = {
+            ...values,
+            __lineage: values.__lineage || lineageEntry,
+            __lineageVariants: [...variants, lineageEntry],
+          };
+          existing.markModified('values');
+          await existing.save();
+          changed = true;
+        }
+      }
+    } else {
+      const legacyFactory = await Component.findOne({ neighborhoodName, name: { $regex: /^tasks?$/i } });
+      if (legacyFactory) {
+        for (const task of taskDetails) {
+          const taskName = task.name.trim();
+          const existingRow = legacyFactory.rows.find(
+            (row) => String(row.values?.get?.('name') || '').trim().toLowerCase() === taskName.toLowerCase()
+          );
+          if (existingRow) continue;
+
+          const rowValues = new Map([['name', taskName]]);
+          if (task.type) rowValues.set('bpmn_task_type_qualifier', task.type);
+          if (task.actor) rowValues.set('actor_qualifier', task.actor);
+          legacyFactory.rows.push({
+            values: rowValues,
+            owner: '',
+            state: 'staged',
+            sourcedFrom: 'diagram-sync',
+            parentFactoryName: hasLineage ? 'Business Process Flow' : '',
+            parentName: businessFlow || '',
+          });
+          changed = true;
+        }
+        if (changed) await legacyFactory.save();
+      }
+    }
+
+    if (changed) {
+      rebuildSearchIndex(neighborhoodName).catch((err) => {
+        console.error('[DIAGRAM SYNC] search index rebuild failed:', err && err.message);
+      });
+    }
+  } catch (err) {
+    console.error('[DIAGRAM SYNC] Failed to sync diagram tasks to Task factory:', err && err.message);
+  }
 }
 
 /** Parse metadata from TextAnnotation_DiagramTitle text content (primary),
@@ -1055,6 +1224,14 @@ router.post('/', async (req, res) => {
       updatedBy: createdBy || null,
       ...meta,
     });
+    await syncDiagramTasksToTaskFactory(hintedNeighborhoodName, {
+      businessFlow: diagram.businessFlow || diagramName,
+      lineOfBusiness: diagram.lineOfBusiness,
+      channel: diagram.channel,
+      domain: diagram.domain,
+      subdomain: diagram.subdomain,
+      product: diagram.product,
+    }, diagram.xml);
     res.status(201).json(diagram);
   } catch (err) {
     console.error('POST /api/diagrams failed', {
@@ -1166,6 +1343,16 @@ router.put('/:id', async (req, res) => {
       { new: true, runValidators: true }
     );
     if (!diagram) return res.status(404).json({ error: 'Diagram not found.' });
+    if (xml !== undefined) {
+      await syncDiagramTasksToTaskFactory(neighborhoodName, {
+        businessFlow: diagram.businessFlow || diagram.name,
+        lineOfBusiness: diagram.lineOfBusiness,
+        channel: diagram.channel,
+        domain: diagram.domain,
+        subdomain: diagram.subdomain,
+        product: diagram.product,
+      }, diagram.xml);
+    }
     res.json(diagram);
   } catch (err) {
     console.error('PUT /api/diagrams/:id failed', {

@@ -3,10 +3,11 @@ import { App as AntApp, Button, Card, Form, Input, List, Modal, Popconfirm, Sele
 import { DeleteOutlined, EditOutlined, ExclamationCircleOutlined, FolderAddOutlined, InboxOutlined, PlusOutlined, ColumnHeightOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { enhanceColumnsWithSortAndFilters } from '../utils/tableEnhancer';
-import { parseFactorySearch } from '../utils/factorySearch';
+import { encodeExactFactorySearch, parseFactorySearch } from '../utils/factorySearch';
 
 import {
   createFactoryNeighborhood,
+  createCustomFactoryRow,
   deleteFactoryNeighborhood,
   deleteAllNeighborhoodComponents,
   deleteCustomFactory,
@@ -37,6 +38,17 @@ interface NeighborhoodFactoryProps {
   defaultRowSearch?: string;
   defaultRowSearchColumn?: string;
   onApplicationLinkClick?: (applicationName: string, correlationId?: string | null, rowSearchText?: string) => void;
+  // External request to open the "New row" dialog pre-filled with a name
+  // (e.g. "Add to Task Component" from the diagram, for a task that doesn't
+  // exist as a component yet) — either a plain name string, or an object
+  // with at least a name, for callers that also carry other diagram context.
+  defaultAddData?: string | { name?: string } | null;
+  // Fired after any row create/update/delete. Lets the parent refresh
+  // caches derived from these rows outside this component — e.g. the
+  // diagram editor's task/actor name lists used for on-canvas validity
+  // coloring and the task-rename autocomplete, which would otherwise stay
+  // stale (missing a just-created task) until the next full page/scope load.
+  onRowsChanged?: () => void;
 }
 
 interface FactoryRowViewState {
@@ -83,7 +95,7 @@ function getDataTabKeyForTargetScope(value: unknown) {
   return aliases[normalized] || normalized;
 }
 
-function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedFactoryId, hideFactoryList = false, onNeighborhoodsChanged, onNeighborhoodCreated, onFactoryDeleted, onNeighborhoodDeleted, showCreateNeighborhood = true, showAddFactory = true, showDeleteNeighborhood = true, mode = 'panel', defaultRowSearch, defaultRowSearchColumn = 'name' }: NeighborhoodFactoryProps) {
+function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedFactoryId, hideFactoryList = false, onNeighborhoodsChanged, onNeighborhoodCreated, onFactoryDeleted, onNeighborhoodDeleted, showCreateNeighborhood = true, showAddFactory = true, showDeleteNeighborhood = true, mode = 'panel', defaultRowSearch, defaultRowSearchColumn = 'name', defaultAddData, onRowsChanged }: NeighborhoodFactoryProps) {
   const { message } = AntApp.useApp();
   const ALL_COLUMNS_OPTION = '__all__';
   const PRIMARY_KEY_COLUMN = 'name';
@@ -99,6 +111,10 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [editingRow, setEditingRow] = useState<CustomFactoryRow | null>(null);
   const [showRowModal, setShowRowModal] = useState(false);
+  // true when showRowModal is open for creating a brand-new row rather than
+  // editing editingRow (which is null in both the "closed" and "adding" states).
+  const [isAddRowMode, setIsAddRowMode] = useState(false);
+  const appliedAddDataRef = useRef<string | { name?: string } | null | undefined>(undefined);
   const [neighborhoodDraftName, setNeighborhoodDraftName] = useState('');
   const [neighborhoodUploadFile, setNeighborhoodUploadFile] = useState<File | null>(null);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
@@ -110,6 +126,8 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
   const [rowStatusFilter, setRowStatusFilter] = useState<string | undefined>(undefined);
   const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
   const [factoryRowViewState, setFactoryRowViewState] = useState<Record<string, FactoryRowViewState>>({});
+  // Per factory, the set of columns explicitly hidden via the "Columns"
+  // picker (empty/absent = nothing hidden, i.e. every column visible).
   const [visibleColumns, setVisibleColumns] = useState<Record<string, Set<string>>>({});
   // "__"-prefixed keys (e.g. __lineage, __lineageVariants) are internal
   // bookkeeping written by the upload/materialization pipeline for diagram
@@ -152,24 +170,31 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
     }));
   }, [ALL_COLUMNS_OPTION]);
 
+  // visibleColumns actually tracks HIDDEN columns per factory — empty (or
+  // absent) means nothing is hidden, i.e. every column is visible.
   const getVisibleColumns = useCallback((factoryId: string, allColumns: string[]) => {
-    if (!visibleColumns[factoryId] || visibleColumns[factoryId].size === 0) {
-      return new Set(allColumns);
-    }
-    return visibleColumns[factoryId];
+    const hidden = visibleColumns[factoryId];
+    if (!hidden || hidden.size === 0) return new Set(allColumns);
+    return new Set(allColumns.filter((column) => !hidden.has(column)));
   }, [visibleColumns]);
 
   const toggleColumnVisibility = useCallback((factoryId: string, column: string) => {
     setVisibleColumns((current) => {
-      const factoryVisible: Set<string> = current[factoryId]
-        ? new Set<string>(Array.from(current[factoryId] as Set<string>))
-        : new Set<string>();
-      if (factoryVisible.has(column)) {
-        factoryVisible.delete(column);
+      const hidden = new Set<string>(current[factoryId] ? Array.from(current[factoryId] as Set<string>) : []);
+      if (hidden.has(column)) {
+        hidden.delete(column);
       } else {
-        factoryVisible.add(column);
+        hidden.add(column);
       }
-      return { ...current, [factoryId]: factoryVisible };
+      return { ...current, [factoryId]: hidden };
+    });
+  }, []);
+
+  const toggleAllColumnsVisibility = useCallback((factoryId: string, allColumns: string[]) => {
+    setVisibleColumns((current) => {
+      const hidden = current[factoryId];
+      const allVisible = !hidden || hidden.size === 0;
+      return { ...current, [factoryId]: allVisible ? new Set(allColumns) : new Set() };
     });
   }, []);
 
@@ -374,17 +399,26 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
     if (!selectedFactory?._id) return;
     if (defaultRowSearch === undefined) return;
 
-    const parsed = parseFactorySearch(defaultRowSearch);
-    const nextSearchText = parsed.term;
+    // Keep the raw value (which may carry the "exact match" encoding — see
+    // encodeExactFactorySearch) rather than unwrapping it here, so an exact
+    // search actually stays exact. The search input displays the unwrapped
+    // term regardless (see its value prop below), so this doesn't leak the
+    // internal encoding into the UI.
     const nextSearchColumn = defaultRowSearchColumn;
 
     setRowSearchColumn(nextSearchColumn);
-    setRowSearchText(nextSearchText);
+    setRowSearchText(defaultRowSearch);
     updateFactoryViewState(selectedFactory._id, {
       searchColumn: nextSearchColumn,
-      searchText: nextSearchText,
+      searchText: defaultRowSearch,
     });
-  }, [defaultRowSearch, defaultRowSearchColumn, selectedFactory, updateFactoryViewState]);
+    // Deliberately depends on selectedFactory._id, not the selectedFactory
+    // object itself — that reference changes on every row create/update/
+    // delete (a fresh factory is fetched each time), which would otherwise
+    // re-apply this stale prop value and stomp on, e.g., the "just created
+    // this row, now show only it" search set right after a create.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [defaultRowSearch, defaultRowSearchColumn, selectedFactory?._id, updateFactoryViewState]);
 
   const handleCreateNeighborhood = async () => {
     const name = neighborhoodDraftName.trim();
@@ -450,6 +484,7 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
   const handleEditRow = (row: CustomFactoryRow) => {
     if (!selectedFactory) return;
     setEditingRow(row);
+    setIsAddRowMode(false);
     rowForm.setFieldsValue({
       owner: row.owner || '',
       state: row.state || 'staged',
@@ -458,21 +493,65 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
     setShowRowModal(true);
   };
 
+  const handleAddRow = useCallback((prefill?: Record<string, string>) => {
+    if (!selectedFactory) return;
+    setEditingRow(null);
+    setIsAddRowMode(true);
+    rowForm.resetFields();
+    rowForm.setFieldsValue({ owner: '', state: 'staged', ...(prefill || {}) });
+    setShowRowModal(true);
+  }, [selectedFactory, rowForm]);
+
+  // "Add to Task Component" (etc.) from the diagram properties panel — see
+  // defaultAddData prop — opens this same modal in create mode, pre-filled
+  // with the element's name, as soon as this factory's real columns and the
+  // request are both available.
+  useEffect(() => {
+    if (defaultAddData === undefined) return;
+    if (appliedAddDataRef.current === defaultAddData) return;
+    if (!selectedFactory || !publicFactoryColumns.length) return;
+    appliedAddDataRef.current = defaultAddData;
+
+    const name = typeof defaultAddData === 'string' ? defaultAddData : defaultAddData?.name;
+    if (!name || !name.trim()) return;
+    handleAddRow({ [PRIMARY_KEY_COLUMN]: name.trim() });
+  }, [defaultAddData, selectedFactory, publicFactoryColumns, handleAddRow]);
+
   const handleSaveRow = async (values: Record<string, unknown>) => {
-    if (!selectedFactory || !editingRow) return;
+    if (!selectedFactory || (!isAddRowMode && !editingRow)) return;
     setSavingRow(true);
     try {
-      const nextFactory = await updateCustomFactoryRow(selectedFactory._id, editingRow._id, {
+      const rowPayload = {
         owner: String(values.owner || ''),
         state: String(values.state || 'staged'),
         values: Object.fromEntries(selectedFactory.columns.map((column) => [column, values[column] ?? ''])),
-      });
+      };
+      const nextFactory = isAddRowMode
+        ? await createCustomFactoryRow(selectedFactory._id, rowPayload)
+        : await updateCustomFactoryRow(selectedFactory._id, editingRow!._id, rowPayload);
       setSelectedFactory(nextFactory);
       setFactories((current) => current.map((factory) => (factory._id === nextFactory._id ? nextFactory : factory)));
       setShowRowModal(false);
       setEditingRow(null);
+      setIsAddRowMode(false);
       rowForm.resetFields();
-      message.success('Component row updated');
+      message.success(isAddRowMode ? 'Component row created' : 'Component row updated');
+      onRowsChanged?.();
+
+      // Once the "New Row" dialogue is dismissed, filter the table down to
+      // just the row that was created, so it's the only thing in the results.
+      if (isAddRowMode) {
+        const newRowName = String(values[PRIMARY_KEY_COLUMN] || '').trim();
+        if (newRowName) {
+          const exactSearch = encodeExactFactorySearch(newRowName);
+          setRowSearchColumn(PRIMARY_KEY_COLUMN);
+          setRowSearchText(exactSearch);
+          updateFactoryViewState(nextFactory._id, {
+            searchColumn: PRIMARY_KEY_COLUMN,
+            searchText: exactSearch,
+          });
+        }
+      }
     } catch (error: any) {
       message.error(error.response?.data?.error || error.message);
     } finally {
@@ -487,6 +566,7 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
       setSelectedFactory(nextFactory);
       setFactories((current) => current.map((factory) => (factory._id === nextFactory._id ? nextFactory : factory)));
       message.success('Component row deleted');
+      onRowsChanged?.();
     } catch (error: any) {
       message.error(error.response?.data?.error || error.message);
     }
@@ -509,6 +589,7 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
         setFactories((current) => current.map((factory) => (factory._id === nextFactory._id ? nextFactory : factory)));
         setSelectedRowKeys([]);
         message.success(`Deleted ${selectedRowKeys.length} rows`);
+        onRowsChanged?.();
       },
     });
   };
@@ -1131,7 +1212,7 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
                 allowClear
                 placeholder="Search uploaded component rows"
                 style={{ width: 280 }}
-                value={rowSearchText}
+                value={parseFactorySearch(rowSearchText).term}
                 onChange={(event) => {
                   const nextValue = event.target.value;
                   startTransition(() => {
@@ -1158,18 +1239,39 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
               {selectedFactory?._id && publicFactoryColumns.length > 0 ? (
                 <Dropdown
                   menu={{
-                    items: publicFactoryColumns.map((column) => ({
-                      key: column,
-                      label: (
-                        <Checkbox
-                          checked={getVisibleColumns(selectedFactory._id, publicFactoryColumns).has(column)}
-                          onChange={() => toggleColumnVisibility(selectedFactory._id, column)}
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          {column}
-                        </Checkbox>
-                      ),
-                    })),
+                    items: (() => {
+                      const currentlyVisible = getVisibleColumns(selectedFactory._id, publicFactoryColumns);
+                      const allVisible = currentlyVisible.size === publicFactoryColumns.length;
+                      const noneVisible = currentlyVisible.size === 0;
+                      return [
+                        {
+                          key: '__select_all__',
+                          label: (
+                            <Checkbox
+                              checked={allVisible}
+                              indeterminate={!allVisible && !noneVisible}
+                              onChange={() => toggleAllColumnsVisibility(selectedFactory._id, publicFactoryColumns)}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {allVisible ? 'Deselect All' : 'Select All'}
+                            </Checkbox>
+                          ),
+                        },
+                        { type: 'divider' as const },
+                        ...publicFactoryColumns.map((column) => ({
+                          key: column,
+                          label: (
+                            <Checkbox
+                              checked={currentlyVisible.has(column)}
+                              onChange={() => toggleColumnVisibility(selectedFactory._id, column)}
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              {column}
+                            </Checkbox>
+                          ),
+                        })),
+                      ];
+                    })(),
                   }}
                 >
                   <Button size="small" icon={<ColumnHeightOutlined />}>Columns</Button>
@@ -1192,6 +1294,11 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
               <span style={{ color: '#64748b', fontSize: 12 }}>
                 Showing {filteredRows.length} of {selectedFactory.rows.length} rows
               </span>
+              {canManageFactories ? (
+                <Button type="primary" size="small" icon={<PlusOutlined />} onClick={() => handleAddRow()}>
+                  New {selectedFactory.name}
+                </Button>
+              ) : null}
               {canManageFactories ? (
                 <Button danger size="small" icon={<DeleteOutlined />} disabled={!selectedRowKeys.length} onClick={handleBulkDeleteRows}>
                   Delete Selected ({selectedRowKeys.length})
@@ -1302,11 +1409,11 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
       </Modal>
 
       <Modal
-        title="Edit Factory Row"
+        title={isAddRowMode ? `New ${selectedFactory?.name || 'Row'}` : 'Edit Factory Row'}
         open={showRowModal}
-        onCancel={() => { setShowRowModal(false); setEditingRow(null); }}
+        onCancel={() => { setShowRowModal(false); setEditingRow(null); setIsAddRowMode(false); }}
         onOk={() => rowForm.submit()}
-        okText={savingRow ? 'Saving…' : 'Save'}
+        okText={savingRow ? 'Saving…' : (isAddRowMode ? 'Create' : 'Save')}
         confirmLoading={savingRow}
         width={720}
       >

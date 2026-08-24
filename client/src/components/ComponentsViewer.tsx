@@ -94,6 +94,12 @@ interface ComponentsViewerProps {
   availableComponentIds?: string[];
   renderComponentContent?: (componentId: string, componentName: string, highlightedRowName?: string | null) => React.ReactNode;
   onApplicationLinkClick?: (applicationName: string, correlationId?: string | null, rowSearchText?: string) => void;
+  // External request to jump to a specific component's table view (e.g. from
+  // "View in Application Component" in the diagram properties panel). The
+  // nonce forces re-application even when componentId repeats (clicking the
+  // same link twice while already on that tab should still switch to table
+  // view). Applied once componentId is present in the loaded components list.
+  requestedComponent?: { componentId: string; nonce: number } | null;
 }
 
 export default function ComponentsViewer({
@@ -102,6 +108,7 @@ export default function ComponentsViewer({
   availableComponentIds = [],
   renderComponentContent,
   onApplicationLinkClick,
+  requestedComponent,
 }: ComponentsViewerProps) {
   const { message } = AntApp.useApp();
   const [selectedSystemComponentRecord, setSelectedSystemComponentRecord] = useState<LinkedSystemComponentRecord | null>(null);
@@ -172,7 +179,10 @@ export default function ComponentsViewer({
       try {
         const { leafComponent } = await getLeafComponent(neighborhoodName, activeModelName);
         console.log(`[ComponentsViewer] API CALL: Loading ${leafComponent} hierarchies for ${neighborhoodName}/${activeModelName}`);
-        const result = await getComponentHierarchies(neighborhoodName, leafComponent, activeModelName, true);
+        // includeChildless: a row that dead-ends before reaching the leaf
+        // type (e.g. a Task with no linked Application yet) should still
+        // show as its own terminal branch, not disappear from the tree.
+        const result = await getComponentHierarchies(neighborhoodName, leafComponent, activeModelName, true, true);
         const allPaths = result.paths || [];
         
         // Deduplicate paths by pathKey
@@ -572,6 +582,20 @@ export default function ComponentsViewer({
       setActiveTabKey(components[0]?._id);
     }
   }, [components, activeTabKey]);
+
+  // External jump request (see requestedComponent prop): switch to the
+  // requested component's table view once it's present in the loaded
+  // components list. Retries as components load, and only applies each
+  // nonce once so it doesn't fight the user's own subsequent tab clicks.
+  const appliedComponentNavNonceRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!requestedComponent) return;
+    if (appliedComponentNavNonceRef.current === requestedComponent.nonce) return;
+    if (!components.some((c) => c._id === requestedComponent.componentId)) return;
+    appliedComponentNavNonceRef.current = requestedComponent.nonce;
+    setActiveTabKey(requestedComponent.componentId);
+    setViewMode('table');
+  }, [requestedComponent, components]);
 
   // Helper to extract all keys from tree data recursively
   const getAllTreeKeys = (nodes: DataNode[]): string[] => {

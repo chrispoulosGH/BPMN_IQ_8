@@ -66,6 +66,10 @@ interface BpmnEditorProps {
   isAlreadyLoaded?: boolean;
   readOnly?: boolean;
   onNavigateToFactory?: (tab: string, searchTerm: string, mode?: 'view' | 'add', extra?: { applications?: string[]; actor?: string }) => void;
+  // Navigates to System Components > Applications with an exact search on
+  // the application's correlation ID, so exactly one record shows — used by
+  // the "View in Application Component" button below.
+  onApplicationLinkClick?: (applicationName: string, correlationId?: string | null, rowSearchText?: string) => void;
   onTaskSelect?: (task: { name: string; id: string } | null) => void;
   selectedCapability?: CapabilityMatch | null;
   isCapabilityAssigned?: boolean;
@@ -122,7 +126,7 @@ function splitStoredApplicationNames(value: string): string[] {
 }
 
 const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
-  ({ xml, importTrigger, onXmlChange, onDirty, showProperties = true, allApplicationNames = [], allApplications = [], allBusinessFlowNames = [], allTaskNames = [], allActorNames = [], diagramName, diagramStatus, canEditDiagramName = false, isInFactory, isAlreadyLoaded, readOnly, onNavigateToFactory, onTaskSelect, selectedCapability, isCapabilityAssigned = false, onCapabilityAssignToggle, onCapabilityViewInCatalog, onCapabilityBack, onAddToFactory, onDeleteAndReload, onSaveAsNew, onDiagramNameClick, onNewDiagram, onDiagramNameChange, diagramBreadcrumb, sectionTitles }, ref) => {
+  ({ xml, importTrigger, onXmlChange, onDirty, showProperties = true, allApplicationNames = [], allApplications = [], allBusinessFlowNames = [], allTaskNames = [], allActorNames = [], diagramName, diagramStatus, canEditDiagramName = false, isInFactory, isAlreadyLoaded, readOnly, onNavigateToFactory, onApplicationLinkClick, onTaskSelect, selectedCapability, isCapabilityAssigned = false, onCapabilityAssignToggle, onCapabilityViewInCatalog, onCapabilityBack, onAddToFactory, onDeleteAndReload, onSaveAsNew, onDiagramNameClick, onNewDiagram, onDiagramNameChange, diagramBreadcrumb, sectionTitles }, ref) => {
     const canvasRef = useRef<HTMLDivElement>(null);
     const propertiesRef = useRef<HTMLDivElement>(null);
     const modelerRef = useRef<any>(null);
@@ -559,6 +563,12 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
         updateTitleScreenPosition();
         computeSectionAnchors();
         updateSectionScreenPositions();
+        // Re-render the "+"/application overlays so a freshly-added task
+        // (dragged from the palette, or pasted/copied) picks up its
+        // "Add applications" affordance immediately — this used to only
+        // happen on the next full diagram import, so a brand-new task with
+        // zero applications had no visible way to get its first one.
+        renderAppOverlaysRef.current();
       });
 
       // Keep the title banner(s) pinned to their diagram-space anchor as the
@@ -689,6 +699,11 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
             addBtn.addEventListener('mouseenter', () => { addBtn.style.background = '#bae0ff'; });
             addBtn.addEventListener('mouseleave', () => { addBtn.style.background = '#e6f4ff'; });
             addBtn.addEventListener('click', (e) => {
+              e.stopPropagation();
+              showAppPopover(el, m);
+            });
+            addBtn.addEventListener('contextmenu', (e) => {
+              e.preventDefault();
               e.stopPropagation();
               showAppPopover(el, m);
             });
@@ -2237,7 +2252,7 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
                 <table className="w-full text-xs"><tbody><tr><td className="text-gray-500 py-1 pr-2 align-top">Status</td><td className="py-1"><span className={`px-1.5 py-0.5 rounded text-xs ${isSelectedAppValid ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-orange-50 text-orange-700 border border-orange-300'}`}>{isSelectedAppValid ? 'Valid' : 'Invalid'}</span></td></tr><tr><td className="text-gray-500 py-1 pr-2 align-top">Task</td><td className="py-1 font-medium">{selectedApp.taskName}</td></tr><tr><td className="text-gray-500 py-1 pr-2 align-top">Task ID</td><td className="py-1 text-gray-600 break-all">{selectedApp.taskId}</td></tr></tbody></table>
               </div>
               <div className="border-t border-gray-100 mt-3 pt-3 flex flex-col gap-1.5">
-                <button className="properties-panel-btn-primary is-valid w-full text-xs py-1.5 px-3 text-left flex items-center gap-1.5" onClick={async () => { const exactMatch = getAppMeta(selectedApp.name); if (exactMatch) { onNavigateToFactory?.('applications', getPreferredApplicationIdentifier(exactMatch) || selectedApp.name, 'view'); return; } const resolvedApp = await ensureResolvedDiagramApplication(selectedApp.name, selectedApp.taskId); if (resolvedApp) { onNavigateToFactory?.('applications', getPreferredApplicationIdentifier(resolvedApp) || selectedApp.name, 'view'); return; } onNavigateToFactory?.('applications', selectedApp.name, 'add'); }} title={isSelectedAppValid ? 'Open in Application Component' : 'Add to Application Component'}>
+                <button className="properties-panel-btn-primary is-valid w-full text-xs py-1.5 px-3 text-left flex items-center gap-1.5" onClick={async () => { const exactMatch = getAppMeta(selectedApp.name); if (exactMatch) { onApplicationLinkClick?.(getPreferredApplicationDisplayName(exactMatch, selectedApp.name), exactMatch.correlationId || null); return; } const resolvedApp = await ensureResolvedDiagramApplication(selectedApp.name, selectedApp.taskId); if (resolvedApp) { onApplicationLinkClick?.(getPreferredApplicationDisplayName(resolvedApp, selectedApp.name), resolvedApp.correlationId || null); return; } onNavigateToFactory?.('applications', selectedApp.name, 'add'); }} title={isSelectedAppValid ? 'Open in Application Component' : 'Add to Application Component'}>
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
                   {isSelectedAppValid ? 'View in Application Component →' : 'Add to Application Component →'}
                 </button>

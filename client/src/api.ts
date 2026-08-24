@@ -385,8 +385,8 @@ export const getCanonicalFactories = async (neighborhoodName: string, fetchFirst
   return out;
 };
 
-export const getComponentHierarchies = (neighborhoodName?: string, componentName: string = 'Application', modelName?: string, compact = false): Promise<import('./types').HierarchiesResponse> => {
-  const params = { neighborhoodName, componentName, ...(compact ? { compact: true } : {}) } as any;
+export const getComponentHierarchies = (neighborhoodName?: string, componentName: string = 'Application', modelName?: string, compact = false, includeChildless = false): Promise<import('./types').HierarchiesResponse> => {
+  const params = { neighborhoodName, componentName, ...(compact ? { compact: true } : {}), ...(includeChildless ? { includeChildless: true } : {}) } as any;
   const modelConfig = scopedModelRequestConfig(modelName) || {};
   return api.get('/custom-factories/hierarchies/tree', { params, ...(modelConfig || {}) }).then((r) => r.data);
 };
@@ -426,6 +426,9 @@ export const uploadCustomFactory = (params: { neighborhoodName: string; file: Fi
   }
   return api.post('/custom-factories/upload', body).then((r) => r.data);
 };
+
+export const createCustomFactoryRow = (factoryId: string, payload: { values: Record<string, unknown>; owner?: string; state?: string }, modelName?: string): Promise<CustomFactory> =>
+  api.post(`/custom-factories/${encodeURIComponent(factoryId)}/rows`, payload, scopedModelRequestConfig(modelName) as any).then((r) => r.data);
 
 export const updateCustomFactoryRow = (factoryId: string, rowId: string, payload: { values: Record<string, unknown>; owner?: string; state?: string }, modelName?: string): Promise<CustomFactory> =>
   api.put(`/custom-factories/${encodeURIComponent(factoryId)}/rows/${encodeURIComponent(rowId)}`, payload, scopedModelRequestConfig(modelName) as any).then((r) => r.data);

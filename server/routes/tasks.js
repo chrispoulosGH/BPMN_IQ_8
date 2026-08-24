@@ -3,6 +3,7 @@ const router = express.Router();
 const Task = require('../models/Task');
 const Diagram = require('../models/Diagram');
 const Component = require('../models/Component');
+const CanonicalComponent = require('../models/CanonicalComponent');
 const { BusinessFlow, Product, Actor, Channel, Domain, Subdomain, LineOfBusiness } = require('../models/ReferenceData');
 const { findApplicationByCorrelationId, listApplicationReferences } = require('../utils/applicationReferenceLookup');
 const { getNeighborhoodName, buildNeighborhoodFilter, withNeighborhood } = require('../utils/neighborhoodScope');
@@ -330,7 +331,31 @@ router.delete('/reference/:collection/:id', async (req, res) => {
 // Optional ?businessFlow=X to scope to a specific business flow
 router.get('/names', async (req, res) => {
   const filter = withNeighborhood(req, req.query.businessFlow ? { businessFlow: req.query.businessFlow } : {});
-  const names = await Task.distinct('name', filter);
+  const legacyTaskNames = await Task.distinct('name', filter);
+
+  // The "Tasks" factory (Model Components — where "Add to Task Component"
+  // and the "New Task" dialog actually write rows) is a different data
+  // source entirely from the legacy `Task` collection above: it lives in
+  // either CanonicalComponent (componentType "Task"/"Tasks") or a legacy
+  // Component doc with embedded rows, depending on how this neighborhood's
+  // data was loaded. Without this, a task just added to the factory would
+  // never appear here — and would even be rejected if typed by hand, since
+  // the Enter-to-confirm check below validates against this same list.
+  const neighborhoodName = getNeighborhoodName(req);
+  const neighborhoodFilter = buildNeighborhoodFilter(neighborhoodName);
+  const [canonicalTaskDocs, legacyFactoryItems] = await Promise.all([
+    CanonicalComponent.find(
+      { $and: [neighborhoodFilter, { componentType: { $regex: /^tasks?$/i } }] },
+      { primaryKey: 1 }
+    ).lean(),
+    getComponentReferenceItems(neighborhoodName, ['task', 'tasks']),
+  ]);
+  const factoryTaskNames = [
+    ...canonicalTaskDocs.map((doc) => doc.primaryKey),
+    ...legacyFactoryItems.map((item) => item.name),
+  ].map((name) => String(name || '').trim()).filter(Boolean);
+
+  const names = [...new Set([...legacyTaskNames, ...factoryTaskNames])];
   if (names.length) return res.json(names.sort());
 
   const fallbackTasks = await getTasksFromDiagrams(req);
