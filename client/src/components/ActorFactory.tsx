@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Table, Input, Button, App as AntApp, Space, Tooltip, Modal, Form, Tag, Select } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons';
 import { getActors, createActor, updateActor, deleteActor, type ActorItem } from '../api';
-import { STATE_TRANSITIONS, getAllowedActions, stateTagColor, transitionState } from '../stateUtils';
+import { getAllowedActions, getStatusTransitions, stateTagColor, transitionState, type StatusRefTransition } from '../stateUtils';
 import { matchesFactorySearch, parseFactorySearch, encodeExactFactorySearch } from '../utils/factorySearch';
 import { enhanceColumnsWithSortAndFilters } from '../utils/tableEnhancer';
 
@@ -25,6 +25,11 @@ export default function ActorFactory({ defaultSearch, defaultAdd, onItemAdded, r
   const [editingItem, setEditingItem] = useState<ActorItem | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [form] = Form.useForm();
+  const [statusTransitions, setStatusTransitions] = useState<StatusRefTransition[]>([]);
+
+  useEffect(() => {
+    getStatusTransitions().then(setStatusTransitions).catch(() => setStatusTransitions([]));
+  }, []);
 
   const loadItems = useCallback(async () => {
     setLoading(true);
@@ -149,7 +154,7 @@ export default function ActorFactory({ defaultSearch, defaultAdd, onItemAdded, r
       onFilter: (value: any, record: ActorItem) => ((record as any).state || 'published') === value,
       render: (val: string, record: ActorItem) => {
         const currentState = (val || 'published').toLowerCase();
-        const actions = getAllowedActions(userRole, currentState);
+        const actions = getAllowedActions(statusTransitions, userRole, currentState);
         const tagColor = stateTagColor(currentState);
         if (!actions.length || readOnly) {
           return <Tag color={tagColor}>{currentState}</Tag>;
@@ -160,7 +165,7 @@ export default function ActorFactory({ defaultSearch, defaultAdd, onItemAdded, r
             value="__current__"
             style={{ width: '100%' }}
             onChange={async (action) => {
-              const rule = STATE_TRANSITIONS.find(t => t.action === action && t.from === currentState);
+              const rule = statusTransitions.find(t => t.action === action && t.from === currentState);
               if (rule) {
                 try {
                   await transitionState('actors', record._id, action, userRole || '');

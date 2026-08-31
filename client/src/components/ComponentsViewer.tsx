@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useDeferredValue, useRef } from 'react';
 import { App as AntApp, Card, Space, Spin, Tree, Button, Segmented, Tabs, Empty, AutoComplete, Input, Drawer, Divider, Descriptions, Badge, Tag, Collapse, Select } from 'antd';
 import type { DataNode } from 'antd/es/tree';
-import { FolderOutlined, TableOutlined, SearchOutlined, CloseOutlined, BarsOutlined, UnorderedListOutlined } from '@ant-design/icons';
+import { FolderOutlined, TableOutlined, SearchOutlined, CloseOutlined, BarsOutlined, UnorderedListOutlined, PartitionOutlined } from '@ant-design/icons';
 
 import { getCustomFactories, getComponentHierarchies, getCustomFactory, getCustomFactoryForModel, getApplicationByCorrelationId, getApplicationByName, getFactoryNeighborhoods, getLeafComponent, getCanonicalFactories, getSystemComponentLinkedTypes, getSystemComponentRecordsLinkedToApplication } from '../api';
 import type { LinkedSystemComponentRecord } from '../api';
@@ -99,7 +99,13 @@ interface ComponentsViewerProps {
   // nonce forces re-application even when componentId repeats (clicking the
   // same link twice while already on that tab should still switch to table
   // view). Applied once componentId is present in the loaded components list.
-  requestedComponent?: { componentId: string; nonce: number } | null;
+  // rowName optionally pins the table view to one specific row (e.g. "View
+  // in BPMN Component" jumping straight to that diagram's own flow row).
+  requestedComponent?: { componentId: string; nonce: number; rowName?: string } | null;
+  // Fired from the metadata drawer's "View Diagram" link when the selected
+  // tree node is a Business Process Flow — lets the parent switch to the
+  // Diagrams tab with that flow's diagram loaded on canvas.
+  onViewDiagramClick?: (businessFlowName: string, neighborhoodName: string) => void;
 }
 
 export default function ComponentsViewer({
@@ -109,6 +115,7 @@ export default function ComponentsViewer({
   renderComponentContent,
   onApplicationLinkClick,
   requestedComponent,
+  onViewDiagramClick,
 }: ComponentsViewerProps) {
   const { message } = AntApp.useApp();
   const [selectedSystemComponentRecord, setSelectedSystemComponentRecord] = useState<LinkedSystemComponentRecord | null>(null);
@@ -125,6 +132,9 @@ export default function ComponentsViewer({
   const [searchHitNodeKey, setSearchHitNodeKey] = useState<React.Key | null>(null);
   const [selectedComponent, setSelectedComponent] = useState<CustomFactory | null>(null);
   const [selectedNodeQualifiers, setSelectedNodeQualifiers] = useState<Record<string, string>>({});
+  // Set when the currently selected tree node is a Business Process Flow —
+  // drives the "View Diagram" link in the metadata drawer.
+  const [selectedBusinessFlowName, setSelectedBusinessFlowName] = useState<string | null>(null);
   const [showMetadataDrawer, setShowMetadataDrawer] = useState(false);
   const [loadingMetadata, setLoadingMetadata] = useState(false);
   const [activeTabKey, setActiveTabKey] = useState<string | undefined>(undefined);
@@ -136,6 +146,7 @@ export default function ComponentsViewer({
   // Defer search text updates to prevent blocking the UI on every keystroke
   const deferredSearchText = useDeferredValue(searchText);
   const selectedNodeRef = useRef<HTMLDivElement>(null);
+  const verticalTreeRef = useRef<any>(null);
   const horizontalTreeContainerRef = useRef<HTMLDivElement>(null);
   const horizontalTreeNodeRefMap = useRef<Map<React.Key, HTMLElement>>(new Map());
   const pendingHorizontalRevealKeyRef = useRef<React.Key | null>(null);
@@ -409,6 +420,7 @@ export default function ComponentsViewer({
       setShowMetadataDrawer(false);
       setSelectedNodeQualifiers({});
       setSelectedSystemComponentRecord(null);
+      setSelectedBusinessFlowName(null);
       return;
     }
 
@@ -426,6 +438,11 @@ export default function ComponentsViewer({
 
     const selectedNodeInfo = findNodeByKey(treeData, nodeKey);
     setSelectedNodeQualifiers(selectedNodeInfo?.qualifiers || {});
+    setSelectedBusinessFlowName(
+      /^business\s*(process\s*)?flow$/i.test(String(selectedNodeInfo?.componentName || '').trim())
+        ? selectedNodeInfo?.rowName || null
+        : null
+    );
 
     // Clicking an Application (or a linked-type node under one) both selects it and
     // reveals its linked System Components — driven explicitly here rather than via
@@ -595,6 +612,10 @@ export default function ComponentsViewer({
     appliedComponentNavNonceRef.current = requestedComponent.nonce;
     setActiveTabKey(requestedComponent.componentId);
     setViewMode('table');
+    if (requestedComponent.rowName) {
+      setHighlightedComponentId(requestedComponent.componentId);
+      setHighlightedRowName(requestedComponent.rowName);
+    }
   }, [requestedComponent, components]);
 
   // Helper to extract all keys from tree data recursively
@@ -973,6 +994,28 @@ export default function ComponentsViewer({
         setSearchText(node.label as string);
         const selectedComponentName = node.data?.componentName ? String(node.data.componentName) : null;
         const selectedRowName = node.data?.rowName ? String(node.data.rowName) : null;
+
+        // Already browsing a tree view (vertical or horizontal) — reveal the
+        // match in place (expanding every ancestor down to it, including an
+        // Application-level result, which keeps its own expand arrow for
+        // drilling into linked System Components) instead of bouncing out
+        // to the Table view, which used to happen unconditionally below.
+        if (viewMode === 'tree-vertical' || viewMode === 'tree-horizontal') {
+          const parents = computeParentKeysForPath(key as string);
+          setExpandedKeys((prev) => [...new Set([...prev, ...parents])]);
+          setSelectedNodeKey(key);
+          if (viewMode === 'tree-horizontal') {
+            pendingHorizontalRevealKeyRef.current = key;
+          } else {
+            // Give the newly-expanded ancestors a moment to render before
+            // asking AntD's Tree to scroll the match into view.
+            setTimeout(() => verticalTreeRef.current?.scrollTo?.({ key, align: 'auto' }), 60);
+          }
+          setHighlightedComponentId(null);
+          setHighlightedRowName(null);
+          setAncestryPaths(null);
+          return;
+        }
 
         // Find ALL hierarchy paths that include this node (for multiple lineages).
         // Match by componentName + rowName because canonical component types are
@@ -1713,6 +1756,7 @@ export default function ComponentsViewer({
         <div className={`component-search-results${viewMode === 'tree-horizontal' ? ' horizontal-tree-scroll' : ''}`} style={{ flex: 1, paddingRight: '4px' }}>
           {viewMode === 'tree-vertical' ? (
             <Tree
+              ref={verticalTreeRef}
               treeData={filteredTreeData}
               expandedKeys={expandedKeys}
               onExpand={setExpandedKeys}
@@ -1819,6 +1863,18 @@ export default function ComponentsViewer({
                   {getComponentDescription(selectedComponent)}
                 </div>
               </div>
+
+              {selectedBusinessFlowName && onViewDiagramClick && (
+                <Button
+                  type="primary"
+                  block
+                  icon={<PartitionOutlined />}
+                  style={{ marginBottom: '16px' }}
+                  onClick={() => onViewDiagramClick(selectedBusinessFlowName, activeModelName || neighborhoodName)}
+                >
+                  View Diagram →
+                </Button>
+              )}
 
               {Object.entries(selectedNodeQualifiers).filter(([, value]) => String(value || '').trim()).length > 0 && (
                 <>

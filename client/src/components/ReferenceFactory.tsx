@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Table, Input, Button, App as AntApp, Space, Tooltip, Modal, Form, Tag, Select } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons';
 import { getRefItems, createRefItem, updateRefItem, deleteRefItem, type RefItem } from '../api';
-import { STATE_TRANSITIONS, getAllowedActions, stateTagColor, transitionState } from '../stateUtils';
+import { getAllowedActions, getStatusTransitions, stateTagColor, transitionState, type StatusRefTransition } from '../stateUtils';
 import { enhanceColumnsWithSortAndFilters } from '../utils/tableEnhancer';
 
 interface ReferenceFactoryProps {
@@ -25,6 +25,11 @@ export default function ReferenceFactory({ collection, title, defaultSearch, def
   const [editingItem, setEditingItem] = useState<RefItem | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [form] = Form.useForm();
+  const [statusTransitions, setStatusTransitions] = useState<StatusRefTransition[]>([]);
+
+  useEffect(() => {
+    getStatusTransitions().then(setStatusTransitions).catch(() => setStatusTransitions([]));
+  }, []);
 
   const loadItems = useCallback(async () => {
     setLoading(true);
@@ -132,7 +137,7 @@ export default function ReferenceFactory({ collection, title, defaultSearch, def
       onFilter: (value: any, record: RefItem) => ((record as any).state || 'published') === value,
       render: (val: string, record: RefItem) => {
         const currentState = (val || 'published').toLowerCase();
-        const actions = getAllowedActions(userRole, currentState);
+        const actions = getAllowedActions(statusTransitions, userRole, currentState);
         const tagColor = stateTagColor(currentState);
         if (!actions.length || readOnly) {
           return <Tag color={tagColor}>{currentState}</Tag>;
@@ -143,7 +148,7 @@ export default function ReferenceFactory({ collection, title, defaultSearch, def
             value="__current__"
             style={{ width: '100%' }}
             onChange={async (action) => {
-              const rule = STATE_TRANSITIONS.find(t => t.action === action && t.from === currentState);
+              const rule = statusTransitions.find(t => t.action === action && t.from === currentState);
               if (rule) {
                 try {
                   await transitionState(collection, record._id, action, userRole || '');

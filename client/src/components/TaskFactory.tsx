@@ -3,7 +3,7 @@ import { Table, Select, Input, Button, Modal, Form, Tag, App as AntApp, Space, T
 import { PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons';
 import type { TaskRecord, TaskCreatePayload, ReferenceData, TaskAddData } from '../types';
 import { getTasks, getTaskReference, createTask, updateTask, deleteTask } from '../api';
-import { STATE_TRANSITIONS, getAllowedActions, stateTagColor, transitionState } from '../stateUtils';
+import { getAllowedActions, getStatusTransitions, stateTagColor, transitionState, type StatusRefTransition } from '../stateUtils';
 import { parseFactorySearch } from '../utils/factorySearch';
 import { enhanceColumnsWithSortAndFilters } from '../utils/tableEnhancer';
 
@@ -27,6 +27,11 @@ export default function TaskFactory({ defaultSearch, defaultAddData, onItemAdded
   const [editingTask, setEditingTask] = useState<TaskRecord | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [form] = Form.useForm();
+  const [statusTransitions, setStatusTransitions] = useState<StatusRefTransition[]>([]);
+
+  useEffect(() => {
+    getStatusTransitions().then(setStatusTransitions).catch(() => setStatusTransitions([]));
+  }, []);
 
   // Load reference data once
   useEffect(() => {
@@ -163,7 +168,7 @@ export default function TaskFactory({ defaultSearch, defaultAddData, onItemAdded
       onFilter: (value: any, record: TaskRecord) => ((record as any).state || 'published') === value,
       render: (val: string, record: TaskRecord) => {
         const currentState = (val || 'published').toLowerCase();
-        const actions = getAllowedActions(userRole, currentState);
+        const actions = getAllowedActions(statusTransitions, userRole, currentState);
         const tagColor = stateTagColor(currentState);
         if (!actions.length || readOnly) {
           return <Tag color={tagColor}>{currentState}</Tag>;
@@ -174,7 +179,7 @@ export default function TaskFactory({ defaultSearch, defaultAddData, onItemAdded
             value="__current__"
             style={{ width: '100%' }}
             onChange={async (action) => {
-              const rule = STATE_TRANSITIONS.find(t => t.action === action && t.from === currentState);
+              const rule = statusTransitions.find(t => t.action === action && t.from === currentState);
               if (rule) {
                 try {
                   await transitionState('tasks', record._id, action, userRole || '');

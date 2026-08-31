@@ -15,6 +15,7 @@ const { Actor, Product } = require('../models/ReferenceData');
 const Server = require('../models/Server');
 const DatabaseInstance = require('../models/DatabaseInstance');
 const { rebuildSearchIndex } = require('../utils/searchIndexBuilder');
+const { canTransitionTo } = require('../services/stateTransitions');
 const fkRegistry = require('../services/ForeignKeyRegistry');
 const fkResolver = require('../services/ForeignKeyResolver');
 const { materializeFromBatches } = require('../lib/materializer');
@@ -23,6 +24,7 @@ const CanonicalData = require('../models/CanonicalData');
 const Diagram = require('../models/Diagram');
 const { DEFAULT_NEIGHBORHOOD_NAME } = require('../utils/neighborhoodScope');
 const { findApplicationByAcronym, findApplicationByCorrelationId } = require('../utils/applicationReferenceLookup');
+const { mapComponentNameToLineageField } = require('../utils/lineageFields');
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 250 * 1024 * 1024 } });
@@ -1194,30 +1196,6 @@ async function doesDataComponentExist({ type, value, neighborhoodName, correlati
   }
 
   return true;
-}
-
-// Maps a hierarchy component column name (e.g. "channel", "Value Stream") to the
-// canonical lineage field key used by diagram generation. Returns null for columns
-// that don't correspond to a known lineage level (e.g. Task, Application).
-const LINEAGE_FIELD_ALIASES = new Map([
-  ['lineofbusiness', 'lineOfBusiness'],
-  ['lob', 'lineOfBusiness'],
-  ['channel', 'channel'],
-  ['product', 'product'],
-  ['domain', 'domain'],
-  ['l0', 'domain'],
-  ['subdomain', 'subdomain'],
-  ['l1', 'subdomain'],
-  ['valuestream', 'valueStream'],
-  ['journey', 'journey'],
-  ['businesscapability', 'businessCapability'],
-  ['businessprocessflow', 'businessFlow'],
-  ['businessflow', 'businessFlow'],
-]);
-
-function mapComponentNameToLineageField(componentName) {
-  const normalized = String(componentName || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
-  return LINEAGE_FIELD_ALIASES.get(normalized) || null;
 }
 
 // Captures the literal hierarchy values present on a single source spreadsheet row
@@ -3135,7 +3113,7 @@ async function buildCanonicalFactoryPayload(neighborhoodName, componentType, fac
     sourceFileName: '',
     createdAt: null,
     updatedAt: null,
-    rows: docs.map((d) => ({ _id: String(d._id), values: d.values || {}, owner: '', state: 'staged', sourcedFrom: 'canonical', createdBy: '', updatedBy: '', parentFactoryName: '', parentName: '', createdAt: d.createdAt, updatedAt: d.updatedAt })),
+    rows: docs.map((d) => ({ _id: String(d._id), values: d.values || {}, owner: d.owner || '', state: d.state || 'staged', sourcedFrom: 'canonical', createdBy: '', updatedBy: d.updatedBy || '', parentFactoryName: '', parentName: '', createdAt: d.createdAt, updatedAt: d.updatedAt })),
     rowCount: docs.length,
   };
 }
@@ -3158,7 +3136,15 @@ router.post('/:factoryId/rows', requireAdminWrite, async (req, res) => {
       });
       if (existing) return res.status(409).json({ error: `A ${componentType} named "${primaryKey}" already exists` });
 
-      await CanonicalComponent.create({ neighborhoodName, componentType, primaryKey, values });
+      await CanonicalComponent.create({
+        neighborhoodName,
+        componentType,
+        primaryKey,
+        values,
+        owner: String(req.body?.owner || '').trim(),
+        state: String(req.body?.state || 'staged').trim() || 'staged',
+        updatedBy: getCurrentUserId(req),
+      });
       // Tree Views/search read a precomputed index, not CanonicalComponent
       // directly — without this, a row created here would never show up
       // there. Fire-and-forget so the response isn't held up by a full
@@ -3207,9 +3193,21 @@ router.put('/:factoryId/rows/:rowId', requireAdminWrite, async (req, res) => {
       const { neighborhoodName, componentType } = canonicalRef;
       const doc = await CanonicalComponent.findOne({ _id: req.params.rowId, neighborhoodName, componentType });
       if (!doc) return res.status(404).json({ error: 'Factory row not found' });
+
+      const currentState = String(doc.state || 'staged').trim().toLowerCase();
+      const nextState = String(req.body?.state || currentState).trim().toLowerCase() || 'staged';
+      if (!canTransitionTo(req.currentUser?.role, currentState, nextState)) {
+        return res.status(403).json({
+          error: `Role "${req.currentUser?.role || 'none'}" cannot change status from "${currentState}" to "${nextState}"`,
+        });
+      }
+
       doc.values = { ...doc.values, ...nextValues };
       const nextPrimaryKey = String(nextValues[PRIMARY_KEY_COLUMN] || '').trim();
       if (nextPrimaryKey) doc.primaryKey = nextPrimaryKey;
+      doc.owner = String(req.body?.owner ?? doc.owner ?? '').trim();
+      doc.state = nextState;
+      doc.updatedBy = getCurrentUserId(req);
       await doc.save();
       rebuildSearchIndex(neighborhoodName).catch((err) => {
         console.error('[UPDATE ROW] search index rebuild failed:', err && err.message);
@@ -3222,6 +3220,14 @@ router.put('/:factoryId/rows/:rowId', requireAdminWrite, async (req, res) => {
     if (!factory) return res.status(404).json({ error: 'Component not found' });
     const row = factory.rows.id(req.params.rowId);
     if (!row) return res.status(404).json({ error: 'Factory row not found' });
+
+    const legacyCurrentState = String(row.state || 'staged').trim().toLowerCase();
+    const legacyNextState = String(req.body?.state || legacyCurrentState).trim().toLowerCase() || 'staged';
+    if (!canTransitionTo(req.currentUser?.role, legacyCurrentState, legacyNextState)) {
+      return res.status(403).json({
+        error: `Role "${req.currentUser?.role || 'none'}" cannot change status from "${legacyCurrentState}" to "${legacyNextState}"`,
+      });
+    }
 
     const candidateRows = factory.rows.map((factoryRow) => {
       const values = Object.fromEntries(factory.columns.map((column) => [column, factoryRow.values.get(column) ?? '']));
@@ -3239,7 +3245,7 @@ router.put('/:factoryId/rows/:rowId', requireAdminWrite, async (req, res) => {
       row.values.set(column, nextValues[column] ?? '');
     }
     row.owner = String(req.body?.owner || row.owner || '').trim();
-    row.state = String(req.body?.state || row.state || 'staged').trim() || 'staged';
+    row.state = legacyNextState;
     row.updatedBy = getCurrentUserId(req);
 
     await factory.save();
@@ -3850,6 +3856,239 @@ router.get('/leaf-component', async (req, res) => {
   }
 });
 
+// GET /api/custom-factories/model-schema?neighborhoodName=X — the framework's
+// ordered schema-factory chain, split around the "Business Process Flow"
+// level for the "New Diagram" dialog: everything ABOVE it (Domain,
+// Subdomain, ...) becomes a required, cascading dropdown; the flow level
+// itself (plus its own qualifier columns) becomes the new diagram's
+// free-text name field; anything at/under it (Task, Application) is
+// irrelevant to creating a blank diagram and is left out entirely.
+// Diagram-metadata fields a "New Diagram" qualifier value is allowed to feed —
+// matches Diagram.js's own schema fields exactly.
+const DIAGRAM_METADATA_FIELDS = new Set([
+  'lineOfBusiness', 'channel', 'domain', 'subdomain', 'product', 'valueStream', 'journey', 'businessCapability',
+]);
+
+// "value_stream_qualifier" -> "valueStream" / "Value Stream". Returns null
+// when the derived camelCase name isn't a real Diagram metadata field, so
+// callers can drop qualifiers that don't have anywhere to persist to.
+function describeQualifierField(fieldName) {
+  const stripped = String(fieldName || '').replace(/[_\s]*qualifier$/i, '').trim();
+  if (!stripped) return null;
+  const words = stripped.split(/[_\s]+/).filter(Boolean);
+  if (!words.length) return null;
+  const camel = words.map((word, i) => (i === 0 ? word.toLowerCase() : word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())).join('');
+  const label = words.map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' ');
+  if (!DIAGRAM_METADATA_FIELDS.has(camel)) return null;
+  return { fieldName, label, diagramField: camel };
+}
+
+// Sample a component type's actual rows to describe it: its own name plus
+// whichever qualifier columns actually show up on its data (empirically —
+// Model.schemaFactories' declared qualifierColumns don't always match where
+// a framework's real data ended up putting them, e.g. a "Business Process
+// Flow" row's own value_stream/journey/business_capability qualifiers).
+async function describeSchemaLevel(neighborhoodName, componentType) {
+  const canonicalSample = await CanonicalComponent.find(
+    { neighborhoodName, componentType: { $regex: `^${escapeRegExp(componentType)}$`, $options: 'i' } },
+    { values: 1 }
+  ).limit(25).lean();
+
+  const qualifierFieldNames = new Set();
+  const collect = (values) => {
+    Object.keys(values || {}).forEach((key) => {
+      if (/^name$/i.test(key) || /^__/.test(key)) return;
+      qualifierFieldNames.add(key);
+    });
+  };
+
+  if (canonicalSample.length) {
+    canonicalSample.forEach((doc) => collect(doc.values || {}));
+  } else {
+    const legacyFactory = await Component.findOne(
+      { neighborhoodName, name: { $regex: `^${escapeRegExp(componentType)}$`, $options: 'i' } },
+      { columns: 1 }
+    ).lean();
+    (legacyFactory?.columns || []).forEach((column) => { if (!/^name$/i.test(column)) qualifierFieldNames.add(column); });
+  }
+
+  const qualifierColumns = Array.from(qualifierFieldNames)
+    .map((fieldName) => describeQualifierField(fieldName))
+    .filter(Boolean);
+
+  const diagramField = mapComponentNameToLineageField(componentType);
+  return { componentName: componentType, diagramField, qualifierColumns };
+}
+
+// Find the real parent TYPE (a component-type name) of `componentType` —
+// preferring the actual parentRefs graph on a sampled row (authoritative,
+// populated by materialization/resolveParentRefs), falling back to the
+// framework's declared schemaFactories parent chain for rows/frameworks that
+// predate that graph.
+async function findParentComponentType(neighborhoodName, componentType, schemaParentByType) {
+  const sample = await CanonicalComponent.findOne(
+    {
+      neighborhoodName,
+      componentType: { $regex: `^${escapeRegExp(componentType)}$`, $options: 'i' },
+      parentRefs: { $exists: true, $not: { $size: 0 } },
+    },
+    { parentRefs: 1 }
+  ).lean();
+  if (sample?.parentRefs?.length) {
+    const parentDoc = await CanonicalComponent.findById(sample.parentRefs[0], { componentType: 1 }).lean();
+    if (parentDoc?.componentType) return parentDoc.componentType;
+  }
+  return schemaParentByType.get(String(componentType || '').trim().toLowerCase()) || null;
+}
+
+// GET /api/custom-factories/model-schema?neighborhoodName=X — the framework's
+// real hierarchy chain leading up to its "Business Process Flow" level,
+// discovered from the actual canonical data (parentRefs, falling back to
+// Model.schemaFactories) rather than assumed from schema config alone, since
+// a framework's Business Process Flow/Task levels are often populated by a
+// separate generation pipeline that never registers itself back into
+// schemaFactories. Everything ABOVE that level becomes a required, cascading
+// hierarchy dropdown; the level itself (plus its own qualifiers) becomes the
+// new diagram's free-text name field; Task/Application (at/below it) are
+// irrelevant to creating a blank diagram and are left out entirely.
+router.get('/model-schema', async (req, res) => {
+  try {
+    const neighborhoodName = String(req.query?.neighborhoodName || DEFAULT_NEIGHBORHOOD_NAME).trim();
+    if (!neighborhoodName) return res.status(400).json({ error: 'neighborhoodName is required' });
+
+    const [canonicalTypes, legacyFactories, model] = await Promise.all([
+      CanonicalComponent.distinct('componentType', { neighborhoodName }),
+      Component.find({ neighborhoodName }, { name: 1 }).lean(),
+      Model.findOne({ name: neighborhoodName }, { schemaFactories: 1 }).lean(),
+    ]);
+    const allTypes = Array.from(new Set([
+      ...canonicalTypes.map((t) => String(t || '').trim()).filter(Boolean),
+      ...legacyFactories.map((f) => String(f.name || '').trim()).filter(Boolean),
+    ]));
+    if (!allTypes.length) return res.json({ hierarchyFields: [], nameField: null });
+
+    const schemaParentByType = new Map();
+    (model?.schemaFactories || []).forEach((factory) => {
+      const child = String(factory?.name || '').trim().toLowerCase();
+      const parent = String(factory?.parentFactoryName || '').trim();
+      if (child && parent) schemaParentByType.set(child, parent);
+    });
+
+    const flowType = allTypes.find((type) => mapComponentNameToLineageField(type) === 'businessFlow');
+    if (!flowType) {
+      // No recognizable Business Process Flow level in this framework's data
+      // at all — every known type becomes a plain hierarchy dropdown ahead
+      // of a bare (unmapped) name field.
+      const hierarchyFields = await Promise.all(allTypes.map((type) => describeSchemaLevel(neighborhoodName, type)));
+      return res.json({ hierarchyFields, nameField: null });
+    }
+
+    // Walk upward from the flow level, one real parent at a time, until we
+    // run out of known ancestors — building the chain root-first.
+    const ancestorChain = [];
+    const visited = new Set([flowType.toLowerCase()]);
+    let currentType = flowType;
+    for (let guard = 0; guard < allTypes.length; guard += 1) {
+      const parentType = await findParentComponentType(neighborhoodName, currentType, schemaParentByType);
+      if (!parentType || visited.has(parentType.toLowerCase())) break;
+      visited.add(parentType.toLowerCase());
+      ancestorChain.unshift(parentType);
+      currentType = parentType;
+    }
+
+    const [hierarchyFields, nameField] = await Promise.all([
+      Promise.all(ancestorChain.map((type) => describeSchemaLevel(neighborhoodName, type))),
+      describeSchemaLevel(neighborhoodName, flowType),
+    ]);
+    res.json({ hierarchyFields, nameField });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/custom-factories/hierarchy-options?neighborhoodName=X&componentType=Y
+//   &parentComponentType=Z&parentValue=W
+// Distinct existing values for a schema-factory level, optionally narrowed to
+// only the real children of an already-selected parent — preferring the
+// parentRefs graph (authoritative), falling back to each row's
+// __lineage/__lineageVariants snapshot for rows that predate that graph —
+// powers the "New Diagram" dialog's cascading dropdowns.
+router.get('/hierarchy-options', async (req, res) => {
+  try {
+    const neighborhoodName = String(req.query?.neighborhoodName || DEFAULT_NEIGHBORHOOD_NAME).trim();
+    const componentType = String(req.query?.componentType || '').trim();
+    const parentComponentType = String(req.query?.parentComponentType || '').trim();
+    const parentValue = String(req.query?.parentValue || '').trim();
+    if (!neighborhoodName || !componentType) {
+      return res.status(400).json({ error: 'neighborhoodName and componentType are required' });
+    }
+
+    const dedupSorted = (values) => Array.from(new Set(values.map((v) => String(v || '').trim()).filter(Boolean)))
+      .sort((left, right) => left.localeCompare(right));
+
+    const canonicalFilter = { neighborhoodName, componentType: { $regex: `^${escapeRegExp(componentType)}$`, $options: 'i' } };
+    const canonicalDocs = await CanonicalComponent.find(canonicalFilter, { primaryKey: 1, values: 1, parentRefs: 1 }).lean();
+
+    if (canonicalDocs.length) {
+      if (!parentComponentType || !parentValue) {
+        return res.json({ options: dedupSorted(canonicalDocs.map((d) => d.primaryKey)) });
+      }
+
+      const parentDoc = await CanonicalComponent.findOne(
+        { neighborhoodName, componentType: { $regex: `^${escapeRegExp(parentComponentType)}$`, $options: 'i' }, primaryKey: { $regex: `^${escapeRegExp(parentValue)}$`, $options: 'i' } },
+        { _id: 1 }
+      ).lean();
+
+      const viaParentRefs = parentDoc
+        ? canonicalDocs.filter((doc) => (doc.parentRefs || []).some((ref) => String(ref) === String(parentDoc._id)))
+        : [];
+      if (viaParentRefs.length) {
+        return res.json({ options: dedupSorted(viaParentRefs.map((d) => d.primaryKey)) });
+      }
+
+      // Fall back to lineage-snapshot matching for rows without a
+      // parentRefs graph yet (e.g. just-synced rows from a diagram save).
+      const parentField = mapComponentNameToLineageField(parentComponentType);
+      const normalizedParentValue = parentValue.toLowerCase();
+      const viaLineage = parentField
+        ? canonicalDocs.filter((doc) => {
+            const values = doc.values || {};
+            const variants = [];
+            if (values.__lineage && typeof values.__lineage === 'object') variants.push(values.__lineage);
+            if (Array.isArray(values.__lineageVariants)) {
+              values.__lineageVariants.forEach((variant) => { if (variant && typeof variant === 'object') variants.push(variant); });
+            }
+            return variants.some((variant) => String(variant?.[parentField] || '').trim().toLowerCase() === normalizedParentValue);
+          })
+        : canonicalDocs;
+      return res.json({ options: dedupSorted(viaLineage.map((d) => d.primaryKey)) });
+    }
+
+    // Legacy Component-backed factory fallback.
+    const legacyFactory = await Component.findOne(
+      { neighborhoodName, name: { $regex: `^${escapeRegExp(componentType)}$`, $options: 'i' } },
+      { rows: 1 }
+    ).lean();
+    const normalizedParentValue = parentValue.toLowerCase();
+    const legacyNames = (legacyFactory?.rows || [])
+      .filter((row) => {
+        if (!parentComponentType || !parentValue) return true;
+        if (row.parentName) {
+          return String(row.parentName).split('|').map((p) => p.trim().toLowerCase()).includes(normalizedParentValue);
+        }
+        return true;
+      })
+      .map((row) => {
+        const values = row.values instanceof Map ? Object.fromEntries(row.values) : (row.values || {});
+        return String(values.name || '').trim();
+      });
+
+    res.json({ options: dedupSorted(legacyNames) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/custom-factories/hierarchies/tree — Get component hierarchies from ComponentSearchIndex
 router.get('/hierarchies/tree', async (req, res) => {
   try {
@@ -4246,7 +4485,7 @@ router.get('/:id', async (req, res) => {
             sourceFileName: '',
             createdAt: null,
             updatedAt: null,
-            rows: docs.map((d) => ({ _id: String(d._id), values: d.values || {}, owner: '', state: 'staged', sourcedFrom: 'canonical', createdBy: '', updatedBy: '', parentFactoryName: '', parentName: '', createdAt: d.createdAt, updatedAt: d.updatedAt })),
+            rows: docs.map((d) => ({ _id: String(d._id), values: d.values || {}, owner: d.owner || '', state: d.state || 'staged', sourcedFrom: 'canonical', createdBy: '', updatedBy: d.updatedBy || '', parentFactoryName: '', parentName: '', createdAt: d.createdAt, updatedAt: d.updatedAt })),
             rowCount: docs.length,
           };
           return res.json(serializeFactory(converted));

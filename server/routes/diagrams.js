@@ -9,6 +9,8 @@ const { Product, Domain, Subdomain, LineOfBusiness } = require('../models/Refere
 const { DEFAULT_NEIGHBORHOOD_NAME, getNeighborhoodName, buildNeighborhoodFilter } = require('../utils/neighborhoodScope');
 const { listApplicationReferences } = require('../utils/applicationReferenceLookup');
 const { rebuildSearchIndex } = require('../utils/searchIndexBuilder');
+const { buildBpmnXmlForFlow } = require('../lib/bpmnXmlBuilder');
+const { applyGeneratedDiagramFormatting } = require('../lib/diagramFormatting');
 
 /** Strip title/status housekeeping text annotations from the XML (they clutter the canvas) */
 function stripTitleAnnotations(xml) {
@@ -213,6 +215,28 @@ function extractTaskDetailsForSync(xml) {
 }
 
 /**
+ * Look up a parent row's _id by type + name, for setting parentRefs on a
+ * freshly-synced row. Every PRE-EXISTING canonical row (from the original
+ * upload/materialization) already has real parentRefs, which is what lets
+ * the search index correctly climb Task -> Business Process Flow -> Subdomain
+ * -> Domain — but the schema-declared parent-factory chain that would
+ * otherwise drive that climb as a fallback doesn't cover every level for
+ * every framework (e.g. "Business Process Flow" often isn't itself
+ * registered anywhere with a declared parent). So a synced row with no
+ * parentRefs of its own can silently fail to climb past itself. Setting
+ * parentRefs explicitly here — the same mechanism real rows already use —
+ * sidesteps that gap entirely instead of depending on it being fixed.
+ */
+async function resolveParentRowRef(neighborhoodName, parentTypeRegex, parentName) {
+  if (!parentName) return null;
+  const parentRow = await CanonicalComponent.findOne(
+    { neighborhoodName, componentType: { $regex: parentTypeRegex }, primaryKey: { $regex: `^${escapeRegExp(parentName)}$`, $options: 'i' } },
+    { _id: 1 }
+  ).lean();
+  return parentRow?._id || null;
+}
+
+/**
  * After a diagram is created/updated, make sure every task in its XML also
  * exists as a row in this neighborhood's Task factory (Model Components) —
  * otherwise a task added straight on the canvas only ever lives in that one
@@ -221,11 +245,14 @@ function extractTaskDetailsForSync(xml) {
  * "Add to Task Component" for it. Best-effort: a sync problem here should
  * never fail the diagram save itself.
  */
+// Returns whether it changed anything, so the caller can trigger a single
+// search-index rebuild after ALL of this save's syncs finish, rather than
+// each sync racing its own concurrent rebuild against the others'.
 async function syncDiagramTasksToTaskFactory(neighborhoodName, diagramMeta, xml) {
   try {
-    if (!neighborhoodName || !xml) return;
+    if (!neighborhoodName || !xml) return false;
     const taskDetails = extractTaskDetailsForSync(xml).filter((task) => task.name && task.name.trim());
-    if (!taskDetails.length) return;
+    if (!taskDetails.length) return false;
 
     // diagramMeta fields (parsed from the diagram title annotation) can carry
     // un-decoded XML entities (e.g. "After-Sales &#38; Service" instead of
@@ -264,6 +291,7 @@ async function syncDiagramTasksToTaskFactory(neighborhoodName, diagramMeta, xml)
         });
 
         if (!existing) {
+          const parentRef = await resolveParentRowRef(neighborhoodName, /^business\s*(process\s*)?flow$/i, businessFlow);
           await CanonicalComponent.create({
             neighborhoodName,
             componentType,
@@ -274,6 +302,7 @@ async function syncDiagramTasksToTaskFactory(neighborhoodName, diagramMeta, xml)
               ...(task.actor ? { actor_qualifier: task.actor } : {}),
               ...(hasLineage ? { __lineage: lineageEntry, __lineageVariants: [lineageEntry] } : {}),
             },
+            ...(parentRef ? { parentRefs: [parentRef] } : {}),
           });
           changed = true;
           continue;
@@ -288,12 +317,29 @@ async function syncDiagramTasksToTaskFactory(neighborhoodName, diagramMeta, xml)
         const alreadyTracked = variants.some(
           (variant) => variant && String(variant.businessFlow || '').trim().toLowerCase() === businessFlow.toLowerCase()
         );
+        let rowChanged = false;
         if (!alreadyTracked) {
           existing.values = {
             ...values,
             __lineage: values.__lineage || lineageEntry,
             __lineageVariants: [...variants, lineageEntry],
           };
+          rowChanged = true;
+        }
+        // A task reused under a second flow needs THAT flow's BPF added as
+        // an additional parent too, not just skipped because it already has
+        // one from wherever it was originally used — same "append, don't
+        // just fill-when-empty" rule the Application sync below already
+        // uses, since a row can legitimately have more than one parent.
+        const parentRef = await resolveParentRowRef(neighborhoodName, /^business\s*(process\s*)?flow$/i, businessFlow);
+        if (parentRef) {
+          const existingParentIds = (existing.parentRefs || []).map((id) => String(id));
+          if (!existingParentIds.includes(String(parentRef))) {
+            existing.parentRefs = [...(existing.parentRefs || []), parentRef];
+            rowChanged = true;
+          }
+        }
+        if (rowChanged) {
           existing.markModified('values');
           await existing.save();
           changed = true;
@@ -326,13 +372,261 @@ async function syncDiagramTasksToTaskFactory(neighborhoodName, diagramMeta, xml)
       }
     }
 
-    if (changed) {
-      rebuildSearchIndex(neighborhoodName).catch((err) => {
-        console.error('[DIAGRAM SYNC] search index rebuild failed:', err && err.message);
-      });
-    }
+    return changed;
   } catch (err) {
     console.error('[DIAGRAM SYNC] Failed to sync diagram tasks to Task factory:', err && err.message);
+    return false;
+  }
+}
+
+/**
+ * After a diagram is created/updated, make sure the flow ITSELF also exists
+ * as a row in this neighborhood's Business Process Flow factory — otherwise
+ * a brand-new flow created via the "New Diagram" dialog only ever lives in
+ * the Diagram document, and Model Components (Tree/Table views) and search
+ * (which read the component factory, not diagrams) never pick it up. Mirrors
+ * syncDiagramTasksToTaskFactory above, one level up the hierarchy.
+ * Best-effort: a sync problem here should never fail the diagram save itself.
+ */
+async function syncDiagramFlowToBusinessFlowFactory(neighborhoodName, diagramMeta) {
+  try {
+    if (!neighborhoodName) return false;
+    const flowName = decodeXmlValue(String(diagramMeta.businessFlow || diagramMeta.name || '').trim());
+    if (!flowName) return false;
+
+    // Same un-decoded-XML-entity defensiveness as the task sync above.
+    const lineageEntry = {};
+    if (diagramMeta.lineOfBusiness) lineageEntry.lineOfBusiness = decodeXmlValue(diagramMeta.lineOfBusiness);
+    if (diagramMeta.channel) lineageEntry.channel = decodeXmlValue(diagramMeta.channel);
+    if (diagramMeta.product) lineageEntry.product = decodeXmlValue(diagramMeta.product);
+    if (diagramMeta.domain) lineageEntry.domain = decodeXmlValue(diagramMeta.domain);
+    if (diagramMeta.subdomain) lineageEntry.subdomain = decodeXmlValue(diagramMeta.subdomain);
+    lineageEntry.businessFlow = flowName;
+    const hasAncestorLineage = Boolean(lineageEntry.domain || lineageEntry.subdomain);
+
+    // Value Stream/Journey/Business Capability live as qualifier columns on
+    // the flow's own row for this kind of framework (see the earlier "only
+    // 3 of 10 domains" investigation) — not as separate parent levels.
+    const qualifierUpdates = {};
+    if (diagramMeta.valueStream) qualifierUpdates.value_stream_qualifier = decodeXmlValue(diagramMeta.valueStream);
+    if (diagramMeta.journey) qualifierUpdates.journey_qualifier = decodeXmlValue(diagramMeta.journey);
+    if (diagramMeta.businessCapability) qualifierUpdates.business_capability_qualifier = decodeXmlValue(diagramMeta.businessCapability);
+
+    const canonicalSample = await CanonicalComponent.findOne(
+      { neighborhoodName, componentType: { $regex: /^business\s*(process\s*)?flow$/i } },
+      { componentType: 1 }
+    ).lean();
+
+    let changed = false;
+
+    if (canonicalSample) {
+      const componentType = canonicalSample.componentType;
+      const existing = await CanonicalComponent.findOne({
+        neighborhoodName,
+        componentType,
+        primaryKey: { $regex: `^${escapeRegExp(flowName)}$`, $options: 'i' },
+      });
+
+      if (!existing) {
+        const parentRef = await resolveParentRowRef(neighborhoodName, /^subdomain$/i, lineageEntry.subdomain);
+        await CanonicalComponent.create({
+          neighborhoodName,
+          componentType,
+          primaryKey: flowName,
+          values: {
+            name: flowName,
+            ...qualifierUpdates,
+            ...(hasAncestorLineage ? { __lineage: lineageEntry, __lineageVariants: [lineageEntry] } : {}),
+          },
+          ...(parentRef ? { parentRefs: [parentRef] } : {}),
+        });
+        changed = true;
+      } else {
+        const values = existing.values && typeof existing.values === 'object' ? existing.values : {};
+        const nextValues = { ...values };
+        let rowChanged = false;
+
+        // Fill missing qualifiers only — never clobber one a person already
+        // set by hand (same "gap-filling, not overriding" rule as tasks).
+        for (const [key, value] of Object.entries(qualifierUpdates)) {
+          if (!nextValues[key]) {
+            nextValues[key] = value;
+            rowChanged = true;
+          }
+        }
+
+        if (hasAncestorLineage) {
+          const variants = Array.isArray(values.__lineageVariants) ? values.__lineageVariants : [];
+          const alreadyTracked = variants.some((variant) => variant
+            && String(variant.domain || '').trim().toLowerCase() === String(lineageEntry.domain || '').trim().toLowerCase()
+            && String(variant.subdomain || '').trim().toLowerCase() === String(lineageEntry.subdomain || '').trim().toLowerCase());
+          if (!alreadyTracked) {
+            nextValues.__lineage = nextValues.__lineage || lineageEntry;
+            nextValues.__lineageVariants = [...variants, lineageEntry];
+            rowChanged = true;
+          }
+        }
+
+        // Same "append, don't just fill-when-empty" rule as the task sync —
+        // a flow name reused under a different subdomain needs that parent
+        // added too, not skipped because one's already there.
+        const parentRef = await resolveParentRowRef(neighborhoodName, /^subdomain$/i, lineageEntry.subdomain);
+        if (parentRef) {
+          const existingParentIds = (existing.parentRefs || []).map((id) => String(id));
+          if (!existingParentIds.includes(String(parentRef))) {
+            existing.parentRefs = [...(existing.parentRefs || []), parentRef];
+            rowChanged = true;
+          }
+        }
+
+        if (rowChanged) {
+          existing.values = nextValues;
+          existing.markModified('values');
+          await existing.save();
+          changed = true;
+        }
+      }
+    } else {
+      const legacyFactory = await Component.findOne({ neighborhoodName, name: { $regex: /^business\s*(process\s*)?flow$/i } });
+      if (legacyFactory) {
+        const existingRow = legacyFactory.rows.find(
+          (row) => String(row.values?.get?.('name') || '').trim().toLowerCase() === flowName.toLowerCase()
+        );
+        if (!existingRow) {
+          const rowValues = new Map([['name', flowName]]);
+          for (const [key, value] of Object.entries(qualifierUpdates)) rowValues.set(key, value);
+          legacyFactory.rows.push({
+            values: rowValues,
+            owner: '',
+            state: 'staged',
+            sourcedFrom: 'diagram-sync',
+            parentFactoryName: lineageEntry.subdomain ? 'Subdomain' : '',
+            parentName: lineageEntry.subdomain || '',
+          });
+          changed = true;
+          await legacyFactory.save();
+        }
+      }
+    }
+
+    return changed;
+  } catch (err) {
+    console.error('[DIAGRAM SYNC] Failed to sync diagram flow to Business Process Flow factory:', err && err.message);
+    return false;
+  }
+}
+
+/**
+ * After a diagram is created/updated, make sure every application its tasks
+ * reference is linked (via parentRefs) to those tasks — otherwise a diagram
+ * that reuses EXISTING tasks under a brand-new flow (e.g. one created via
+ * the "New Diagram" dialog, reusing task names already in the Task
+ * factory) leaves those applications' hierarchy still pointing only at
+ * whichever flow they were ORIGINALLY used under. The application itself
+ * technically "exists," but Tree Views/search never reach it for the NEW
+ * flow, since nothing links it there. Mirrors the task/flow syncs above,
+ * one level further down. Best-effort: never fails the diagram save itself.
+ */
+async function syncDiagramApplicationsToApplicationFactory(neighborhoodName, diagramMeta, tasks) {
+  try {
+    if (!neighborhoodName || !Array.isArray(tasks) || !tasks.length) return false;
+
+    const businessFlow = decodeXmlValue(String(diagramMeta.businessFlow || diagramMeta.name || '').trim());
+    const lineageEntry = {};
+    if (diagramMeta.lineOfBusiness) lineageEntry.lineOfBusiness = decodeXmlValue(diagramMeta.lineOfBusiness);
+    if (diagramMeta.channel) lineageEntry.channel = decodeXmlValue(diagramMeta.channel);
+    if (diagramMeta.product) lineageEntry.product = decodeXmlValue(diagramMeta.product);
+    if (diagramMeta.domain) lineageEntry.domain = decodeXmlValue(diagramMeta.domain);
+    if (diagramMeta.subdomain) lineageEntry.subdomain = decodeXmlValue(diagramMeta.subdomain);
+    if (businessFlow) lineageEntry.businessFlow = businessFlow;
+    const hasLineage = Object.keys(lineageEntry).length > 0;
+
+    const canonicalSample = await CanonicalComponent.findOne(
+      { neighborhoodName, componentType: { $regex: /^applications?$/i } },
+      { componentType: 1 }
+    ).lean();
+    if (!canonicalSample) return false; // no Application factory for this neighborhood — nothing to link into
+
+    const componentType = canonicalSample.componentType;
+    let changed = false;
+
+    for (const task of tasks) {
+      const taskName = decodeXmlValue(String(task?.name || '').trim());
+      const applications = Array.isArray(task?.applications) ? task.applications : [];
+      if (!taskName || !applications.length) continue;
+
+      const taskRow = await CanonicalComponent.findOne(
+        { neighborhoodName, componentType: { $regex: /^tasks?$/i }, primaryKey: { $regex: `^${escapeRegExp(taskName)}$`, $options: 'i' } },
+        { _id: 1 }
+      ).lean();
+      if (!taskRow) continue; // task itself isn't synced yet (task-sync runs before this) — skip
+
+      for (const application of applications) {
+        // The diagram stores whichever identifier was in the task's
+        // extension elements — sometimes the app's own name, sometimes its
+        // app_id/correlationId — so match against either.
+        const identifier = decodeXmlValue(String(application?.name || application?.correlationId || '').trim());
+        if (!identifier) continue;
+
+        let appRow = await CanonicalComponent.findOne({
+          neighborhoodName,
+          componentType,
+          $or: [
+            { primaryKey: { $regex: `^${escapeRegExp(identifier)}$`, $options: 'i' } },
+            { 'values.app_id': { $regex: `^${escapeRegExp(identifier)}$`, $options: 'i' } },
+          ],
+        });
+
+        if (!appRow) {
+          appRow = await CanonicalComponent.create({
+            neighborhoodName,
+            componentType,
+            primaryKey: identifier,
+            values: {
+              name: identifier,
+              ...(hasLineage ? { __lineage: lineageEntry, __lineageVariants: [lineageEntry] } : {}),
+            },
+            parentRefs: [taskRow._id],
+          });
+          changed = true;
+          continue;
+        }
+
+        let rowChanged = false;
+        const parentRefIds = (appRow.parentRefs || []).map((id) => String(id));
+        if (!parentRefIds.includes(String(taskRow._id))) {
+          appRow.parentRefs = [...(appRow.parentRefs || []), taskRow._id];
+          rowChanged = true;
+        }
+
+        if (hasLineage) {
+          const values = appRow.values && typeof appRow.values === 'object' ? appRow.values : {};
+          const variants = Array.isArray(values.__lineageVariants) ? values.__lineageVariants : [];
+          const alreadyTracked = variants.some(
+            (variant) => variant && String(variant.businessFlow || '').trim().toLowerCase() === businessFlow.toLowerCase()
+          );
+          if (!alreadyTracked) {
+            appRow.values = {
+              ...values,
+              __lineage: values.__lineage || lineageEntry,
+              __lineageVariants: [...variants, lineageEntry],
+            };
+            appRow.markModified('values');
+            rowChanged = true;
+          }
+        }
+
+        if (rowChanged) {
+          await appRow.save();
+          changed = true;
+        }
+      }
+    }
+
+    return changed;
+  } catch (err) {
+    console.error('[DIAGRAM SYNC] Failed to sync diagram applications to Application factory:', err && err.message);
+    return false;
   }
 }
 
@@ -375,6 +669,24 @@ function parseDiagramMetadata(xml) {
     else if (key === 'business flow') meta.businessFlow = value;
   }
   return meta;
+}
+
+// Inverse of parseDiagramMetadata's title-annotation format — used when
+// generating a fresh, properly-formatted skeleton diagram (see
+// buildBpmnXmlForFlow below) so it round-trips the same way a diagram
+// produced by the load/generation pipeline does.
+function buildMetadataBreadcrumb(meta) {
+  const parts = [];
+  if (meta.lineOfBusiness) parts.push(`Line of Business: ${meta.lineOfBusiness}`);
+  if (meta.channel) parts.push(`Channel: ${meta.channel}`);
+  if (meta.domain) parts.push(`Domain: ${meta.domain}`);
+  if (meta.subdomain) parts.push(`Subdomain: ${meta.subdomain}`);
+  if (meta.product) parts.push(`Product: ${meta.product}`);
+  if (meta.valueStream) parts.push(`Value Stream: ${meta.valueStream}`);
+  if (meta.journey) parts.push(`Journey: ${meta.journey}`);
+  if (meta.businessCapability) parts.push(`Business Capability: ${meta.businessCapability}`);
+  parts.push(`Business Flow: ${meta.businessFlow || ''}`.trim());
+  return parts.join(' | ');
 }
 
 function normalizeLookupValue(value) {
@@ -1060,9 +1372,19 @@ router.post('/validate', async (req, res) => {
 router.get('/', async (req, res) => {
   try {
     const role = req.currentUser?.role;
+    const currentUserId = req.currentUser?.userId;
     const neighborhoodName = getNeighborhoodName(req);
+    // A restricted (Viewer/unassigned-role) session only sees published
+    // diagrams — but ALWAYS sees its own, regardless of status. Otherwise a
+    // diagram you just created (which starts as "Draft") is invisible to
+    // its own creator until someone else publishes it.
     const filter = (!role || role === 'Viewer')
-      ? { $and: [buildNeighborhoodFilter(neighborhoodName), { status: 'published' }] }
+      ? {
+          $and: [
+            buildNeighborhoodFilter(neighborhoodName),
+            currentUserId ? { $or: [{ status: 'published' }, { createdBy: currentUserId }] } : { status: 'published' },
+          ],
+        }
       : buildNeighborhoodFilter(neighborhoodName);
     const diagrams = await Diagram.find(filter).sort({ updatedAt: -1 }).lean();
     const hydratedDiagrams = diagrams.map((diagram) => {
@@ -1148,12 +1470,17 @@ router.get('/search', async (req, res) => {
     return res.status(400).json({ error: 'Query parameter "q" is required.' });
   }
   const role = req.currentUser?.role;
+  const currentUserId = req.currentUser?.userId;
   const isViewer = !role || role === 'Viewer';
+  // Same "always see your own, even if unpublished" carve-out as the plain
+  // list route — otherwise a diagram you just created (status "Draft") is
+  // unsearchable by its own creator.
+  const visibilityFilter = currentUserId ? { $or: [{ status: 'published' }, { createdBy: currentUserId }] } : { status: 'published' };
   const neighborhoodName = getNeighborhoodName(req);
   try {
     // Try full-text search first
     const textFilter = isViewer
-      ? { $and: [buildNeighborhoodFilter(neighborhoodName), { $text: { $search: q.trim() } }, { status: 'published' }] }
+      ? { $and: [buildNeighborhoodFilter(neighborhoodName), { $text: { $search: q.trim() } }, visibilityFilter] }
       : { $and: [buildNeighborhoodFilter(neighborhoodName), { $text: { $search: q.trim() } }] };
     let results = await Diagram.find(
       textFilter,
@@ -1165,7 +1492,7 @@ router.get('/search', async (req, res) => {
       const regex = new RegExp(escaped, 'i');
       const orConditions = [{ name: regex }, { businessFlow: regex }, { businessCapability: regex }, { valueStream: regex }, { journey: regex }, { lineOfBusiness: regex }, { domain: regex }, { subdomain: regex }, { product: regex }, { channel: regex }, { status: regex }, { createdBy: regex }, { 'tasks.name': regex }];
       const regexFilter = isViewer
-        ? { $and: [buildNeighborhoodFilter(neighborhoodName), { $or: orConditions }, { status: 'published' }] }
+        ? { $and: [buildNeighborhoodFilter(neighborhoodName), { $or: orConditions }, visibilityFilter] }
         : { $and: [buildNeighborhoodFilter(neighborhoodName), { $or: orConditions }] };
       results = await Diagram.find(regexFilter, { xml: 0 }).limit(50);
     }
@@ -1188,17 +1515,47 @@ router.get('/:id', async (req, res) => {
 
 // POST /api/diagrams — create new diagram
 router.post('/', async (req, res) => {
-  const { name, description, xml, tags, capabilities, status, sourcedFrom, createdBy } = req.body;
+  const {
+    name, description, xml, tags, capabilities, status, sourcedFrom, createdBy,
+    lineOfBusiness, channel, domain, subdomain, product, valueStream, journey, businessCapability, businessFlow,
+    // Set by the "New Diagram" dialog: this is a brand-new, still-blank
+    // canvas, so build it fresh with buildBpmnXmlForFlow (same builder the
+    // load/generation pipeline uses) instead of persisting the client's
+    // bare bpmn-js default — gives it a proper lane, a start event clear of
+    // the lane label, everything left-justified from LANE_X, and the
+    // standard title-annotation breadcrumb, rather than a lane-less shape
+    // floating in the middle of the canvas.
+    generateSkeleton,
+  } = req.body;
   if (!name || !xml) {
     return res.status(400).json({ error: 'Fields "name" and "xml" are required.' });
   }
   try {
-    const meta = parseDiagramMetadata(xml);
+    // A caller (e.g. the "New Diagram" dialog) can supply hierarchy metadata
+    // directly instead of relying on it being encoded in the XML's title
+    // annotation — explicit values win; anything not supplied falls back to
+    // whatever parseDiagramMetadata found in the XML.
+    const explicitMeta = { lineOfBusiness, channel, domain, subdomain, product, valueStream, journey, businessCapability, businessFlow };
+    const parsedMeta = parseDiagramMetadata(xml);
+    const meta = { ...parsedMeta };
+    for (const [key, value] of Object.entries(explicitMeta)) {
+      if (value !== undefined && value !== null && String(value).trim()) meta[key] = value;
+    }
     const hintedNeighborhoodName = getNeighborhoodName(req);
     // Use the caller-supplied name; meta.businessFlow is informational metadata only
     const diagramName = name;
-    const cleanXml = stripTitleAnnotations(xml);
-    const tasks = extractTasks(xml);
+    const sourceXml = generateSkeleton
+      ? buildBpmnXmlForFlow({
+          flowName: meta.businessFlow || diagramName,
+          breadcrumb: buildMetadataBreadcrumb({ ...meta, businessFlow: meta.businessFlow || diagramName }),
+          tasks: [],
+        }).xml
+      // Any other create (a locally-loaded file, an old-style prompt, etc.)
+      // still gets the same lane/left-justify treatment applied to whatever
+      // was actually drawn, without touching its flow logic.
+      : applyGeneratedDiagramFormatting(xml);
+    const cleanXml = stripTitleAnnotations(sourceXml);
+    const tasks = extractTasks(sourceXml);
     const resolvedStatus = sourcedFrom
       ? (status || 'staged')
       : await resolveImportedDiagramStatus(
@@ -1224,14 +1581,30 @@ router.post('/', async (req, res) => {
       updatedBy: createdBy || null,
       ...meta,
     });
-    await syncDiagramTasksToTaskFactory(hintedNeighborhoodName, {
+    const diagramMetaForSync = {
       businessFlow: diagram.businessFlow || diagramName,
       lineOfBusiness: diagram.lineOfBusiness,
       channel: diagram.channel,
       domain: diagram.domain,
       subdomain: diagram.subdomain,
       product: diagram.product,
-    }, diagram.xml);
+      valueStream: diagram.valueStream,
+      journey: diagram.journey,
+      businessCapability: diagram.businessCapability,
+    };
+    // Run all three syncs before rebuilding the search index ONCE — each one
+    // firing its own concurrent rebuild raced the others (all hitting the
+    // same collection's delete-then-reinsert cycle at once) and could leave
+    // the index missing whatever the last-finishing rebuild's stale
+    // in-flight snapshot didn't yet include.
+    const flowChanged = await syncDiagramFlowToBusinessFlowFactory(hintedNeighborhoodName, diagramMetaForSync);
+    const tasksChanged = await syncDiagramTasksToTaskFactory(hintedNeighborhoodName, diagramMetaForSync, diagram.xml);
+    const appsChanged = await syncDiagramApplicationsToApplicationFactory(hintedNeighborhoodName, diagramMetaForSync, diagram.tasks);
+    if (flowChanged || tasksChanged || appsChanged) {
+      rebuildSearchIndex(hintedNeighborhoodName).catch((err) => {
+        console.error('[DIAGRAM SYNC] search index rebuild failed:', err && err.message);
+      });
+    }
     res.status(201).json(diagram);
   } catch (err) {
     console.error('POST /api/diagrams failed', {
@@ -1256,7 +1629,10 @@ router.post('/', async (req, res) => {
 
 // PUT /api/diagrams/:id — update diagram
 router.put('/:id', async (req, res) => {
-  const { name, description, xml, tags, capabilities, changeNote, status, sourcedFrom, updatedBy } = req.body;
+  const {
+    name, description, xml, tags, capabilities, changeNote, status, sourcedFrom, updatedBy,
+    lineOfBusiness, channel, domain, subdomain, product, valueStream, journey, businessCapability, businessFlow,
+  } = req.body;
   try {
     const neighborhoodName = getNeighborhoodName(req);
     const existing = await Diagram.findOne({ $and: [buildNeighborhoodFilter(neighborhoodName), { _id: req.params.id }] });
@@ -1269,17 +1645,32 @@ router.put('/:id', async (req, res) => {
     if (sourcedFrom !== undefined) $set.sourcedFrom = sourcedFrom;
     if (updatedBy !== undefined) $set.updatedBy = updatedBy;
     if (xml !== undefined) {
-      $set.xml = stripTitleAnnotations(xml);
-      // Re-parse metadata from updated XML
-      const meta = parseDiagramMetadata(xml);
-      $set.lineOfBusiness = meta.lineOfBusiness || null;
-      $set.channel = meta.channel || null;
-      $set.domain = meta.domain || null;
-      $set.subdomain = meta.subdomain || null;
-      $set.product = meta.product || null;
-      $set.businessFlow = meta.businessFlow || null;
+      // Same lane/left-justify treatment as on create — ensures a diagram
+      // that started life without a lane (or drifted off the left margin)
+      // gets reformatted every time it's saved, not just once at creation.
+      const formattedXml = applyGeneratedDiagramFormatting(xml);
+      $set.xml = stripTitleAnnotations(formattedXml);
+      // Re-parse metadata from updated XML, but let explicit body fields
+      // (e.g. from the "New Diagram" dialog) win over whatever's encoded in
+      // the XML's title annotation, same precedence as on create.
+      const parsedMeta = parseDiagramMetadata(xml);
+      const explicitMeta = { lineOfBusiness, channel, domain, subdomain, product, valueStream, journey, businessCapability, businessFlow };
+      const pick = (key) => {
+        const explicitValue = explicitMeta[key];
+        if (explicitValue !== undefined && explicitValue !== null && String(explicitValue).trim()) return explicitValue;
+        return parsedMeta[key] || null;
+      };
+      $set.lineOfBusiness = pick('lineOfBusiness');
+      $set.channel = pick('channel');
+      $set.domain = pick('domain');
+      $set.subdomain = pick('subdomain');
+      $set.product = pick('product');
+      $set.valueStream = pick('valueStream');
+      $set.journey = pick('journey');
+      $set.businessCapability = pick('businessCapability');
+      $set.businessFlow = pick('businessFlow');
       // Extract tasks with source/target/applications
-      $set.tasks = extractTasks(xml);
+      $set.tasks = extractTasks(formattedXml);
     }
     if (tags !== undefined) $set.tags = tags;
     if (capabilities !== undefined) $set.capabilities = capabilities;
@@ -1344,14 +1735,25 @@ router.put('/:id', async (req, res) => {
     );
     if (!diagram) return res.status(404).json({ error: 'Diagram not found.' });
     if (xml !== undefined) {
-      await syncDiagramTasksToTaskFactory(neighborhoodName, {
+      const diagramMetaForSync = {
         businessFlow: diagram.businessFlow || diagram.name,
         lineOfBusiness: diagram.lineOfBusiness,
         channel: diagram.channel,
         domain: diagram.domain,
         subdomain: diagram.subdomain,
         product: diagram.product,
-      }, diagram.xml);
+        valueStream: diagram.valueStream,
+        journey: diagram.journey,
+        businessCapability: diagram.businessCapability,
+      };
+      const flowChanged = await syncDiagramFlowToBusinessFlowFactory(neighborhoodName, diagramMetaForSync);
+      const tasksChanged = await syncDiagramTasksToTaskFactory(neighborhoodName, diagramMetaForSync, diagram.xml);
+      const appsChanged = await syncDiagramApplicationsToApplicationFactory(neighborhoodName, diagramMetaForSync, diagram.tasks);
+      if (flowChanged || tasksChanged || appsChanged) {
+        rebuildSearchIndex(neighborhoodName).catch((err) => {
+          console.error('[DIAGRAM SYNC] search index rebuild failed:', err && err.message);
+        });
+      }
     }
     res.json(diagram);
   } catch (err) {
@@ -1377,11 +1779,59 @@ router.put('/:id', async (req, res) => {
 });
 
 // DELETE /api/diagrams/:id — delete diagram
+// DELETE /api/diagrams/:id?cascadeComponent=true — also deletes the diagram's
+// own Business Process Flow component row (and rebuilds the search index so
+// nothing stale is left behind referencing it). Plain delete (no query flag)
+// keeps its original diagram-only behavior — used elsewhere (e.g. the
+// editor's "revert" flow, which deletes then immediately recreates a
+// diagram) where touching the component row would be wrong.
 router.delete('/:id', async (req, res) => {
   try {
     const diagram = await Diagram.findOneAndDelete({ $and: [buildNeighborhoodFilter(getNeighborhoodName(req)), { _id: req.params.id }] });
     if (!diagram) return res.status(404).json({ error: 'Diagram not found.' });
-    res.json({ message: 'Diagram deleted.' });
+
+    const cascadeComponent = String(req.query?.cascadeComponent || '').trim().toLowerCase() === 'true';
+    let componentDeleted = false;
+    if (cascadeComponent) {
+      const neighborhoodName = diagram.neighborhoodName;
+      const flowName = String(diagram.businessFlow || diagram.name || '').trim();
+      if (neighborhoodName && flowName) {
+        try {
+          const canonicalDeletion = await CanonicalComponent.deleteMany({
+            neighborhoodName,
+            componentType: { $regex: /^business\s*(process\s*)?flow$/i },
+            primaryKey: { $regex: `^${escapeRegExp(flowName)}$`, $options: 'i' },
+          });
+          const legacyFactory = await Component.findOne({ neighborhoodName, name: { $regex: /^business\s*(process\s*)?flow$/i } });
+          let legacyDeletedCount = 0;
+          if (legacyFactory) {
+            const before = legacyFactory.rows.length;
+            legacyFactory.rows = legacyFactory.rows.filter(
+              (row) => String(row.values?.get?.('name') || '').trim().toLowerCase() !== flowName.toLowerCase()
+            );
+            legacyDeletedCount = before - legacyFactory.rows.length;
+            if (legacyDeletedCount) await legacyFactory.save();
+          }
+          componentDeleted = canonicalDeletion.deletedCount > 0 || legacyDeletedCount > 0;
+
+          if (componentDeleted) {
+            rebuildSearchIndex(neighborhoodName).catch((err) => {
+              console.error('[DELETE DIAGRAM] search index rebuild failed:', err && err.message);
+            });
+          }
+        } catch (cascadeErr) {
+          // The diagram is already gone — don't fail the whole request over
+          // a best-effort cleanup step; report it so the caller can retry.
+          console.error('[DELETE DIAGRAM] Failed to cascade-delete the Business Process Flow component:', cascadeErr && cascadeErr.message);
+          return res.json({ message: 'Diagram deleted, but the linked component could not be removed.', componentDeleted: false, componentError: cascadeErr.message });
+        }
+      }
+    }
+
+    res.json({
+      message: componentDeleted ? 'Diagram and Business Process Flow component deleted.' : 'Diagram deleted.',
+      componentDeleted,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

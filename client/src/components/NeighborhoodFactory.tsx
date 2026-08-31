@@ -15,15 +15,22 @@ import {
   getCustomFactories,
   getCustomFactory,
   getFactoryNeighborhoods,
+  getStatusTransitions,
   updateCustomFactoryRow,
   uploadCustomFactory,
   type CustomFactory,
   type CustomFactoryRow,
   type FactoryNeighborhoodSummary,
+  type StatusRefTransition,
 } from '../api';
 
 interface NeighborhoodFactoryProps {
   canManageFactories: boolean;
+  // Drives which status_ref transitions the Edit Row modal's Status field
+  // offers — e.g. an Editor should never see "approved" as an option, only
+  // an Approver should. Falls back to no role-restricted options (current
+  // status only) when omitted, same as an unrecognized role would.
+  userRole?: string | null;
   fixedNeighborhoodName?: string;
   fixedFactoryId?: string;
   hideFactoryList?: boolean;
@@ -95,7 +102,7 @@ function getDataTabKeyForTargetScope(value: unknown) {
   return aliases[normalized] || normalized;
 }
 
-function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedFactoryId, hideFactoryList = false, onNeighborhoodsChanged, onNeighborhoodCreated, onFactoryDeleted, onNeighborhoodDeleted, showCreateNeighborhood = true, showAddFactory = true, showDeleteNeighborhood = true, mode = 'panel', defaultRowSearch, defaultRowSearchColumn = 'name', defaultAddData, onRowsChanged }: NeighborhoodFactoryProps) {
+function NeighborhoodFactory({ canManageFactories, userRole, fixedNeighborhoodName, fixedFactoryId, hideFactoryList = false, onNeighborhoodsChanged, onNeighborhoodCreated, onFactoryDeleted, onNeighborhoodDeleted, showCreateNeighborhood = true, showAddFactory = true, showDeleteNeighborhood = true, mode = 'panel', defaultRowSearch, defaultRowSearchColumn = 'name', defaultAddData, onRowsChanged }: NeighborhoodFactoryProps) {
   const { message } = AntApp.useApp();
   const ALL_COLUMNS_OPTION = '__all__';
   const PRIMARY_KEY_COLUMN = 'name';
@@ -125,6 +132,14 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
   const [rowSearchText, setRowSearchText] = useState('');
   const [rowStatusFilter, setRowStatusFilter] = useState<string | undefined>(undefined);
   const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
+  // status_ref transition rules (role, action, from, to) — drives which
+  // status values the Edit Row modal offers for the current row's state,
+  // instead of the old fixed invalid/staged/published list.
+  const [statusTransitions, setStatusTransitions] = useState<StatusRefTransition[]>([]);
+
+  useEffect(() => {
+    getStatusTransitions().then(setStatusTransitions).catch(() => setStatusTransitions([]));
+  }, []);
   const [factoryRowViewState, setFactoryRowViewState] = useState<Record<string, FactoryRowViewState>>({});
   // Per factory, the set of columns explicitly hidden via the "Columns"
   // picker (empty/absent = nothing hidden, i.e. every column visible).
@@ -840,6 +855,29 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
     });
   }, [ALL_COLUMNS_OPTION, deferredRowSearchText, publicFactoryColumns, rowSearchColumn, rowStatusFilter, selectedFactory]);
 
+  // Status options offered by the Edit/Add Row modal's Status field — the
+  // row's current state (kept as-is if unchanged) plus, for each status_ref
+  // rule THIS USER'S ROLE is allowed to perform from that state (see
+  // server/services/stateTransitions.js / status_ref collection — the same
+  // role check the server enforces on save), an "action → status" option —
+  // e.g. "submit for approval → submitted for approval" — instead of the
+  // bare target status name. An Editor must never see "approved" as an
+  // option; only an Approver should.
+  // Add-row mode always starts from 'staged' (handleAddRow's default).
+  const currentRowState = (isAddRowMode ? 'staged' : (editingRow?.state || 'staged')).toLowerCase();
+  const validStateOptions = useMemo(() => {
+    const options = [{ label: currentRowState, value: currentRowState }];
+    const seenTargets = new Set([currentRowState]);
+    statusTransitions
+      .filter((t) => t.from === currentRowState && (userRole === 'Super' || t.role === userRole))
+      .forEach((t) => {
+        if (seenTargets.has(t.to)) return;
+        seenTargets.add(t.to);
+        options.push({ label: `${t.action} → ${t.to}`, value: t.to });
+      });
+    return options;
+  }, [statusTransitions, currentRowState, userRole]);
+
   if (mode === 'action') {
     return (
       <>
@@ -1432,11 +1470,7 @@ function NeighborhoodFactory({ canManageFactories, fixedNeighborhoodName, fixedF
             <Input />
           </Form.Item>
           <Form.Item name="state" label="Status">
-            <Select options={[
-              { label: 'invalid', value: 'invalid' },
-              { label: 'staged', value: 'staged' },
-              { label: 'published', value: 'published' },
-            ]} />
+            <Select options={validStateOptions} />
           </Form.Item>
         </Form>
       </Modal>

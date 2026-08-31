@@ -25,6 +25,7 @@ import { enhanceColumnsWithSortAndFilters } from '../utils/tableEnhancer';
 import { getDashboardTaskRisk, getDashboardFlowRisk, getDashboardCostByYear, getDashboardCapabilityCostByYear, getDashboardCapabilityFlowRelationships } from '../api';
 import type { CapabilityCostByYearItem, CostByYearItem, TaskCostByYearItem } from '../api';
 import Flow3DChart from './Flow3DChart';
+import FeatureCost3DChart from './FeatureCost3DChart';
 import LobDrilldownTree from './LobDrilldownTree';
 import ServerLocationMap from './ServerLocationMap';
 
@@ -135,7 +136,7 @@ export default function Dashboard() {
   const [taskData, setTaskData] = useState<TaskProfile[]>([]);
   const [flowData, setFlowData] = useState<FlowProfile[]>([]);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<'tasks' | 'flows' | '3d' | 'caprels' | 'drilltree' | 'servermap'>('flows');
+  const [view, setView] = useState<'tasks' | 'flows' | '3d' | 'featurecost3d' | 'caprels' | 'drilltree' | 'servermap'>('flows');
   const [selectedFlow, setSelectedFlow] = useState<string | null>(null);
   const [flowCostData, setFlowCostData] = useState<CostByYearItem[]>([]);
   const [taskCostData, setTaskCostData] = useState<TaskCostByYearItem[]>([]);
@@ -176,7 +177,7 @@ export default function Dashboard() {
       <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
         <Segmented
           value={view}
-          onChange={(v) => setView(v as 'tasks' | 'flows' | '3d' | 'caprels' | 'drilltree' | 'servermap')}
+          onChange={(v) => setView(v as 'tasks' | 'flows' | '3d' | 'featurecost3d' | 'caprels' | 'drilltree' | 'servermap')}
           options={[
             { label: 'Business Flow Comparison', value: 'flows' },
             { label: 'Task Comparison', value: 'tasks' },
@@ -184,6 +185,7 @@ export default function Dashboard() {
             { label: 'LOB Drilldown Tree', value: 'drilltree' },
             { label: 'US Server Map', value: 'servermap' },
             { label: 'YoY Business Flow Cost', value: '3d' },
+            { label: 'YoY Feature Cost', value: 'featurecost3d' },
           ]}
         />
         {view === 'tasks' && (
@@ -208,6 +210,8 @@ export default function Dashboard() {
         <ServerLocationMap />
       ) : view === 'flows' ? (
         <FlowDashboard flows={flowData} costData={flowCostData} costYear={COST_YEAR} />
+      ) : view === 'featurecost3d' ? (
+        <FeatureCost3DChart />
       ) : (
         <Flow3DChart />
       )}

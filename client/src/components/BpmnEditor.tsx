@@ -80,6 +80,11 @@ interface BpmnEditorProps {
   onDeleteAndReload?: () => void;
   onSaveAsNew?: (newName: string) => void;
   onDiagramNameClick?: () => void;
+  // "View in BPMN Component" button in the diagram properties panel — jumps
+  // to this diagram's own Business Process Flow row in the Model Components
+  // table view, same as onNavigateToFactory('tasks', …)/('actors', …) do for
+  // the Task/Actor buttons below.
+  onViewBusinessFlowComponent?: () => void;
   onNewDiagram?: () => void;
   onDiagramNameChange?: (name: string) => void;
   diagramBreadcrumb?: string;
@@ -126,7 +131,7 @@ function splitStoredApplicationNames(value: string): string[] {
 }
 
 const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
-  ({ xml, importTrigger, onXmlChange, onDirty, showProperties = true, allApplicationNames = [], allApplications = [], allBusinessFlowNames = [], allTaskNames = [], allActorNames = [], diagramName, diagramStatus, canEditDiagramName = false, isInFactory, isAlreadyLoaded, readOnly, onNavigateToFactory, onApplicationLinkClick, onTaskSelect, selectedCapability, isCapabilityAssigned = false, onCapabilityAssignToggle, onCapabilityViewInCatalog, onCapabilityBack, onAddToFactory, onDeleteAndReload, onSaveAsNew, onDiagramNameClick, onNewDiagram, onDiagramNameChange, diagramBreadcrumb, sectionTitles }, ref) => {
+  ({ xml, importTrigger, onXmlChange, onDirty, showProperties = true, allApplicationNames = [], allApplications = [], allBusinessFlowNames = [], allTaskNames = [], allActorNames = [], diagramName, diagramStatus, canEditDiagramName = false, isInFactory, isAlreadyLoaded, readOnly, onNavigateToFactory, onApplicationLinkClick, onTaskSelect, selectedCapability, isCapabilityAssigned = false, onCapabilityAssignToggle, onCapabilityViewInCatalog, onCapabilityBack, onAddToFactory, onDeleteAndReload, onSaveAsNew, onDiagramNameClick, onViewBusinessFlowComponent, onNewDiagram, onDiagramNameChange, diagramBreadcrumb, sectionTitles }, ref) => {
     const canvasRef = useRef<HTMLDivElement>(null);
     const propertiesRef = useRef<HTMLDivElement>(null);
     const modelerRef = useRef<any>(null);
@@ -2133,7 +2138,7 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
               )}
               {isInFactory && (
                 <div className="properties-panel-section flex flex-col gap-1.5">
-                  <button className="properties-panel-btn-primary is-valid w-full text-xs py-1.5 px-3 text-left flex items-center gap-1.5" onClick={() => onDiagramNameClick?.()} title="View in BPMN Component">
+                  <button className="properties-panel-btn-primary is-valid w-full text-xs py-1.5 px-3 text-left flex items-center gap-1.5" onClick={() => onViewBusinessFlowComponent?.()} title="View in BPMN Component">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 12l2 2 4-4"/></svg>
                     View in BPMN Component →
                   </button>

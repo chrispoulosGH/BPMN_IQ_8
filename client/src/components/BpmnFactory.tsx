@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Table, Input, Button, App as AntApp, Space, Tooltip, Tag, Select, Typography } from 'antd';
 import { EditOutlined, DeleteOutlined, SearchOutlined, FolderOpenOutlined, UploadOutlined, DownloadOutlined } from '@ant-design/icons';
 import type { DiagramMeta } from '../types';
-import { getDiagrams, getDiagram, deleteDiagram, updateDiagram, batchImportDiagrams, transitionState } from '../api';
+import { getDiagrams, getDiagram, deleteDiagram, updateDiagram, batchImportDiagrams, transitionState, getStatusTransitions, type StatusRefTransition } from '../api';
 import { matchesFactorySearch, parseFactorySearch, encodeExactFactorySearch } from '../utils/factorySearch';
 import { enhanceColumnsWithSortAndFilters } from '../utils/tableEnhancer';
 
@@ -27,23 +27,16 @@ const DEFAULT_DIAGRAM_METADATA_CONFIG: Required<DiagramMetadataConfig> = {
   product: { label: 'Product', tabKey: 'products' },
 };
 
-// State transition rules (mirrors server/services/stateTransitions.js)
-const STATE_TRANSITIONS = [
-  { role: 'Editor', action: 'submit', from: 'draft', to: 'submitted' },
-  { role: 'Editor', action: 'delete', from: 'draft', to: 'deleted' },
-  { role: 'Approver', action: 'approve', from: 'submitted', to: 'approved' },
-  { role: 'Approver', action: 'reject', from: 'approved', to: 'draft' },
-  { role: 'Publisher', action: 'publish', from: 'approved', to: 'published' },
-  { role: 'Administrator', action: 'draft', from: 'staged', to: 'draft' },
-  { role: 'Administrator', action: 'stage', from: 'invalid', to: 'staged' },
-];
-
-function getAllowedActions(role: string | null | undefined, currentState: string) {
+// State transition rules — fetched once from GET /api/states/transitions
+// (the status_ref Mongo collection; mirrors server/services/stateTransitions.js,
+// which still enforces these same rules server-side) instead of being
+// hardcoded here.
+function getAllowedActions(transitions: StatusRefTransition[], role: string | null | undefined, currentState: string) {
   const state = (currentState || 'draft').toLowerCase();
   if (role === 'Super') {
-    return STATE_TRANSITIONS.filter(t => t.from === state);
+    return transitions.filter(t => t.from === state);
   }
-  return STATE_TRANSITIONS.filter(t => t.role === role && t.from === state);
+  return transitions.filter(t => t.role === role && t.from === state);
 }
 
 // Resizable header cell
@@ -110,6 +103,14 @@ export default function BpmnFactory({ defaultSearch, onOpenDiagram, onNavigateTo
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   const [exporting, setExporting] = useState(false);
   const [colWidths, setColWidths] = useState<Record<string, number>>({ name: 300 });
+  const [statusTransitions, setStatusTransitions] = useState<StatusRefTransition[]>([]);
+
+  // Fetched once on mount — the status_ref collection rarely changes, and
+  // every row's Status cell needs it synchronously to compute its own
+  // allowed actions, so one shared fetch beats a per-row round trip.
+  useEffect(() => {
+    getStatusTransitions().then(setStatusTransitions).catch(() => setStatusTransitions([]));
+  }, []);
 
   const loadDiagrams = useCallback(async () => {
     setLoading(true);
@@ -296,7 +297,7 @@ export default function BpmnFactory({ defaultSearch, onOpenDiagram, onNavigateTo
     : diagrams;
 
   const handleStateTransition = async (record: DiagramMeta, action: string) => {
-    const rule = STATE_TRANSITIONS.find(t => t.action === action && t.from === (record.status || 'draft').toLowerCase());
+    const rule = statusTransitions.find(t => t.action === action && t.from === (record.status || 'draft').toLowerCase());
     if (rule) {
       setPendingStateAction({ action, to: rule.to });
     }
@@ -389,9 +390,9 @@ export default function BpmnFactory({ defaultSearch, onOpenDiagram, onNavigateTo
       onFilter: (value: any, record: DiagramMeta) => (record.status || 'Draft') === value,
       render: (val: string, record: DiagramMeta) => {
         const currentState = (val || 'draft').toLowerCase();
-        const actions = getAllowedActions(userRole, currentState);
+        const actions = getAllowedActions(statusTransitions, userRole, currentState);
         const displayState = (editingId === record._id && pendingStateAction) ? pendingStateAction.to : (val || 'draft');
-        const tagColor = displayState === 'published' ? 'green' : displayState === 'approved' ? 'blue' : displayState === 'submitted' ? 'orange' : displayState === 'staged' ? 'purple' : displayState === 'invalid' ? 'red' : displayState === 'deleted' ? 'red' : 'default';
+        const tagColor = displayState === 'published' ? 'green' : displayState === 'approved' ? 'blue' : displayState === 'submitted for approval' ? 'orange' : displayState === 'submitted for publish' ? 'cyan' : displayState === 'staged' ? 'purple' : displayState === 'invalid' ? 'red' : displayState === 'deleted' ? 'red' : 'default';
         if (!actions.length || readOnly || editingId !== record._id) {
           return <Tag color={tagColor}>{displayState}</Tag>;
         }

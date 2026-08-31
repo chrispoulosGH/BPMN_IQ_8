@@ -4,16 +4,19 @@
  */
 
 const transitions = [
-  { role: 'Editor', action: 'submit', from: 'draft', to: 'submitted' },
-  { role: 'Editor', action: 'delete', from: 'draft', to: 'deleted' },
-  { role: 'Approver', action: 'approve', from: 'submitted', to: 'approved' },
-  { role: 'Approver', action: 'reject', from: 'approved', to: 'draft' },
-  { role: 'Publisher', action: 'publish', from: 'approved', to: 'published' },
-  { role: 'Administrator', action: 'draft', from: 'staged', to: 'draft' },
-  { role: 'Administrator', action: 'stage', from: 'invalid', to: 'staged' },
+  { role: 'Editor', action: 'submit for approval', from: 'staged', to: 'submitted for approval' },
+  { role: 'Editor', action: 'submit for approval', from: 'draft', to: 'submitted for approval' },
+  { role: 'Approver', action: 'approve', from: 'submitted for approval', to: 'approved' },
+  { role: 'Approver', action: 'reject', from: 'submitted for approval', to: 'draft' },
+  { role: 'Editor', action: 'submit for publish', from: 'approved', to: 'submitted for publish' },
+  { role: 'Publisher', action: 'publish', from: 'submitted for publish', to: 'published' },
+  { role: 'Publisher', action: 'reject', from: 'submitted for publish', to: 'approved' },
 ];
 
-const VALID_STATES = ['invalid', 'staged', 'draft', 'submitted', 'approved', 'rejected', 'published', 'deleted'];
+// 'invalid'/'staged' are set directly by batch-import validation (not via
+// the transitions table above); 'deleted' is a legacy state no longer
+// reachable through a transition rule but still recognized where it appears.
+const VALID_STATES = ['invalid', 'staged', 'draft', 'submitted for approval', 'approved', 'submitted for publish', 'published', 'deleted'];
 
 /**
  * Get allowed transitions for a given role and current state.
@@ -51,4 +54,19 @@ function getTargetState(role, action, currentState) {
   return rule ? rule.to : null;
 }
 
-module.exports = { transitions, VALID_STATES, getAllowedActions, canTransition, getTargetState };
+/**
+ * Check if a role can move a record directly from one state to another,
+ * without naming a specific action — used by callers (e.g. the Model
+ * Components row editor) that expose a raw "set status to X" control rather
+ * than a named action button. Super can perform any defined from→to move;
+ * everyone else needs a rule matching their own role.
+ */
+function canTransitionTo(role, from, to) {
+  if (from === to) return true; // no-op edit (saving without changing status)
+  if (role === 'Super') {
+    return transitions.some(t => t.from === from && t.to === to);
+  }
+  return transitions.some(t => t.role === role && t.from === from && t.to === to);
+}
+
+module.exports = { transitions, VALID_STATES, getAllowedActions, canTransition, getTargetState, canTransitionTo };

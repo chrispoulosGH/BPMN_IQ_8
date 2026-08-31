@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Empty, Select, Spin, Tag, Tooltip, Typography } from 'antd';
-import { FolderOpenOutlined, PartitionOutlined } from '@ant-design/icons';
+import { App as AntApp, Alert, Empty, Popconfirm, Spin, Select, Tag, Tooltip, Typography } from 'antd';
+import { CloseOutlined, FolderOpenOutlined, PartitionOutlined } from '@ant-design/icons';
 import type { DiagramMeta, FactoryNeighborhoodSummary } from '../types';
-import { getCanonicalTypes, getDashboardValueStreamRelationships, getDiagramsForNeighborhood } from '../api';
+import { deleteDiagramWithComponent, getCanonicalTypes, getDashboardValueStreamRelationships, getDiagramsForNeighborhood } from '../api';
+import { stateTagColor } from '../stateUtils';
 
 const { Text } = Typography;
 
@@ -139,9 +140,16 @@ interface DiagramBrowserProps {
   // driven searches — those callers already clear the canvas themselves
   // before requesting the new filters.
   onSearchChanged?: () => void;
+  // Fired after a tile's delete "x" successfully removes a diagram (and its
+  // Business Process Flow component row) — lets the parent clear the canvas
+  // if that diagram was open, drop it from any selection, and refresh
+  // Model Components data for the affected framework.
+  onDiagramDeleted?: (id: string, neighborhoodName?: string) => void;
 }
 
-export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggleDiagram, externalFilterRequest = null, onSearchChanged }: DiagramBrowserProps) {
+export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggleDiagram, externalFilterRequest = null, onSearchChanged, onDiagramDeleted }: DiagramBrowserProps) {
+  const { message } = AntApp.useApp();
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
   const [selectedFrameworks, setSelectedFrameworks] = useState<string[]>([]);
   const [filters, setFilters] = useState<Record<string, string[]>>({});
   const [diagrams, setDiagrams] = useState<DiagramMeta[]>([]);
@@ -342,6 +350,26 @@ export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggl
     setFilters((current) => ({ ...current, [key]: values }));
   };
 
+  const handleDeleteDiagram = async (diagram: DiagramMeta) => {
+    setDeletingIds((current) => new Set(current).add(diagram._id));
+    try {
+      const result = await deleteDiagramWithComponent(diagram._id);
+      setDiagrams((current) => current.filter((d) => d._id !== diagram._id));
+      message.success(result.componentDeleted
+        ? `Deleted "${diagram.businessFlow || diagram.name}" and its Business Process Flow component.`
+        : `Deleted "${diagram.businessFlow || diagram.name}".`);
+      onDiagramDeleted?.(diagram._id, diagram.neighborhoodName || undefined);
+    } catch (error: any) {
+      message.error(error?.response?.data?.error || error?.message || 'Failed to delete diagram.');
+    } finally {
+      setDeletingIds((current) => {
+        const next = new Set(current);
+        next.delete(diagram._id);
+        return next;
+      });
+    }
+  };
+
   return (
     <div className="diagram-search-panel flex h-full min-h-0 flex-col border-r border-slate-300">
       <div className="diagram-search-card m-3 mb-2 px-4 py-3">
@@ -407,26 +435,61 @@ export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggl
             ]
               .filter(Boolean)
               .join(' | ');
+            const isDeleting = deletingIds.has(diagram._id);
             return (
-              <button
-                key={diagram._id}
-                type="button"
-                onClick={() => onToggleDiagram(diagram._id, diagram.neighborhoodName || undefined)}
-                className={`diagram-tile min-h-[118px] w-full min-w-0 p-3 text-left ${selected ? 'diagram-tile-selected' : ''}`}
-              >
-                <div className="mb-2 flex min-w-0 items-start gap-2">
-                  <PartitionOutlined className={selected ? 'mt-0.5 shrink-0 text-blue-700' : 'mt-0.5 shrink-0 text-slate-500'} />
-                  <Text strong className="min-w-0 flex-1 break-words font-semibold leading-snug">{diagram.businessFlow || diagram.name}</Text>
-                </div>
-                <Tag className="mb-2 mr-0 max-w-full truncate" color="blue">{framework}</Tag>
-                {hierarchy ? (
-                  <Tooltip title={hierarchy} placement="bottom" mouseEnterDelay={0.3}>
-                    <div className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-xs leading-relaxed text-slate-600">
-                      {hierarchy}
-                    </div>
-                  </Tooltip>
-                ) : null}
-              </button>
+              // Wrapper is relatively positioned so the delete "x" can sit in
+              // the tile's upper-right corner as a sibling, not nested inside
+              // the tile <button> — nested interactive elements are invalid
+              // HTML and would otherwise fire both click handlers at once.
+              <div key={diagram._id} className="relative">
+                <button
+                  type="button"
+                  onClick={() => onToggleDiagram(diagram._id, diagram.neighborhoodName || undefined)}
+                  className={`diagram-tile min-h-[118px] w-full min-w-0 p-3 text-left ${selected ? 'diagram-tile-selected' : ''}`}
+                >
+                  <div className="mb-2 flex min-w-0 items-start gap-2 pr-5">
+                    <PartitionOutlined className={selected ? 'mt-0.5 shrink-0 text-blue-700' : 'mt-0.5 shrink-0 text-slate-500'} />
+                    <Text strong className="min-w-0 flex-1 break-words font-semibold leading-snug">{diagram.businessFlow || diagram.name}</Text>
+                  </div>
+                  <div className="mb-2 flex max-w-full flex-wrap items-center gap-1">
+                    <Tag className="m-0 max-w-full truncate" color="blue">{framework}</Tag>
+                    {diagram.status ? (
+                      <Tag className="m-0 max-w-full truncate" color={stateTagColor(diagram.status)}>{diagram.status}</Tag>
+                    ) : null}
+                  </div>
+                  {hierarchy ? (
+                    <Tooltip title={hierarchy} placement="bottom" mouseEnterDelay={0.3}>
+                      <div className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-xs leading-relaxed text-slate-600">
+                        {hierarchy}
+                      </div>
+                    </Tooltip>
+                  ) : null}
+                </button>
+                <Popconfirm
+                  title="Delete this diagram?"
+                  description={(
+                    <span>
+                      This permanently deletes the diagram, its Business Process Flow<br />
+                      component, and its entries in any search indexes that reference it.
+                    </span>
+                  )}
+                  okText="Delete"
+                  okButtonProps={{ danger: true, loading: isDeleting }}
+                  cancelText="Cancel"
+                  onConfirm={() => handleDeleteDiagram(diagram)}
+                >
+                  <button
+                    type="button"
+                    title="Delete diagram and component"
+                    aria-label="Delete diagram and component"
+                    disabled={isDeleting}
+                    onClick={(e) => e.stopPropagation()}
+                    className="absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-full border border-transparent text-slate-400 transition-colors hover:border-red-300 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+                  >
+                    <CloseOutlined style={{ fontSize: 11 }} />
+                  </button>
+                </Popconfirm>
+              </div>
             );
           })}
         </div>

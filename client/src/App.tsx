@@ -52,8 +52,8 @@ import {
 } from '@ant-design/icons';
 import BpmnEditor, { EMPTY_DIAGRAM, type BpmnEditorHandle } from './components/BpmnEditor';
 import DiagramBrowser from './components/DiagramBrowser';
+import NewDiagramDialog from './components/NewDiagramDialog';
 import SystemComponentsImportButton from './components/SystemComponentsImportButton';
-import SaveModal from './components/SaveModal';
 import AppMatchModal, { computeAppMatches, type AppMatchResult } from './components/AppMatchModal';
 import CapabilityMatchPanel from './components/CapabilityMatchPanel';
 import TaskFactory from './components/TaskFactory';
@@ -75,7 +75,7 @@ import AdminPanel from './components/AdminPanel';
 import GlobalComponentSearch from './components/GlobalComponentSearch';
 import ComponentSearch from './components/ComponentSearch';
 import { encodeExactFactorySearch } from './utils/factorySearch';
-import { api, getDiagram, getDiagrams, searchDiagrams, createDiagram, updateDiagram, deleteDiagram, saveFile, matchCapabilities, batchImportDiagrams, getTaskReferenceForNeighborhood, getApplicationReferenceForNeighborhood, getTaskNames, getTaskNamesForNeighborhood, getActorsForNeighborhood, checkSession, logout, setSessionExpiredHandler, getBusinessFlowMap, getFactoryNeighborhoods, getCustomFactories, getDataFactoryTypes, getDataFactories, getCanonicalFactories, setApiNeighborhoodScope, validateDiagramReport, deleteCustomFactory, deleteDataComponentType } from './api';
+import { api, getDiagram, getDiagrams, getDiagramsForNeighborhood, searchDiagrams, createDiagram, updateDiagram, deleteDiagram, saveFile, matchCapabilities, batchImportDiagrams, getTaskReferenceForNeighborhood, getApplicationReferenceForNeighborhood, getTaskNames, getTaskNamesForNeighborhood, getActorsForNeighborhood, checkSession, logout, setSessionExpiredHandler, getBusinessFlowMap, getFactoryNeighborhoods, getCustomFactories, getDataFactoryTypes, getDataFactories, getCanonicalFactories, setApiNeighborhoodScope, validateDiagramReport, deleteCustomFactory, deleteDataComponentType } from './api';
 import type { CapabilityMatch, TaskAddData, DiagramMetadata, ApplicationItem, CustomFactory, FactoryNeighborhoodSummary } from './types';
 
 const { Header, Sider, Content } = Layout;
@@ -1371,8 +1371,6 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
     return () => obs.disconnect();
   }, []);
 
-  // Modals
-  const [showSaveDb, setShowSaveDb] = useState(false);
 
   // Capability matching
   const [capMatches, setCapMatches] = useState<CapabilityMatch[]>([]);
@@ -1420,7 +1418,11 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   const [taskMatchResults, setTaskMatchResults] = useState<AppMatchResult[]>([]);
 
   const canEditCurrentDiagramName = !readOnly && (!activeDiagram || (activeDiagram.status || '').toLowerCase() === 'draft');
-  const canSaveCurrentDiagramToDb = currentXml !== EMPTY_DIAGRAM;
+  // Blocks saving a never-persisted blank canvas — but a diagram created via
+  // the "New Diagram" dialog is already in Mongo (activeDiagram._id is set)
+  // the moment it's created, even before anything's been drawn on it, so it
+  // must stay saveable regardless of its still-blank content.
+  const canSaveCurrentDiagramToDb = currentXml !== EMPTY_DIAGRAM || !!activeDiagram?._id;
 
   const editorRef = useRef<BpmnEditorHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1492,15 +1494,15 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
           key: 'quick-save-db',
           tooltip: quickSaveLabel,
           icon: <CloudUploadOutlined />,
-          onClick: handleQuickSaveDb,
+          onClick: handleSaveDiagram,
           disabled: readOnly || !canSaveCurrentDiagramToDb,
           type: hasUnsavedChanges && activeDiagram ? 'primary' : 'text',
         },
         {
           key: 'save-db',
-          tooltip: 'Open save to MongoDB dialog',
+          tooltip: quickSaveLabel,
           icon: <DatabaseOutlined />,
-          onClick: () => setShowSaveDb(true),
+          onClick: handleSaveDiagram,
           disabled: readOnly || !canSaveCurrentDiagramToDb,
         },
       ],
@@ -1635,7 +1637,11 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
       tasks: ['task', 'tasks', 'businesstask', 'businesstasks'],
       actors: ['actor', 'actors'],
       capabilities: ['capability', 'capabilities'],
-      businessflows: ['businessflow', 'businessflows'],
+      // Actual factory name is "Business Process Flow" (normalize() only
+      // strips underscores/whitespace, not "process"), so the plain
+      // "businessflow(s)" aliases never matched it — added the full
+      // normalized form as well.
+      businessflows: ['businessflow', 'businessflows', 'businessprocessflow', 'businessprocessflows'],
       products: ['product', 'products'],
       channels: ['channel', 'channels'],
       domains: ['domain', 'domains'],
@@ -1709,6 +1715,44 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
       applications: { column: 'correlationId', text: correlationId, nonce: Date.now() },
     }));
   }, []);
+
+  // "View Diagram" link in the Model Components metadata drawer, shown only
+  // when the selected tree node is a Business Process Flow — looks up that
+  // flow's diagram by name within its own neighborhood and opens it on
+  // canvas (replacing whatever's currently shown, like clicking a diagram
+  // tile from a different framework does in toggleCanvasDiagram above).
+  const handleViewDiagramForBusinessFlow = useCallback(async (businessFlowName: string, forNeighborhoodName: string) => {
+    try {
+      const diagrams = await getDiagramsForNeighborhood(forNeighborhoodName);
+      const match = diagrams.find((d) => (d.businessFlow || d.name) === businessFlowName);
+      if (!match) {
+        message.warning(`No diagram found for "${businessFlowName}".`);
+        return;
+      }
+      setApiNeighborhoodScope(forNeighborhoodName);
+      setActiveDiagramNeighborhoodName(forNeighborhoodName);
+      setSelectedDiagramIds([match._id]);
+      await rebuildCompositeCanvas([match._id]);
+      setDiagramBrowserFilterRequest({
+        frameworks: [forNeighborhoodName],
+        filters: { businessFlow: [businessFlowName] },
+        nonce: Date.now(),
+      });
+      setActiveOuterTab('bpmn');
+    } catch (err: any) {
+      message.error(err?.response?.data?.error || err?.message || 'Unable to open diagram for this Business Process Flow.');
+    }
+  }, [message, rebuildCompositeCanvas]);
+
+  // "View in BPMN Component" button in the diagram properties panel — jumps
+  // to this diagram's own flow row in Model Components > Business Process
+  // Flow > Table view, the same way the Task/Actor buttons already do via
+  // handleNavigateToFactory (see the 'businessflows' alias above).
+  const handleViewBusinessFlowComponent = useCallback(() => {
+    const flowName = activeDiagram?.name || canvasDiagramName || diagramMeta.businessFlow;
+    if (!flowName) return;
+    handleNavigateToFactory('businessflows', flowName, 'view');
+  }, [activeDiagram, canvasDiagramName, diagramMeta, handleNavigateToFactory]);
 
   const handleCapabilityClick = useCallback((capability: CapabilityMatch, nextSelected: CapabilityMatch[]) => {
     setSelectedCaps(nextSelected);
@@ -2746,6 +2790,9 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
             domain: diagramMeta.domain,
             subdomain: diagramMeta.subdomain,
             product: diagramMeta.product,
+            valueStream: diagramMeta.valueStream,
+            journey: diagramMeta.journey,
+            businessCapability: diagramMeta.businessCapability,
             businessFlow: diagramMeta.businessFlow,
             capabilities: selectedCapsRef.current,
             changeNote: { userId: CURRENT_USER, note: autoNote },
@@ -2760,7 +2807,18 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
             source: 'db',
           });
           setSavedCaps(selectedCapsRef.current);
+          // The server may have reformatted the XML (lane ensured,
+          // left-justified) — reflect that back on the canvas immediately
+          // instead of continuing to show what was actually sent.
+          setCurrentXml(updated.xml);
+          currentXmlRef.current = updated.xml;
+          savedXmlRef.current = updated.xml;
+          setImportTrigger((t) => t + 1);
           message.success(`Updated in DB: ${updated.name}`);
+          // The server just synced this flow's tasks/business-flow-itself
+          // into Model Components — refresh so the Tree/Table views (and
+          // search) pick up the change without needing a manual reload.
+          void loadNeighborhoodFactoriesFor(updated.neighborhoodName || activeNeighborhoodTab);
         } else {
           const created = await createDiagram({
             name,
@@ -2772,6 +2830,9 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
             domain: diagramMeta.domain,
             subdomain: diagramMeta.subdomain,
             product: diagramMeta.product,
+            valueStream: diagramMeta.valueStream,
+            journey: diagramMeta.journey,
+            businessCapability: diagramMeta.businessCapability,
             businessFlow: diagramMeta.businessFlow,
             capabilities: selectedCapsRef.current,
             createdBy: CURRENT_USER,
@@ -2786,69 +2847,108 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
             source: 'db',
           });
           setSavedCaps(selectedCapsRef.current);
+          setCurrentXml(created.xml);
+          currentXmlRef.current = created.xml;
+          savedXmlRef.current = created.xml;
+          setImportTrigger((t) => t + 1);
           message.success(`Saved to DB: ${created.name}`);
+          void loadNeighborhoodFactoriesFor(created.neighborhoodName || activeNeighborhoodTab);
         }
         setIsDirty(false);
         setCapMatches([]);
-        savedXmlRef.current = latestXml;
         editorRef.current?.validateTasks();
         refresh();
-        setShowSaveDb(false);
       } catch (err: any) {
         message.error(err.message);
       }
     },
-    [activeDiagram, message, refresh, activeFileName],
+    [activeDiagram, message, refresh, activeFileName, activeNeighborhoodTab, loadNeighborhoodFactoriesFor],
   );
 
-  const handleQuickSaveDb = useCallback(async () => {
-    if (!activeDiagram?._id) {
-      setShowSaveDb(true);
-      return;
-    }
-    // Get latest XML from the editor
-    const latestXml = await editorRef.current?.getXml() || currentXmlRef.current;
-    currentXmlRef.current = latestXml;
-    // Auto-generate change note from diffs (use refs for always-current values)
-    let noteValue = generateChangeNote(savedXmlRef.current, latestXml, savedCapsRef.current, selectedCapsRef.current);
-    Modal.confirm({
-      title: 'Change Note',
-      content: (
-        <Input.TextArea
-          rows={3}
-          defaultValue={noteValue}
-          onChange={(e) => { noteValue = e.target.value; }}
-          placeholder="Describe what changed…"
-        />
-      ),
-      okText: 'Save',
-      onOk: () => handleSaveDb({
-        name: activeDiagram.name,
-        description: activeDiagram.description,
-        tags: activeDiagram.tags,
-        changeNote: noteValue,
-      }),
+  // Direct save — no dialog. Name/description/tags come from whatever's
+  // already known (an existing DB record, or the name collected via the
+  // "New Diagram" dialog / a loaded file); the change note is auto-
+  // generated from the XML/capability diff rather than prompted for, since
+  // there's nothing here a person needs to supply by hand anymore.
+  const handleSaveDiagram = useCallback(() => {
+    const name = activeDiagram?.name
+      || canvasDiagramName
+      || activeFileName?.replace(/\.bpmn$/i, '').replace(/\.xml$/i, '')
+      || 'Untitled';
+    void handleSaveDb({
+      name,
+      description: activeDiagram?.description || '',
+      tags: activeDiagram?.tags || [],
     });
-  }, [activeDiagram, handleSaveDb]);
+  }, [activeDiagram, canvasDiagramName, activeFileName, handleSaveDb]);
 
-  // New diagram — show name prompt
+  // New diagram — show the framework/hierarchy dialog
   const handleNew = useCallback(() => {
     setShowNewDiagramPrompt(true);
   }, []);
 
-  const handleNewDiagramConfirm = useCallback((name: string) => {
-    setActiveDiagram(null);
-    setActiveFileName(null);
-    setCanvasDiagramName(name);
-    setCurrentXml(EMPTY_DIAGRAM);
-    setImportTrigger(t => t + 1);
-    setDiagramMeta({});
-    setCompositeSectionTitles(null);
-    setIsDirty(false);
-    setCapMatches([]);
-    setSelectedCaps([]);
-    setShowNewDiagramPrompt(false);
-  }, []);
+  // Completing the dialog creates the diagram in Mongo immediately (an
+  // empty-canvas draft under the chosen framework/hierarchy), rather than
+  // waiting for a later manual "Save" — the whole point of the dialog is
+  // to record that hierarchy placement right away. Rethrows on failure so
+  // the dialog stays open with the user's picks intact instead of silently
+  // discarding them.
+  const handleNewDiagramConfirm = useCallback(async (payload: { frameworkName: string; flowName: string; metadata: DiagramMetadata }) => {
+    setApiNeighborhoodScope(payload.frameworkName);
+    try {
+      const created = await createDiagram({
+        name: payload.flowName,
+        description: '',
+        xml: EMPTY_DIAGRAM,
+        tags: [],
+        lineOfBusiness: payload.metadata.lineOfBusiness,
+        channel: payload.metadata.channel,
+        domain: payload.metadata.domain,
+        subdomain: payload.metadata.subdomain,
+        product: payload.metadata.product,
+        valueStream: payload.metadata.valueStream,
+        journey: payload.metadata.journey,
+        businessCapability: payload.metadata.businessCapability,
+        businessFlow: payload.metadata.businessFlow,
+        createdBy: CURRENT_USER,
+        // Server builds a proper skeleton (lane, left-justified layout,
+        // title breadcrumb) instead of persisting the bare client-side
+        // template — use ITS xml below so the canvas reflects that
+        // reformatted view immediately, not our unformatted local one.
+        generateSkeleton: true,
+      });
+
+      setActiveNeighborhoodTab(payload.frameworkName);
+      setActiveDiagram({
+        _id: created._id,
+        name: created.name,
+        description: created.description,
+        tags: created.tags,
+        status: created.status,
+        source: 'db',
+      });
+      setActiveFileName(null);
+      setCanvasDiagramName(created.name);
+      setCurrentXml(created.xml);
+      savedXmlRef.current = created.xml;
+      setImportTrigger(t => t + 1);
+      setDiagramMeta(payload.metadata);
+      setCompositeSectionTitles(null);
+      setIsDirty(false);
+      setCapMatches([]);
+      setSelectedCaps([]);
+      setSavedCaps([]);
+      setShowNewDiagramPrompt(false);
+      refresh();
+      message.success(`Created in DB: ${created.name}`);
+      // The new flow was just synced into Model Components (Business
+      // Process Flow factory) — refresh so the Tree/Table views pick it up.
+      void loadNeighborhoodFactoriesFor(created.neighborhoodName || payload.frameworkName);
+    } catch (err: any) {
+      message.error(err.response?.data?.error || err.message);
+      throw err;
+    }
+  }, [message, refresh, loadNeighborhoodFactoriesFor]);
 
   // Rename diagram
   const handleRenameDiagram = useCallback(async (newName: string) => {
@@ -3031,6 +3131,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
             <Space size="small">
               <NeighborhoodFactory
                 canManageFactories={canEditFactories}
+                userRole={user?.role}
                 fixedNeighborhoodName={neighborhood.name}
                 onNeighborhoodsChanged={() => refreshNeighborhoodModelData(neighborhood.name)}
                 onNeighborhoodCreated={(name) => {
@@ -3111,6 +3212,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                     setActiveModelComponentTabs((current) => ({ ...current, [neighborhood.name]: componentId }));
                   }}
                   onApplicationLinkClick={handleApplicationLinkClick}
+                  onViewDiagramClick={handleViewDiagramForBusinessFlow}
                   renderComponentContent={(componentId, componentName, highlightedRowName) => {
                     const factoryComponent = (neighborhoodFactories[neighborhood.name] || []).find((f) => f._id === componentId);
                     if (!factoryComponent) return <div>Component not found</div>;
@@ -3118,6 +3220,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                     return (
                       <NeighborhoodFactory
                         canManageFactories={canEditFactories}
+                        userRole={user?.role}
                         fixedNeighborhoodName={neighborhood.name}
                         fixedFactoryId={componentId}
                         defaultRowSearch={highlightedRowName || factorySearch[componentId]}
@@ -3361,6 +3464,31 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                               }
                               await toggleCanvasDiagram(id, (selected as any).neighborhoodName || neighborhoodName);
                             }}
+                            onDiagramDeleted={(id, deletedNeighborhoodName) => {
+                              // Drop it from the composite multi-select and redraw without it.
+                              setSelectedDiagramIds((current) => {
+                                if (!current.includes(id)) return current;
+                                const next = current.filter((existingId) => existingId !== id);
+                                void rebuildCompositeCanvas(next);
+                                return next;
+                              });
+                              // If it was the diagram open in the editor, clear back to blank.
+                              if (activeDiagram?._id === id) {
+                                setActiveDiagram(null);
+                                setActiveFileName(null);
+                                setCanvasDiagramName(null);
+                                setCurrentXml(EMPTY_DIAGRAM);
+                                setImportTrigger((t) => t + 1);
+                                setDiagramMeta({});
+                                setCompositeSectionTitles(null);
+                                setIsDirty(false);
+                              }
+                              // Its Business Process Flow component row is gone too —
+                              // refresh Model Components so the factory table catches up.
+                              if (deletedNeighborhoodName) {
+                                void loadNeighborhoodFactoriesFor(deletedNeighborhoodName);
+                              }
+                            }}
                           />
                         </div>
                         <div className="min-h-0 min-w-0 flex-1">
@@ -3394,6 +3522,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                             isAlreadyLoaded={activeDiagram?.source === 'local-match'}
                             readOnly={readOnly}
                             onNavigateToFactory={handleNavigateToFactory}
+                            onViewBusinessFlowComponent={handleViewBusinessFlowComponent}
                             onApplicationLinkClick={handleApplicationLinkClick}
                             onTaskSelect={(task) => {
                               setSelectedDiagramTask(task);
@@ -3404,7 +3533,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                             onCapabilityAssignToggle={handleCapabilityAssignToggle}
                             onCapabilityViewInCatalog={handleViewCapabilityInCatalog}
                             onCapabilityBack={() => setSelectedCapability(null)}
-                            onAddToFactory={() => setShowSaveDb(true)}
+                            onAddToFactory={handleSaveDiagram}
                             onDeleteAndReload={async () => {
                           if (!activeDiagram?._id) return;
                           try {
@@ -3482,6 +3611,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                     <div style={{ display: 'flex', justifyContent: 'flex-start', padding: '12px 16px', borderBottom: '1px solid #dbe3ec', background: '#f8fafc' }}>
                       <NeighborhoodFactory
                         canManageFactories={canEditFactories}
+                        userRole={user?.role}
                         onNeighborhoodsChanged={loadNeighborhoodTabs}
                         onNeighborhoodCreated={(name) => {
                           setActiveOuterTab('neighborhoods');
@@ -3652,13 +3782,6 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
         )}
       </Layout>
       {/* ─── Modals ───────────────────────────────────────── */}
-      <SaveModal
-        open={showSaveDb}
-        onClose={() => setShowSaveDb(false)}
-        isUpdate={!!activeDiagram?._id}
-        defaultChangeNote={activeDiagram?._id ? generateChangeNote(savedXmlRef.current, currentXmlRef.current, savedCapsRef.current, selectedCapsRef.current) : undefined}
-        onSave={handleSaveDb}
-      />
       {/* Fuzzy Match Modals */}
       <AppMatchModal
         open={showAppMatch}
@@ -3675,32 +3798,15 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
         onClose={() => setShowTaskMatch(false)}
       />
 
-      {/* New Diagram Name Prompt */}
-      <Modal
-        title="New Diagram"
+      {/* New Diagram dialog: framework first, then its real hierarchy chain
+          as required cascading dropdowns, then the new flow's name (free
+          text, validated against existing names) and any optional qualifiers. */}
+      <NewDiagramDialog
         open={showNewDiagramPrompt}
-        onOk={() => {
-          const val = (document.getElementById('new-diagram-name-input') as HTMLInputElement)?.value?.trim();
-          if (val) handleNewDiagramConfirm(val);
-        }}
+        frameworks={neighborhoodTabs}
         onCancel={() => setShowNewDiagramPrompt(false)}
-        okText="Create"
-        destroyOnClose
-      >
-        <div className="mt-4">
-          <label className="block text-sm font-medium text-gray-700 mb-1">Diagram Name <span className="text-red-500">*</span></label>
-          <Input
-            id="new-diagram-name-input"
-            placeholder="Enter diagram name"
-            autoFocus
-            onPressEnter={(e) => {
-              const val = (e.target as HTMLInputElement).value.trim();
-              if (val) handleNewDiagramConfirm(val);
-            }}
-          />
-          <div className="text-xs text-gray-500 mt-1">This name will appear as the diagram title on the canvas.</div>
-        </div>
-      </Modal>
+        onCreate={handleNewDiagramConfirm}
+      />
 
       {hasAdminAccess && <AdminPanel open={showAdmin} onClose={() => setShowAdmin(false)} />}
       <GlobalComponentSearch

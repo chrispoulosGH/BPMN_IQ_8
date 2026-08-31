@@ -7,6 +7,7 @@ const Component = require('../models/Component');
 const Server = require('../models/Server');
 const DatabaseInstance = require('../models/DatabaseInstance');
 const Model = require('../models/Model');
+const ApplicationFeatureDevCost = require('../models/ApplicationFeatureDevCost');
 const { getNeighborhoodName, withNeighborhood } = require('../utils/neighborhoodScope');
 const { loadScopedFlowCostDocumentsFromComponentsAndDiagrams } = require('../utils/flowCostSource');
 const { listApplicationReferences } = require('../utils/applicationReferenceLookup');
@@ -1322,6 +1323,65 @@ router.get('/flow-cost-3d', async (req, res) => {
     }
 
     res.json({ businessFlows: businessFlows.sort(), points, taskOrders });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/dashboard/feature-cost-3d — "YoY Feature Cost"
+ * Per Business Process Flow, application-level dev cost broken down by
+ * year/quarter, plus the underlying feature line items for hover breakdown.
+ * Loads every flow's data in one call (same "fetch once, filter client-side
+ * by selection" pattern as /flow-cost-3d above) since the dataset is small.
+ * Source: applicationFeatureDevCosts (see models/ApplicationFeatureDevCost.js).
+ */
+router.get('/feature-cost-3d', async (req, res) => {
+  try {
+    const neighborhoodName = getNeighborhoodName(req);
+    const docs = await ApplicationFeatureDevCost.find(
+      neighborhoodName && neighborhoodName !== '__all__' ? { neighborhoodName } : {},
+      { businessFlow: 1, application: 1, features: 1 }
+    ).lean();
+
+    const businessFlowSet = new Set();
+    const applicationSet = new Set();
+    // Group by businessFlow|application|year|quarter — the same app can
+    // appear in several combined-key documents (used by multiple tasks
+    // within the same flow), so their costs/features get merged here.
+    const cellMap = new Map();
+
+    for (const doc of docs) {
+      const businessFlow = String(doc.businessFlow || '').trim();
+      const application = String(doc.application || '').trim();
+      if (!businessFlow || !application) continue;
+      businessFlowSet.add(businessFlow);
+      applicationSet.add(application);
+
+      for (const feature of doc.features || []) {
+        const year = feature.year;
+        const quarter = feature.quarter;
+        if (!year || !quarter) continue;
+        const key = `${businessFlow}${application}${year}${quarter}`;
+        if (!cellMap.has(key)) {
+          cellMap.set(key, { businessFlow, application, year, quarter, cost: 0, features: [] });
+        }
+        const cell = cellMap.get(key);
+        cell.cost += Number(feature.devCost) || 0;
+        cell.features.push({
+          jiraFeatureKey: feature.jiraFeatureKey,
+          featureName: feature.featureName,
+          featureDescription: feature.featureDescription,
+          devCost: feature.devCost,
+        });
+      }
+    }
+
+    res.json({
+      businessFlows: [...businessFlowSet].sort(),
+      applications: [...applicationSet].sort(),
+      points: [...cellMap.values()],
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

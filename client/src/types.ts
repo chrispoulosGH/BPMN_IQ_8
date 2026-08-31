@@ -53,11 +53,18 @@ export interface DiagramCreatePayload {
   domain?: string | null;
   subdomain?: string | null;
   product?: string | null;
+  valueStream?: string | null;
+  journey?: string | null;
+  businessCapability?: string | null;
   businessFlow?: string | null;
   capabilities?: CapabilityMatch[];
   status?: string;
   sourcedFrom?: string;
   createdBy?: string;
+  // Ignore the supplied `xml` and build a fresh, properly-formatted skeleton
+  // instead (lane, left-justified layout, title breadcrumb) — matches what
+  // the load/generation pipeline produces. Used by the "New Diagram" dialog.
+  generateSkeleton?: boolean;
 }
 
 export interface DiagramUpdatePayload {
@@ -70,6 +77,9 @@ export interface DiagramUpdatePayload {
   domain?: string | null;
   subdomain?: string | null;
   product?: string | null;
+  valueStream?: string | null;
+  journey?: string | null;
+  businessCapability?: string | null;
   businessFlow?: string | null;
   capabilities?: CapabilityMatch[];
   changeNote?: { userId: string; note: string };

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Table, Input, Button, App as AntApp, Space, Tooltip, Modal, Form, Typography, Tag, Select } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined, LinkOutlined } from '@ant-design/icons';
 import { getRefItems, createRefItem, updateRefItem, deleteRefItem, getBusinessFlowMap, type RefItem } from '../api';
-import { STATE_TRANSITIONS, getAllowedActions, stateTagColor, transitionState } from '../stateUtils';
+import { getAllowedActions, getStatusTransitions, stateTagColor, transitionState, type StatusRefTransition } from '../stateUtils';
 import { enhanceColumnsWithSortAndFilters } from '../utils/tableEnhancer';
 
 interface BusinessFlowFactoryProps {
@@ -24,6 +24,11 @@ export default function BusinessFlowFactory({ defaultSearch, onItemAdded, onOpen
   const [editingItem, setEditingItem] = useState<RefItem | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [form] = Form.useForm();
+  const [statusTransitions, setStatusTransitions] = useState<StatusRefTransition[]>([]);
+
+  useEffect(() => {
+    getStatusTransitions().then(setStatusTransitions).catch(() => setStatusTransitions([]));
+  }, []);
 
   const loadItems = useCallback(async () => {
     setLoading(true);
@@ -134,7 +139,7 @@ export default function BusinessFlowFactory({ defaultSearch, onItemAdded, onOpen
       onFilter: (value: any, record: RefItem) => ((record as any).state || 'published') === value,
       render: (val: string, record: RefItem) => {
         const currentState = (val || 'published').toLowerCase();
-        const actions = getAllowedActions(userRole, currentState);
+        const actions = getAllowedActions(statusTransitions, userRole, currentState);
         const tagColor = stateTagColor(currentState);
         if (!actions.length || readOnly) {
           return <Tag color={tagColor}>{currentState}</Tag>;
@@ -145,7 +150,7 @@ export default function BusinessFlowFactory({ defaultSearch, onItemAdded, onOpen
             value="__current__"
             style={{ width: '100%' }}
             onChange={async (action) => {
-              const rule = STATE_TRANSITIONS.find(t => t.action === action && t.from === currentState);
+              const rule = statusTransitions.find(t => t.action === action && t.from === currentState);
               if (rule) {
                 try {
                   await transitionState('businessFlows', record._id, action, userRole || '');

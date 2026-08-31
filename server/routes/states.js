@@ -1,7 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const State = require('../models/State');
-const { VALID_STATES, getAllowedActions, getTargetState } = require('../services/stateTransitions');
+const StatusRef = require('../models/StatusRef');
+const { transitions: HARDCODED_TRANSITIONS, VALID_STATES, getAllowedActions, getTargetState } = require('../services/stateTransitions');
 const { DEFAULT_NEIGHBORHOOD_NAME, buildNeighborhoodFilter } = require('../utils/neighborhoodScope');
 const Component = require('../models/Component');
 
@@ -209,6 +210,20 @@ router.get('/', async (_req, res) => {
   }
 });
 
+// GET /api/states/transitions — list all role/action/from/to transition
+// rules (the status_ref collection). Was hardcoded as STATE_TRANSITIONS in
+// client/src/components/BpmnFactory.tsx — that table now fetches this
+// endpoint instead. Falls back to the hardcoded rules in
+// services/stateTransitions.js if the collection hasn't been seeded yet.
+router.get('/transitions', async (_req, res) => {
+  try {
+    const rules = await StatusRef.find().lean();
+    res.json(rules.length ? rules : HARDCODED_TRANSITIONS);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/states/actions?collection=xxx&id=yyy&role=zzz — get allowed actions for a record
 router.get('/actions', async (req, res) => {
   const { collection, id, role } = req.query;
@@ -251,7 +266,7 @@ router.post('/transition', async (req, res) => {
       });
     }
 
-    if (collection === 'diagrams' && currentState === 'draft' && targetState === 'submitted') {
+    if (collection === 'diagrams' && currentState === 'draft' && targetState === 'submitted for approval') {
       const {
         hasCapabilities,
         hasBusinessFlowReference,

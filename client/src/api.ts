@@ -66,6 +66,11 @@ export const updateDiagram = (id: string, data: DiagramUpdatePayload): Promise<D
 export const deleteDiagram = (id: string): Promise<{ message: string }> =>
   api.delete(`/diagrams/${id}`).then((r) => r.data);
 
+// Also deletes the diagram's own Business Process Flow component row (and
+// rebuilds the search index) — used by the delete "x" on a diagram tile.
+export const deleteDiagramWithComponent = (id: string): Promise<{ message: string; componentDeleted: boolean }> =>
+  api.delete(`/diagrams/${id}`, { params: { cascadeComponent: true } }).then((r) => r.data);
+
 export interface BatchImportResult {
   success: { _id: string; name: string; fileName: string; status: string }[];
   failed: { fileName: string; error: string }[];
@@ -385,6 +390,37 @@ export const getCanonicalFactories = async (neighborhoodName: string, fetchFirst
   return out;
 };
 
+export interface ModelSchemaQualifierField {
+  fieldName: string;
+  label: string;
+  diagramField: string;
+}
+export interface ModelSchemaLevel {
+  componentName: string;
+  diagramField: string | null;
+  qualifierColumns: ModelSchemaQualifierField[];
+}
+export interface ModelSchemaResponse {
+  hierarchyFields: ModelSchemaLevel[];
+  nameField: ModelSchemaLevel | null;
+}
+// Powers the "New Diagram" dialog: the framework's real hierarchy chain
+// (Domain, Subdomain, ...) up to its Business Process Flow level.
+export const getModelSchema = (neighborhoodName: string): Promise<ModelSchemaResponse> =>
+  api.get('/custom-factories/model-schema', { params: { neighborhoodName } }).then((r) => r.data);
+
+// Cascading dropdown options for one hierarchy level, optionally narrowed to
+// the children of an already-selected parent value.
+export const getHierarchyOptions = (
+  neighborhoodName: string,
+  componentType: string,
+  parentComponentType?: string,
+  parentValue?: string,
+): Promise<{ options: string[] }> =>
+  api.get('/custom-factories/hierarchy-options', {
+    params: { neighborhoodName, componentType, parentComponentType, parentValue },
+  }).then((r) => r.data);
+
 export const getComponentHierarchies = (neighborhoodName?: string, componentName: string = 'Application', modelName?: string, compact = false, includeChildless = false): Promise<import('./types').HierarchiesResponse> => {
   const params = { neighborhoodName, componentName, ...(compact ? { compact: true } : {}), ...(includeChildless ? { includeChildless: true } : {}) } as any;
   const modelConfig = scopedModelRequestConfig(modelName) || {};
@@ -487,6 +523,19 @@ export const deleteActor = (id: string): Promise<{ success: boolean }> =>
   api.delete(`/actors/${id}`).then((r) => r.data);
 
 // ── State Transitions ───────────────────────────────────────
+export interface StatusRefTransition {
+  role: string;
+  action: string;
+  from: string;
+  to: string;
+}
+
+// Backed by the status_ref Mongo collection (server/models/StatusRef.js) —
+// replaces the STATE_TRANSITIONS constant that used to be hardcoded in
+// BpmnFactory.tsx.
+export const getStatusTransitions = (): Promise<StatusRefTransition[]> =>
+  api.get('/states/transitions').then((r) => r.data);
+
 export const transitionState = (collection: string, id: string, action: string, role: string): Promise<{ previousState: string; newState: string; record: any }> =>
   api.post('/states/transition', { collection, id, action, role }).then((r) => r.data);
 
@@ -529,6 +578,11 @@ export const getDashboardFlow3D = (): Promise<{ businessFlows: string[]; points:
 
 export const getDashboardFlowCost3D = (): Promise<{ businessFlows: string[]; points: Array<{ businessFlow: string; task: string; taskOrder: number; year: number; totalCost: number; opCost: number; devCost: number }>; taskOrders: Record<string, string[]> }> =>
   api.get('/dashboard/flow-cost-3d').then((r) => r.data);
+
+export interface FeatureCostFeature { jiraFeatureKey: string; featureName: string; featureDescription: string; devCost: number; }
+export interface FeatureCostPoint { businessFlow: string; application: string; year: number; quarter: string; cost: number; features: FeatureCostFeature[]; }
+export const getDashboardFeatureCost3D = (): Promise<{ businessFlows: string[]; applications: string[]; points: FeatureCostPoint[] }> =>
+  api.get('/dashboard/feature-cost-3d').then((r) => r.data);
 
 export interface CostByYearItem { name: string; opCost: number; devCost: number; totalCost: number; }
 export interface TaskCostByYearItem extends CostByYearItem { businessFlow: string; }

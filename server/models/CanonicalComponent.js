@@ -16,6 +16,11 @@ const CanonicalComponentSchema = new Schema({
   childrenRefs: [{ type: Schema.Types.ObjectId, ref: 'CanonicalComponent' }],
   path: { type: String },
   sourceBatches: { type: [SourceBatchSchema], default: [] },
+  // Row-level status (status_ref driven — see server/services/stateTransitions.js)
+  // and owner, editable from the Model Components table view's Edit Row modal.
+  owner: { type: String, default: '' },
+  state: { type: String, default: 'staged' },
+  updatedBy: { type: String, default: '' },
 }, { timestamps: true });
 
 // Compound unique: neighborhood + type + primary key

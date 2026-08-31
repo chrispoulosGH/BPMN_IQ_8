@@ -4,7 +4,7 @@ import { SearchOutlined, SettingOutlined, PlusOutlined, EditOutlined, DeleteOutl
 import type { ApplicationItem, ServerItem } from '../types';
 import { getRefItems, createApplication, updateApplication, getApplicationServers, deleteRefItem, getApplicationByCorrelationId } from '../api';
 import type { ColumnsType } from 'antd/es/table';
-import { STATE_TRANSITIONS, getAllowedActions, stateTagColor, transitionState } from '../stateUtils';
+import { getAllowedActions, getStatusTransitions, stateTagColor, transitionState, type StatusRefTransition } from '../stateUtils';
 import { matchesFactorySearch, parseFactorySearch, encodeExactFactorySearch } from '../utils/factorySearch';
 import { enhanceColumnsWithSortAndFilters } from '../utils/tableEnhancer';
 import CostGroupCharts from './CostGroupCharts';
@@ -157,7 +157,12 @@ function ApplicationFactory({ defaultSearch, defaultAdd, userRole, readOnly, dat
   const [detailServersLoading, setDetailServersLoading] = useState(false);
   const [fullAppDetail, setFullAppDetail] = useState<ApplicationItem | null>(null);
   const [fullAppDetailLoading, setFullAppDetailLoading] = useState(false);
+  const [statusTransitions, setStatusTransitions] = useState<StatusRefTransition[]>([]);
   const handledDetailRequestNonceRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    getStatusTransitions().then(setStatusTransitions).catch(() => setStatusTransitions([]));
+  }, []);
   const isDataBacked = dataRows !== undefined;
   const preventRowMutations = readOnly || isDataBacked;
   const availableColumnChoices = useMemo(
@@ -533,7 +538,7 @@ function ApplicationFactory({ defaultSearch, defaultAdd, userRole, readOnly, dat
       onFilter: (value: any, record: ApplicationItem) => ((record as any).state || 'published') === value,
       render: (val: string, record: ApplicationItem) => {
         const currentState = (val || 'published').toLowerCase();
-        const actions = getAllowedActions(userRole, currentState);
+        const actions = getAllowedActions(statusTransitions, userRole, currentState);
         const tagColor = stateTagColor(currentState);
         if (preventRowMutations || !actions.length) {
           return <Tag color={tagColor}>{currentState}</Tag>;
@@ -544,7 +549,7 @@ function ApplicationFactory({ defaultSearch, defaultAdd, userRole, readOnly, dat
             value="__current__"
             style={{ width: '100%' }}
             onChange={async (action) => {
-              const rule = STATE_TRANSITIONS.find(t => t.action === action && t.from === currentState);
+              const rule = statusTransitions.find(t => t.action === action && t.from === currentState);
               if (rule) {
                 try {
                   await transitionState('applications', record._id, action, userRole || '');

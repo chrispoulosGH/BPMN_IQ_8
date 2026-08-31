@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const ComponentSearchIndex = require('../models/ComponentSearchIndex');
 const CanonicalComponent = require('../models/CanonicalComponent');
 const Model = require('../models/Model');
+const { mapComponentNameToLineageField } = require('./lineageFields');
 
 function logHeap(stage, extra = {}) {
   const usedMb = Math.round(process.memoryUsage().heapUsed / 1024 / 1024);
@@ -163,27 +164,6 @@ async function rebuildSearchIndex(neighborhoodName, options = {}) {
         qualifiers[trimmedKey] = value;
       }
       return qualifiers;
-    }
-
-    const LINEAGE_FIELD_ALIASES = new Map([
-      ['lineofbusiness', 'lineOfBusiness'],
-      ['lob', 'lineOfBusiness'],
-      ['channel', 'channel'],
-      ['product', 'product'],
-      ['domain', 'domain'],
-      ['subdomain', 'subdomain'],
-      ['valuestream', 'valueStream'],
-      ['journey', 'journey'],
-      ['businesscapability', 'businessCapability'],
-      ['businessprocessflow', 'businessFlow'],
-      ['businessflow', 'businessFlow'],
-      ['task', 'task'],
-      ['application', 'application'],
-    ]);
-
-    function mapComponentNameToLineageField(componentName) {
-      const normalized = String(componentName || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
-      return LINEAGE_FIELD_ALIASES.get(normalized) || null;
     }
 
     function getLineageVariants(rowValues) {

@@ -21,6 +21,20 @@ function typeMatches(componentType, name) {
   return normalize(componentType) === normalize(name);
 }
 
+// "value_stream_qualifier" -> "valueStream", "business_capability_qualifier"
+// -> "businessCapability". A flow's Value Stream/Journey/Business Capability
+// can live directly on its OWN row as qualifier columns (not as separate
+// parent hierarchy levels) — see the note above getFlowLineageBranches's
+// qualifier fallback for why that data needs reading directly off the row
+// rather than via __lineage or the ancestor walk.
+function qualifierFieldToLineageKey(fieldName) {
+  const stripped = String(fieldName || '').replace(/[_\s]*qualifier$/i, '').trim();
+  if (!stripped) return null;
+  const words = stripped.split(/[_\s]+/).filter(Boolean);
+  if (!words.length) return null;
+  return words.map((word, i) => (i === 0 ? word.toLowerCase() : word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())).join('');
+}
+
 async function getFlowLineageBranches(flowDoc) {
   const emptyLineage = {
     lineOfBusiness: null,
@@ -138,6 +152,25 @@ async function getFlowLineageBranches(flowDoc) {
         if (variant[key]) resolvedLineage[key] = variant[key];
       }
     }
+
+    // Fill any still-missing fields directly from the flow's own qualifier
+    // columns (e.g. "value_stream_qualifier"). buildLineageSnapshot only
+    // captures "*Component" columns into __lineage/__lineageVariants — for a
+    // framework where Value Stream/Journey/Business Capability are qualifier
+    // columns on the flow itself rather than separate parent hierarchy
+    // levels, neither the ancestor walk above nor the __lineage variant
+    // matched above ever sees them, and this was silently leaving them null
+    // on every generated diagram. The flow's own row is the ground truth.
+    if (values) {
+      for (const [fieldName, rawValue] of Object.entries(values)) {
+        if (!/qualifier$/i.test(fieldName)) continue;
+        const lineageKey = qualifierFieldToLineageKey(fieldName);
+        if (!lineageKey || !(lineageKey in emptyLineage)) continue;
+        const value = String(rawValue || '').trim();
+        if (value && !resolvedLineage[lineageKey]) resolvedLineage[lineageKey] = value;
+      }
+    }
+
     return { lineage: resolvedLineage, breadcrumb: branch.breadcrumb };
   });
 }
