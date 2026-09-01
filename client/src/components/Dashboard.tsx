@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Spin, Select, Segmented, Empty, Card, Row, Col, Statistic, Table, Tag } from 'antd';
 import {
   BarChart,
@@ -22,8 +22,8 @@ import {
   Cell,
 } from 'recharts';
 import { enhanceColumnsWithSortAndFilters } from '../utils/tableEnhancer';
-import { getDashboardTaskRisk, getDashboardFlowRisk, getDashboardCostByYear, getDashboardCapabilityCostByYear, getDashboardCapabilityFlowRelationships } from '../api';
-import type { CapabilityCostByYearItem, CostByYearItem, TaskCostByYearItem } from '../api';
+import { getDashboardTaskRisk, getDashboardFlowRisk, getDashboardCostByYear, getDashboardCapabilityCostByYear, getDashboardCapabilityFlowRelationships, getDashboardFeatureCost3D } from '../api';
+import type { CapabilityCostByYearItem, CostByYearItem, TaskCostByYearItem, FeatureCostPoint } from '../api';
 import Flow3DChart from './Flow3DChart';
 import FeatureCost3DChart from './FeatureCost3DChart';
 import LobDrilldownTree from './LobDrilldownTree';
@@ -110,6 +110,16 @@ const COMPLIANCE_LABELS: Record<string, string> = {
 
 const COLORS = ['#1890ff', '#52c41a', '#faad14', '#f5222d', '#722ed1', '#13c2c2', '#eb2f96', '#fa8c16', '#a0d911', '#2f54eb'];
 const RISK_COLORS = { low: '#52c41a', medium: '#faad14', high: '#fa541c', critical: '#f5222d' };
+// Business Flow Comparison's 2x2 quadrant grid — both quadrants in a row
+// start at this height, and both columns start at an even split; the user
+// can then drag either boundary to resize. CHART_HEIGHT_OFFSET is how much
+// of a quadrant's height is taken up by the Card's own header/padding, left
+// over for the chart itself.
+const QUADRANT_HEIGHT = 480;
+const CHART_HEIGHT_OFFSET = 100;
+const MIN_QUADRANT_SIZE = 220;
+const MIN_COL_SPLIT_PERCENT = 20;
+const MAX_COL_SPLIT_PERCENT = 80;
 const VULNERABILITY_LABELS: Record<string, string> = {
   serverVulnerabilities: 'Server Vulns',
   dbVulnerabilities: 'DB Vulns',
@@ -142,6 +152,23 @@ export default function Dashboard() {
   const [taskCostData, setTaskCostData] = useState<TaskCostByYearItem[]>([]);
   const [capabilityCostData, setCapabilityCostData] = useState<CapabilityCostByYearItem[]>([]);
   const [capRelData, setCapRelData] = useState<CapabilityFlowRelationshipData | null>(null);
+  // Same underlying ApplicationFeatureDevCost data the YoY Feature Cost 3D
+  // chart uses — reused here so the flow-comparison dashboard's top-flows
+  // chart is driven by the same dev-cost source, not the older op/dev cost
+  // seed data.
+  const [featureCostPoints, setFeatureCostPoints] = useState<FeatureCostPoint[]>([]);
+  // Set when a bar in the Business Flow Comparison dev-cost chart is
+  // clicked — jumps to the YoY Feature Cost view with that flow selected.
+  // The nonce forces re-application even when the same flow is clicked
+  // twice in a row (e.g. after the user manually cleared the selection).
+  const [featureCostFlowRequest, setFeatureCostFlowRequest] = useState<{ flow: string; nonce: number } | null>(null);
+
+  // Stays on the Business Flow Comparison screen — just updates the YoY
+  // Feature Cost chart embedded in its top-right quadrant, rather than
+  // navigating away to the standalone YoY Feature Cost view.
+  const handleFlowCostBarClick = (flowName: string) => {
+    setFeatureCostFlowRequest({ flow: flowName, nonce: Date.now() });
+  };
 
   useEffect(() => {
     Promise.all([
@@ -150,14 +177,16 @@ export default function Dashboard() {
       getDashboardCostByYear(COST_YEAR),
       getDashboardCapabilityCostByYear(COST_YEAR),
       getDashboardCapabilityFlowRelationships(),
+      getDashboardFeatureCost3D(),
     ])
-      .then(([tasks, flows, cost, capabilityCost, caprels]) => {
+      .then(([tasks, flows, cost, capabilityCost, caprels, featureCost]) => {
         setTaskData(tasks);
         setFlowData(flows);
         setFlowCostData(cost.flows);
         setTaskCostData(cost.tasks);
         setCapabilityCostData(capabilityCost.capabilities);
         setCapRelData(caprels);
+        setFeatureCostPoints(featureCost.points);
       })
       .finally(() => setLoading(false));
   }, []);
@@ -209,9 +238,9 @@ export default function Dashboard() {
       ) : view === 'servermap' ? (
         <ServerLocationMap />
       ) : view === 'flows' ? (
-        <FlowDashboard flows={flowData} costData={flowCostData} costYear={COST_YEAR} />
+        <FlowDashboard flows={flowData} costData={flowCostData} costYear={COST_YEAR} devCostPoints={featureCostPoints} onFlowCostBarClick={handleFlowCostBarClick} featureCostFlowRequest={featureCostFlowRequest} />
       ) : view === 'featurecost3d' ? (
-        <FeatureCost3DChart />
+        <FeatureCost3DChart requestedFlow={featureCostFlowRequest} />
       ) : (
         <Flow3DChart />
       )}
@@ -793,7 +822,7 @@ function TaskDashboard({ tasks, allTasks, costData, costYear }: { tasks: TaskPro
 }
 
 // ─── Flow Dashboard ─────────────────────────────────────────
-function FlowDashboard({ flows, costData, costYear }: { flows: FlowProfile[]; costData: CostByYearItem[]; costYear: number }) {
+function FlowDashboard({ flows, costData, costYear, devCostPoints, onFlowCostBarClick, featureCostFlowRequest }: { flows: FlowProfile[]; costData: CostByYearItem[]; costYear: number; devCostPoints: FeatureCostPoint[]; onFlowCostBarClick?: (flowName: string) => void; featureCostFlowRequest?: { flow: string; nonce: number } | null }) {
   if (!flows.length) return <Empty description="No business flows with tasks/applications found" />;
 
   const topFlowsByRisk = sortDescBy(flows, (flow) => flow.riskScore).slice(0, 20);
@@ -802,13 +831,23 @@ function FlowDashboard({ flows, costData, costYear }: { flows: FlowProfile[]; co
   const topFlowsByDbVulns = sortDescBy(flows, (flow) => flow.dbVulnerabilities).slice(0, 20);
 
   const fmtM = (n: number) => '$' + (n / 1_000_000).toFixed(1) + 'M';
-  const costBarData = sortDescBy(costData, (flow) => flow.totalCost).slice(0, 20).map((f) => ({
-    name: f.name.length > 25 ? f.name.slice(0, 22) + '...' : f.name,
-    fullName: f.name,
-    opCost: f.opCost,
-    devCost: f.devCost,
-    totalCost: f.totalCost,
-  }));
+
+  // Top 20 flows by total dev cost across every year the ApplicationFeatureDevCost
+  // data covers (same source as the YoY Feature Cost 3D chart), not just one
+  // fixed year — replaces the old op+dev cost-for-costYear-only chart below.
+  const devCostByFlow = new Map<string, number>();
+  devCostPoints.forEach((p) => {
+    devCostByFlow.set(p.businessFlow, (devCostByFlow.get(p.businessFlow) || 0) + p.cost);
+  });
+  const devCostBarData = [...devCostByFlow.entries()]
+    .map(([name, devCost]) => ({ name, devCost }))
+    .sort((a, b) => b.devCost - a.devCost)
+    .slice(0, 20)
+    .map((f) => ({
+      name: f.name.length > 25 ? f.name.slice(0, 22) + '...' : f.name,
+      fullName: f.name,
+      devCost: f.devCost,
+    }));
 
   // Risk bar data
   const riskBarData = topFlowsByRisk.map((f) => ({
@@ -871,34 +910,101 @@ function FlowDashboard({ flows, costData, costYear }: { flows: FlowProfile[]; co
   const maxRisk = flows.length ? Math.max(...flows.map((f) => f.riskScore)) : 0;
   const totalApps = flows.reduce((s, f) => s + f.appCount, 0);
 
+  // ─── Quadrant grid resizing ─────────────────────────────────
+  // colSplit is the left column's width as a % of the grid's own width,
+  // shared by both rows so the vertical boundary lines up straight down
+  // the middle; topRowHeight/bottomRowHeight are each row's height in px.
+  // Dragging a handle just updates these — a plain drag-resize, the same
+  // pattern used elsewhere in this app (e.g. the properties panel width
+  // and factory table column widths), not a new dependency.
+  const [colSplit, setColSplit] = useState(50);
+  const [topRowHeight, setTopRowHeight] = useState(QUADRANT_HEIGHT);
+  const [bottomRowHeight, setBottomRowHeight] = useState(QUADRANT_HEIGHT);
+  const quadrantGridRef = useRef<HTMLDivElement>(null);
+  const quadrantDragRef = useRef<{
+    mode: 'col' | 'row';
+    startX: number;
+    startY: number;
+    startColSplit: number;
+    startTopHeight: number;
+    startBottomHeight: number;
+    containerWidth: number;
+  } | null>(null);
+
+  const handleQuadrantPointerMove = (e: PointerEvent) => {
+    const drag = quadrantDragRef.current;
+    if (!drag) return;
+    if (drag.mode === 'col') {
+      const deltaPercent = ((e.clientX - drag.startX) / drag.containerWidth) * 100;
+      const next = Math.max(MIN_COL_SPLIT_PERCENT, Math.min(MAX_COL_SPLIT_PERCENT, drag.startColSplit + deltaPercent));
+      setColSplit(next);
+    } else {
+      const deltaY = e.clientY - drag.startY;
+      const nextTop = Math.max(MIN_QUADRANT_SIZE, drag.startTopHeight + deltaY);
+      const nextBottom = Math.max(MIN_QUADRANT_SIZE, drag.startBottomHeight - deltaY);
+      setTopRowHeight(nextTop);
+      setBottomRowHeight(nextBottom);
+    }
+  };
+
+  const handleQuadrantPointerUp = () => {
+    quadrantDragRef.current = null;
+    window.removeEventListener('pointermove', handleQuadrantPointerMove);
+    window.removeEventListener('pointerup', handleQuadrantPointerUp);
+  };
+
+  const startColDrag = (e: React.PointerEvent) => {
+    e.preventDefault();
+    quadrantDragRef.current = {
+      mode: 'col',
+      startX: e.clientX,
+      startY: e.clientY,
+      startColSplit: colSplit,
+      startTopHeight: topRowHeight,
+      startBottomHeight: bottomRowHeight,
+      containerWidth: quadrantGridRef.current?.getBoundingClientRect().width || 1000,
+    };
+    window.addEventListener('pointermove', handleQuadrantPointerMove);
+    window.addEventListener('pointerup', handleQuadrantPointerUp);
+  };
+
+  const startRowDrag = (e: React.PointerEvent) => {
+    e.preventDefault();
+    quadrantDragRef.current = {
+      mode: 'row',
+      startX: e.clientX,
+      startY: e.clientY,
+      startColSplit: colSplit,
+      startTopHeight: topRowHeight,
+      startBottomHeight: bottomRowHeight,
+      containerWidth: 0,
+    };
+    window.addEventListener('pointermove', handleQuadrantPointerMove);
+    window.addEventListener('pointerup', handleQuadrantPointerUp);
+  };
+
+  const colDividerStyle: React.CSSProperties = {
+    width: 10,
+    flexShrink: 0,
+    cursor: 'col-resize',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    touchAction: 'none',
+  };
+  const rowDividerStyle: React.CSSProperties = {
+    height: 10,
+    cursor: 'row-resize',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    touchAction: 'none',
+  };
+  const colGripStyle: React.CSSProperties = { width: 3, height: 36, background: '#d9d9d9', borderRadius: 2 };
+  const rowGripStyle: React.CSSProperties = { height: 3, width: 36, background: '#d9d9d9', borderRadius: 2 };
+
   return (
     <>
-      {/* Cost Bar Chart — first */}
-      {costBarData.length > 0 && (
-        <Card title={`Top 20 Business Flows by Cost — ${costYear}`} size="small" style={{ marginBottom: 24 }}>
-          <ResponsiveContainer width="100%" height={350}>
-            <BarChart data={costBarData} margin={{ top: 5, right: 30, left: 20, bottom: 80 }}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="name" angle={-45} textAnchor="end" interval={0} height={80} tick={{ fontSize: 11 }} />
-              <YAxis tickFormatter={(v) => fmtM(v)} width={70} />
-              <Tooltip content={({ payload }) => {
-                if (!payload?.length) return null;
-                const d = payload[0].payload;
-                return <div style={{ background: '#fff', border: '1px solid #ccc', padding: 8, borderRadius: 4, fontSize: 12 }}>
-                  <div style={{ fontWeight: 600 }}>{d.fullName}</div>
-                  <div style={{ color: '#1890ff' }}>Operation: {fmtM(d.opCost)}</div>
-                  <div style={{ color: '#d29922' }}>Development: {fmtM(d.devCost)}</div>
-                  <div style={{ fontWeight: 600 }}>Total: {fmtM(d.totalCost)}</div>
-                </div>;
-              }} />
-              <Legend />
-              <Bar dataKey="opCost" name="Operation Cost" stackId="a" fill="#1890ff" radius={[0, 0, 0, 0]} />
-              <Bar dataKey="devCost" name="Development Cost" stackId="a" fill="#d29922" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </Card>
-      )}
-
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         <Col xs={12} sm={6}><Card size="small"><Statistic title="Business Flows" value={flows.length} /></Card></Col>
         <Col xs={12} sm={6}><Card size="small"><Statistic title="Avg Risk Score" value={avgRisk} /></Card></Col>
@@ -906,43 +1012,108 @@ function FlowDashboard({ flows, costData, costYear }: { flows: FlowProfile[]; co
         <Col xs={12} sm={6}><Card size="small"><Statistic title="Total Unique Apps" value={totalApps} /></Card></Col>
       </Row>
 
-      {/* Risk Score Bar Chart */}
-      <Card title="Top 20 Business Flows by Risk Score" size="small" style={{ marginBottom: 24 }}>
-        <ResponsiveContainer width="100%" height={350}>
-          <BarChart data={riskBarData} margin={{ top: 5, right: 30, left: 10, bottom: 80 }}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="name" angle={-45} textAnchor="end" interval={0} height={80} tick={{ fontSize: 11 }} />
-            <YAxis />
-            <Tooltip content={({ payload }) => {
-              if (!payload?.length) return null;
-              const d = payload[0].payload;
-              return <div style={{ background: '#fff', border: '1px solid #ccc', padding: 8, borderRadius: 4 }}>
-                <div style={{ fontWeight: 600 }}>{d.fullName}</div>
-                <div>Risk Score: {d.riskScore}</div>
-                <div>Tasks: {d.taskCount}</div>
-                <div>Applications: {d.appCount}</div>
-              </div>;
-            }} />
-            <Bar dataKey="riskScore" fill="#722ed1" radius={[4, 4, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
-      </Card>
+      {/* ─── Quadrants ───────────────────────────────────────────
+          Top-left: dev cost (same ApplicationFeatureDevCost source as the
+          YoY Feature Cost 3D chart, summed across every available year).
+          Top-right: that same YoY Feature Cost 3D chart, embedded live.
+          Bottom-left: risk score. Bottom-right: compliance flags.
+          Every boundary — the vertical line between columns and the
+          horizontal line between rows — is a drag handle; grab one to
+          resize the quadrants on either side of it. */}
+      <div ref={quadrantGridRef} style={{ marginBottom: 24 }}>
+        <div style={{ display: 'flex' }}>
+          <div style={{ width: `calc(${colSplit}% - 5px)` }}>
+            <Card title="Top 20 Business Flows by Dev Cost — All Years" size="small" style={{ height: topRowHeight }}>
+              {devCostBarData.length > 0 ? (
+                <ResponsiveContainer width="100%" height={Math.max(150, topRowHeight - CHART_HEIGHT_OFFSET)}>
+                  <BarChart data={devCostBarData} margin={{ top: 5, right: 30, left: 20, bottom: 80 }}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="name" angle={-45} textAnchor="end" interval={0} height={80} tick={{ fontSize: 11 }} />
+                    <YAxis tickFormatter={(v) => fmtM(v)} width={70} />
+                    <Tooltip content={({ payload }) => {
+                      if (!payload?.length) return null;
+                      const d = payload[0].payload;
+                      return <div style={{ background: '#fff', border: '1px solid #ccc', padding: 8, borderRadius: 4, fontSize: 12 }}>
+                        <div style={{ fontWeight: 600 }}>{d.fullName}</div>
+                        <div style={{ color: '#d29922' }}>Development Cost: {fmtM(d.devCost)}</div>
+                        {onFlowCostBarClick && <div style={{ color: '#999', marginTop: 4 }}>Click to view YoY Feature Cost →</div>}
+                      </div>;
+                    }} />
+                    <Bar
+                      dataKey="devCost"
+                      name="Development Cost"
+                      fill="#d29922"
+                      radius={[4, 4, 0, 0]}
+                      cursor={onFlowCostBarClick ? 'pointer' : undefined}
+                      onClick={(data: any) => onFlowCostBarClick?.(data.fullName)}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <Empty description="No dev cost data available" style={{ marginTop: 48 }} />
+              )}
+            </Card>
+          </div>
+          <div style={colDividerStyle} onPointerDown={startColDrag} title="Drag to resize columns">
+            <div style={colGripStyle} />
+          </div>
+          <div style={{ width: `calc(${100 - colSplit}% - 5px)` }}>
+            <Card title="YoY Feature Cost" size="small" style={{ height: topRowHeight }} bodyStyle={{ height: `calc(100% - 40px)` }}>
+              <div style={{ height: '100%' }}>
+                <FeatureCost3DChart requestedFlow={featureCostFlowRequest} />
+              </div>
+            </Card>
+          </div>
+        </div>
 
-      {/* Compliance Stacked Bar */}
-      <Card title="Compliance Flags per Business Flow (Top 20 by Compliance)" size="small" style={{ marginBottom: 24 }}>
-        <ResponsiveContainer width="100%" height={350}>
-          <BarChart data={complianceBarData} margin={{ top: 5, right: 30, left: 10, bottom: 80 }}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="name" angle={-45} textAnchor="end" interval={0} height={80} tick={{ fontSize: 11 }} />
-            <YAxis />
-            <Tooltip />
-            <Legend />
-            {COMPLIANCE_FIELDS.map((field, i) => (
-              <Bar key={field} dataKey={field} name={COMPLIANCE_LABELS[field]} stackId="a" fill={COLORS[i % COLORS.length]} />
-            ))}
-          </BarChart>
-        </ResponsiveContainer>
-      </Card>
+        <div style={rowDividerStyle} onPointerDown={startRowDrag} title="Drag to resize rows">
+          <div style={rowGripStyle} />
+        </div>
+
+        <div style={{ display: 'flex' }}>
+          <div style={{ width: `calc(${colSplit}% - 5px)` }}>
+            <Card title="Top 20 Business Flows by Risk Score" size="small" style={{ height: bottomRowHeight }}>
+              <ResponsiveContainer width="100%" height={Math.max(150, bottomRowHeight - CHART_HEIGHT_OFFSET)}>
+                <BarChart data={riskBarData} margin={{ top: 5, right: 30, left: 10, bottom: 80 }}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="name" angle={-45} textAnchor="end" interval={0} height={80} tick={{ fontSize: 11 }} />
+                  <YAxis />
+                  <Tooltip content={({ payload }) => {
+                    if (!payload?.length) return null;
+                    const d = payload[0].payload;
+                    return <div style={{ background: '#fff', border: '1px solid #ccc', padding: 8, borderRadius: 4 }}>
+                      <div style={{ fontWeight: 600 }}>{d.fullName}</div>
+                      <div>Risk Score: {d.riskScore}</div>
+                      <div>Tasks: {d.taskCount}</div>
+                      <div>Applications: {d.appCount}</div>
+                    </div>;
+                  }} />
+                  <Bar dataKey="riskScore" fill="#722ed1" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </Card>
+          </div>
+          <div style={colDividerStyle} onPointerDown={startColDrag} title="Drag to resize columns">
+            <div style={colGripStyle} />
+          </div>
+          <div style={{ width: `calc(${100 - colSplit}% - 5px)` }}>
+            <Card title="Compliance Flags per Business Flow (Top 20 by Compliance)" size="small" style={{ height: bottomRowHeight }}>
+              <ResponsiveContainer width="100%" height={Math.max(150, bottomRowHeight - CHART_HEIGHT_OFFSET)}>
+                <BarChart data={complianceBarData} margin={{ top: 5, right: 30, left: 10, bottom: 80 }}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="name" angle={-45} textAnchor="end" interval={0} height={80} tick={{ fontSize: 11 }} />
+                  <YAxis />
+                  <Tooltip />
+                  <Legend />
+                  {COMPLIANCE_FIELDS.map((field, i) => (
+                    <Bar key={field} dataKey={field} name={COMPLIANCE_LABELS[field]} stackId="a" fill={COLORS[i % COLORS.length]} />
+                  ))}
+                </BarChart>
+              </ResponsiveContainer>
+            </Card>
+          </div>
+        </div>
+      </div>
 
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         <Col xs={24} md={12}>
