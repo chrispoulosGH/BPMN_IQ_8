@@ -517,19 +517,19 @@ html, body, #root {
   background: linear-gradient(180deg, rgba(20, 46, 74, 0.96) 0%, rgba(30, 72, 108, 0.96) 100%) !important;
 }
 
-/* GROUP: Analytics — amber */
-.factory-tabs .ant-tabs-tab[data-node-key="dashboard"],
-.factory-tabs .ant-tabs-tab[data-node-key="reports"] {
+/* GROUP: Analytics — amber. "reports" used to be Analytics' nested sub-tab
+   (alongside "dashboard") and got this same group color; now that Reports
+   is its own top-level tab, it should look like its outer-tab siblings
+   instead, so it's no longer included here. */
+.factory-tabs .ant-tabs-tab[data-node-key="dashboard"] {
   border-top: 3px solid #d97706 !important;
 }
-.factory-tabs .ant-tabs-tab-active[data-node-key="dashboard"],
-.factory-tabs .ant-tabs-tab-active[data-node-key="reports"] {
+.factory-tabs .ant-tabs-tab-active[data-node-key="dashboard"] {
   background: #a8d8f0 !important;
   color: #1e40af !important;
   font-weight: 700 !important;
 }
-.factory-tabs .ant-tabs-tab[data-node-key="dashboard"]:not(.ant-tabs-tab-active):hover,
-.factory-tabs .ant-tabs-tab[data-node-key="reports"]:not(.ant-tabs-tab-active):hover {
+.factory-tabs .ant-tabs-tab[data-node-key="dashboard"]:not(.ant-tabs-tab-active):hover {
   background: #d7ecf8 !important;
 }
 

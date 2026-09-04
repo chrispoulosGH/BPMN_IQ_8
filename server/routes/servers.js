@@ -1,5 +1,7 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const DataSearchIndex = require('../models/DataSearchIndex');
+const Server = require('../models/Server');
 const { getNeighborhoodName } = require('../utils/neighborhoodScope');
 const { findLinkedApplicationsFromFieldByValue } = require('../utils/applicationReferenceLookup');
 
@@ -233,8 +235,22 @@ router.get('/:id', async (req, res) => {
     const id = normalizeText(req.params.id);
     const loaded = await loadServersFromIndex(req);
     const item = loaded.items.find((row) => normalizeText(row._id) === id || normalizeText(row.sourceKey) === id);
-    if (!item) return res.status(404).json({ error: 'Server not found' });
-    res.json(item);
+    if (item) return res.json(item);
+
+    // Fall back to the legacy Server model — this is where
+    // /api/dashboard/server-location-points (the US Server Map) actually
+    // reads its servers from, which is a different, older data source than
+    // the generic-canonical/DataSearchIndex one above. Without this, a
+    // server the map can show you was never selectable here: clicking its
+    // dot on the map always 404'd instead of populating the details panel.
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      const legacyServer = await Server.findById(id).lean();
+      if (legacyServer) return res.json({ ...legacyServer, _id: String(legacyServer._id) });
+    }
+    const legacyBySourceKey = await Server.findOne({ sourceKey: id }).lean();
+    if (legacyBySourceKey) return res.json({ ...legacyBySourceKey, _id: String(legacyBySourceKey._id) });
+
+    return res.status(404).json({ error: 'Server not found' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

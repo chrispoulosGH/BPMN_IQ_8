@@ -12,6 +12,15 @@ const { getNeighborhoodName, withNeighborhood } = require('../utils/neighborhood
 const { loadScopedFlowCostDocumentsFromComponentsAndDiagrams } = require('../utils/flowCostSource');
 const { listApplicationReferences } = require('../utils/applicationReferenceLookup');
 
+// buildServerScopeQuery()/buildDatabaseScopeQuery() build their $in lists from
+// normalizeIdentifier()'d (lower-cased) application correlationId/acronym/name
+// values, but Server/DatabaseInstance documents store those fields with
+// whatever case the source data used (e.g. "LLM-001") — a plain $in never
+// matches across that case difference. Every Server.find()/DatabaseInstance.find()
+// using one of those scope queries needs this collation so the match is
+// case-insensitive on the Mongo side too.
+const CASE_INSENSITIVE_COLLATION = { locale: 'en', strength: 2 };
+
 function buildNeighborhoodApplicationKeys(applications) {
   return {
     correlationIds: applications.map((app) => normalizeIdentifier(app?.correlationId)).filter(Boolean),
@@ -272,7 +281,14 @@ async function loadScopedApplications(req) {
         _id: `${neighborhoodName}:${name}`,
         name,
         acronym: getFirstRowValue(values, ['acronym', 'abbr']),
-        correlationId: getFirstRowValue(values, ['correlationId', 'correlation_id']),
+        // 'app_id'/'app id' match the normalized-column-name convention this
+        // generic-canonical-upload data actually uses (see the broader alias
+        // list in utils/applicationReferenceLookup.js's
+        // APPLICATION_CORRELATION_ID_ALIASES) — without them, a fallback app
+        // built from Component rows (rather than the canonical-data path)
+        // always had an empty correlationId, so buildServerScopeQuery()
+        // could never match a server to it by correlation id.
+        correlationId: getFirstRowValue(values, ['correlationId', 'correlation_id', 'app_id', 'app id']),
         lifecycleStatus: getFirstRowValue(values, ['lifecycleStatus', 'lifecycle']),
         businessCriticality: getFirstRowValue(values, ['businessCriticality', 'criticality']),
         applicationType: getFirstRowValue(values, ['applicationType', 'appType']),
@@ -334,8 +350,8 @@ router.get('/task-risk', async (req, res) => {
     const apps = await loadScopedApplications(req);
     const [tasks, servers, databases] = await Promise.all([
       loadScopedTasks(req),
-      Server.find(buildServerScopeQuery(apps), { linkedApplications: 1, healthNotes: 1 }).lean(),
-      DatabaseInstance.find(buildDatabaseScopeQuery(apps), { applicationCorrelationId: 1, applicationName: 1, applicationAcronym: 1, linkedApplications: 1, healthNotes: 1 }).lean(),
+      Server.find(buildServerScopeQuery(apps), { linkedApplications: 1, healthNotes: 1 }).collation(CASE_INSENSITIVE_COLLATION).lean(),
+      DatabaseInstance.find(buildDatabaseScopeQuery(apps), { applicationCorrelationId: 1, applicationName: 1, applicationAcronym: 1, linkedApplications: 1, healthNotes: 1 }).collation(CASE_INSENSITIVE_COLLATION).lean(),
     ]);
 
     const appLookup = buildApplicationLookup(apps);
@@ -393,8 +409,8 @@ router.get('/flow-risk', async (req, res) => {
     const apps = await loadScopedApplications(req);
     const [tasks, servers, databases] = await Promise.all([
       loadScopedTasks(req),
-      Server.find(buildServerScopeQuery(apps), { linkedApplications: 1, healthNotes: 1 }).lean(),
-      DatabaseInstance.find(buildDatabaseScopeQuery(apps), { applicationCorrelationId: 1, applicationName: 1, applicationAcronym: 1, linkedApplications: 1, healthNotes: 1 }).lean(),
+      Server.find(buildServerScopeQuery(apps), { linkedApplications: 1, healthNotes: 1 }).collation(CASE_INSENSITIVE_COLLATION).lean(),
+      DatabaseInstance.find(buildDatabaseScopeQuery(apps), { applicationCorrelationId: 1, applicationName: 1, applicationAcronym: 1, linkedApplications: 1, healthNotes: 1 }).collation(CASE_INSENSITIVE_COLLATION).lean(),
     ]);
 
     const appLookup = buildApplicationLookup(apps);
@@ -900,7 +916,7 @@ router.get('/server-location-points', async (req, res) => {
         healthNotes: 1,
         linkedApplications: 1,
       }
-    ).lean();
+    ).collation(CASE_INSENSITIVE_COLLATION).lean();
 
     res.json({
       totalServers: rows.length,

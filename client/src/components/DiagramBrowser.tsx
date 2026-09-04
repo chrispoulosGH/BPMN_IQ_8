@@ -154,9 +154,20 @@ export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggl
   const [filters, setFilters] = useState<Record<string, string[]>>({});
   const [diagrams, setDiagrams] = useState<DiagramMeta[]>([]);
   const isInitialSearchRef = useRef(true);
+  // Set by the externalFilterRequest effect below right before it updates
+  // selectedFrameworks/filters itself, so the effect watching those same two
+  // state vars can tell "the parent just told us to search for this" apart
+  // from "the user just changed a dropdown here" — only the latter should
+  // fire onSearchChanged (see the prop's doc comment: externalFilterRequest
+  // callers already clear the canvas themselves).
+  const suppressNextSearchChangeRef = useRef(false);
   useEffect(() => {
     if (isInitialSearchRef.current) {
       isInitialSearchRef.current = false;
+      return;
+    }
+    if (suppressNextSearchChangeRef.current) {
+      suppressNextSearchChangeRef.current = false;
       return;
     }
     onSearchChanged?.();
@@ -185,6 +196,7 @@ export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggl
     const availableFrameworks = new Set(frameworks.map((framework) => framework.name));
     const requestedFrameworks = (externalFilterRequest.frameworks || []).filter((name) => availableFrameworks.has(name));
 
+    suppressNextSearchChangeRef.current = true;
     setSelectedFrameworks(requestedFrameworks);
     setFilters(externalFilterRequest.filters || {});
   }, [externalFilterRequest, frameworks]);

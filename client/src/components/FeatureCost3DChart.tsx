@@ -79,27 +79,88 @@ interface FeatureCost3DChartProps {
   // selection with just this one. The nonce forces re-application even if
   // the same flow is requested twice in a row.
   requestedFlow?: { flow: string; nonce: number } | null;
+  // Whether to auto-select the first business flow once the data loads, if
+  // nothing is selected yet — true (the pre-existing behavior) for the
+  // standalone YoY Feature Cost tab, so it isn't blank the moment you open
+  // it. The Business Flow Comparison grid's embedded copy passes false so
+  // that quadrant stays empty until a flow is actually picked via the
+  // dev-cost chart, instead of showing an arbitrary default on first render.
+  autoSelectDefaultFlow?: boolean;
 }
 
-export default function FeatureCost3DChart({ requestedFlow }: FeatureCost3DChartProps = {}) {
-  const [businessFlows, setBusinessFlows] = useState<string[]>([]);
-  const [points, setPoints] = useState<FeatureCostPoint[]>([]);
-  const [loading, setLoading] = useState(true);
-  // Multiple flows can be plotted together on the same grid now.
-  const [selectedFlows, setSelectedFlows] = useState<string[]>([]);
+// This same underlying data (businessFlows/points) used to be re-fetched
+// from scratch on every mount, with no caching at all — including every
+// time the embedded copy inside the Business Flow Comparison grid remounted
+// (e.g. after leaving Analytics and coming back). Between that network
+// round-trip and the flow selection only being reconciled after it resolved
+// (see the requestedFlow effect below), a remount could render one frame
+// with no flow selected before catching up, and on a slow connection could
+// visibly stay empty for a moment. Caching it here — mirroring the same
+// pattern Dashboard.tsx uses for its own data — makes a remount apply the
+// restored flow selection synchronously, in the same render as the cached
+// data itself, with no gap at all.
+const FEATURE_COST_3D_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+interface FeatureCost3DCacheEntry {
+  businessFlows: string[];
+  points: FeatureCostPoint[];
+  fetchedAt: number;
+}
+let featureCost3DCache: FeatureCost3DCacheEntry | null = null;
+function freshFeatureCost3DCache(): FeatureCost3DCacheEntry | null {
+  return featureCost3DCache && Date.now() - featureCost3DCache.fetchedAt < FEATURE_COST_3D_CACHE_TTL_MS ? featureCost3DCache : null;
+}
+
+export default function FeatureCost3DChart({ requestedFlow, autoSelectDefaultFlow = true }: FeatureCost3DChartProps = {}) {
+  const [businessFlows, setBusinessFlows] = useState<string[]>(() => freshFeatureCost3DCache()?.businessFlows || []);
+  const [points, setPoints] = useState<FeatureCostPoint[]>(() => freshFeatureCost3DCache()?.points || []);
+  const [loading, setLoading] = useState(() => !freshFeatureCost3DCache());
+  // Multiple flows can be plotted together on the same grid now. Computed
+  // synchronously from any cached data so a remount with a still-fresh
+  // cache renders with the right flow already selected on its very first
+  // frame — requestedFlow (an external "jump to this flow" request, e.g.
+  // from the Business Flow Comparison dev-cost chart) takes priority over
+  // auto-selecting the first flow.
+  const [selectedFlows, setSelectedFlows] = useState<string[]>(() => {
+    const cached = freshFeatureCost3DCache();
+    if (!cached) return [];
+    if (requestedFlow && cached.businessFlows.includes(requestedFlow.flow)) return [requestedFlow.flow];
+    if (autoSelectDefaultFlow) return cached.businessFlows[0] ? [cached.businessFlows[0]] : [];
+    return [];
+  });
   // Which years, and which quarters within them, actually get a Z-axis slot
   // — both start as "everything available" once the data loads, and the
   // user narrows them down from there. Leaving Quarters empty combines each
   // selected year into a single yearly-total column; picking one or more
   // quarters breaks every selected year down into just those quarters.
-  const [selectedYears, setSelectedYears] = useState<number[]>([]);
+  const [selectedYears, setSelectedYears] = useState<number[]>(() => {
+    const cached = freshFeatureCost3DCache();
+    return cached ? [...new Set(cached.points.map((p) => p.year))].sort((a, b) => a - b) : [];
+  });
   const [selectedQuarters, setSelectedQuarters] = useState<string[]>([]);
   // Bumped by the "Reset View" button — folded into uirevision below so
   // Plotly discards whatever camera position the user dragged/zoomed to and
   // reverts to the straight-on default computed in the layout.
   const [resetKey, setResetKey] = useState(0);
 
+  // Applies an external "jump to this flow" request (e.g. from the
+  // Business Flow Comparison dev-cost chart) once the flow list has
+  // loaded and actually contains it. Only applied once per nonce so it
+  // doesn't fight the user's own subsequent flow-selection changes. Primed
+  // from a cache hit above (which already applied it synchronously) so this
+  // effect doesn't redundantly re-apply the same request a second time.
+  const appliedFlowRequestNonceRef = useRef<number | null>((() => {
+    const cached = freshFeatureCost3DCache();
+    return cached && requestedFlow && cached.businessFlows.includes(requestedFlow.flow) ? requestedFlow.nonce : null;
+  })());
+
   useEffect(() => {
+    const cached = freshFeatureCost3DCache();
+    if (cached) {
+      // Already applied via the lazy initializers above — nothing to fetch.
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     getDashboardFeatureCost3D()
       .then((result) => {
@@ -108,19 +169,20 @@ export default function FeatureCost3DChart({ requestedFlow }: FeatureCost3DChart
         setSelectedFlows((current) => {
           const stillValid = current.filter((f) => result.businessFlows.includes(f));
           if (stillValid.length) return stillValid;
+          if (requestedFlow && result.businessFlows.includes(requestedFlow.flow)) {
+            appliedFlowRequestNonceRef.current = requestedFlow.nonce;
+            return [requestedFlow.flow];
+          }
+          if (!autoSelectDefaultFlow) return [];
           return result.businessFlows[0] ? [result.businessFlows[0]] : [];
         });
         const allYears = [...new Set(result.points.map((p) => p.year))].sort((a, b) => a - b);
         setSelectedYears((current) => current.length ? current.filter((y) => allYears.includes(y)) : allYears);
+        featureCost3DCache = { businessFlows: result.businessFlows, points: result.points, fetchedAt: Date.now() };
       })
       .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  // Applies an external "jump to this flow" request (e.g. from the
-  // Business Flow Comparison dev-cost chart) once the flow list has
-  // loaded and actually contains it. Only applied once per nonce so it
-  // doesn't fight the user's own subsequent flow-selection changes.
-  const appliedFlowRequestNonceRef = useRef<number | null>(null);
   useEffect(() => {
     if (!requestedFlow) return;
     if (appliedFlowRequestNonceRef.current === requestedFlow.nonce) return;

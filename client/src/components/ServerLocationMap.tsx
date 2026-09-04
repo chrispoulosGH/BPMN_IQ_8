@@ -14,7 +14,7 @@ interface RawServerPoint {
   environment?: string | null;
   operationalStatus?: string | null;
   internetFacing?: string | null;
-  healthNotes?: Array<{ label: string }>;
+  healthNotes?: Array<{ label: string; severity?: string | null }>;
   linkedApplications?: Array<{
     correlationId?: string | null;
     name?: string | null;
@@ -46,25 +46,31 @@ interface LocationCluster {
   maxLon: number;
 }
 
-const NOTE_COLORS: Record<string, string> = {
-  OS_EOL: '#cf1322',
-  KNOWN_OS_VULNERABILITIES: '#722ed1',
-  EXPOSURE_CRITICAL: '#7f1d1d',
-  EXPOSURE: '#d97706',
-  OS_LIFECYCLE_WATCH: '#ca8a04',
-  GEO_WEATHER_TORNADO: '#0f766e',
-  GEO_WEATHER_FLOOD: '#0369a1',
+// Server dots are color-coded by their worst health-note severity, not by
+// which specific label caused it — a 4-step vulnerability scale (green/
+// yellow/orange/red) rather than the old one-color-per-label scheme, so the
+// map reads at a glance regardless of how many different note types exist.
+// 'critical' and 'high' are deliberately both red: 4 colors were asked for,
+// and "high-severity vulnerabilities" is exactly the kind of thing that
+// belongs at the top of the scale alongside 'critical'.
+const VULNERABILITY_SEVERITY_COLORS: Record<string, string> = {
+  none: '#22c55e', // green  — no known vulnerabilities
+  low: '#eab308', // yellow
+  medium: '#f97316', // orange
+  high: '#ef4444', // red
 };
 
-const COLOR_PRIORITY = [
-  'EXPOSURE_CRITICAL',
-  'OS_EOL',
-  'KNOWN_OS_VULNERABILITIES',
-  'EXPOSURE',
-  'OS_LIFECYCLE_WATCH',
-  'GEO_WEATHER_TORNADO',
-  'GEO_WEATHER_FLOOD',
-];
+const SEVERITY_PRIORITY = ['critical', 'high', 'medium', 'low', 'info'] as const;
+
+// Collapses the schema's 5-level severity enum (info/low/medium/high/critical)
+// down to the 4 colors requested — 'critical' rolls into the same 'high' (red)
+// bucket as 'high' itself.
+function colorSeverityBucket(severity: string): 'high' | 'medium' | 'low' | 'none' {
+  if (severity === 'critical' || severity === 'high') return 'high';
+  if (severity === 'medium') return 'medium';
+  if (severity === 'low') return 'low';
+  return 'none';
+}
 
 const OVERLAY_OPTIONS = [
   { label: 'Density Heat', value: 'density' },
@@ -213,17 +219,24 @@ function spreadOverlappingPoints(points: GeocodedServerPoint[]): PlotServerPoint
 }
 
 function getPrimaryNoteLabel(point: RawServerPoint): string {
-  const labels = new Set((point.healthNotes || []).map((note) => String(note.label || '').trim()).filter(Boolean));
-  for (const key of COLOR_PRIORITY) {
-    if (labels.has(key)) return key;
+  const labels = (point.healthNotes || []).map((note) => String(note.label || '').trim()).filter(Boolean);
+  return labels[0] || 'OTHER';
+}
+
+/** Worst (highest-priority) health-note severity for a server, defaulting to 'info' (no known vulnerabilities) when it has none. */
+function worstSeverityForServer(point: RawServerPoint): string {
+  const severities = new Set(
+    (point.healthNotes || []).map((note) => String(note.severity || '').trim().toLowerCase()).filter(Boolean)
+  );
+  for (const level of SEVERITY_PRIORITY) {
+    if (severities.has(level)) return level;
   }
-  return 'OTHER';
+  return 'info';
 }
 
 function pinColorForServer(point: RawServerPoint): string {
-  const label = getPrimaryNoteLabel(point);
-  if (NOTE_COLORS[label]) return NOTE_COLORS[label];
-  return '#64748b';
+  const bucket = colorSeverityBucket(worstSeverityForServer(point));
+  return VULNERABILITY_SEVERITY_COLORS[bucket];
 }
 
 function renderServerValue(value: unknown): React.ReactNode {
@@ -306,9 +319,146 @@ function estimateFitZoom(cluster: LocationCluster, mapWidth: number, mapHeight: 
   return Math.max(3.1, Math.min(13.5, zoom));
 }
 
+// ─── Granularity drill-down ──────────────────────────────────────────────
+// Below STATE_TIER_MAX_ZOOM the map shows one bubble per state; between that
+// and ANCHOR_TIER_MAX_ZOOM it shows one bubble per unique geocoded location
+// (city/coord); at or above ANCHOR_TIER_MAX_ZOOM it shows individual server
+// dots (the pre-existing per-server rendering). Clicking a bubble zooms/pans
+// into it, crossing the next threshold so the next tier down renders.
+const STATE_TIER_MAX_ZOOM = 5;
+const ANCHOR_TIER_MAX_ZOOM = 9;
+
+type MapTier = 'state' | 'anchor' | 'individual';
+
+function tierForZoom(zoom: number): MapTier {
+  if (zoom < STATE_TIER_MAX_ZOOM) return 'state';
+  if (zoom < ANCHOR_TIER_MAX_ZOOM) return 'anchor';
+  return 'individual';
+}
+
+/** Groups geocoded points by their exact geocoded anchor (lat/lon pair). */
+function groupPointsByAnchor(points: GeocodedServerPoint[]): Map<string, GeocodedServerPoint[]> {
+  const grouped = new Map<string, GeocodedServerPoint[]>();
+  for (const point of points) {
+    const key = `${point.lat.toFixed(6)}|${point.lon.toFixed(6)}`;
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key)!.push(point);
+  }
+  return grouped;
+}
+
+/** Builds one LocationCluster per anchor group with at least minCount servers. */
+function clustersFromAnchorGroups(grouped: Map<string, GeocodedServerPoint[]>, minCount: number): LocationCluster[] {
+  const clusters: LocationCluster[] = [];
+  for (const [key, group] of grouped.entries()) {
+    if (group.length < minCount) continue;
+    const lats = group.map((g) => g.lat);
+    const lons = group.map((g) => g.lon);
+    const centerLat = lats.reduce((s, n) => s + n, 0) / lats.length;
+    const centerLon = lons.reduce((s, n) => s + n, 0) / lons.length;
+    const sampleLabel = group[0].locationLabel || `${centerLat.toFixed(2)}, ${centerLon.toFixed(2)}`;
+    clusters.push({
+      key,
+      label: sampleLabel,
+      count: group.length,
+      centerLat,
+      centerLon,
+      minLat: Math.min(...lats),
+      maxLat: Math.max(...lats),
+      minLon: Math.min(...lons),
+      maxLon: Math.max(...lons),
+    });
+  }
+  return clusters.sort((a, b) => {
+    if (b.count !== a.count) return b.count - a.count;
+    return a.label.localeCompare(b.label);
+  });
+}
+
+/** Best-effort state code for a geocoded point — parses the location text
+ * first, falling back to whichever state centroid is geographically nearest
+ * (needed for points geocoded from raw numeric lat/lon with no state name). */
+function resolveStateCodeForPoint(point: GeocodedServerPoint): string {
+  const direct = inferStateCode(point.locationLabel);
+  if (direct && STATE_CENTROIDS[direct]) return direct;
+
+  let bestCode = 'DC';
+  let bestDistSq = Infinity;
+  for (const [code, centroid] of Object.entries(STATE_CENTROIDS)) {
+    const dLat = point.lat - centroid.lat;
+    const dLon = point.lon - centroid.lon;
+    const distSq = dLat * dLat + dLon * dLon;
+    if (distSq < bestDistSq) {
+      bestDistSq = distSq;
+      bestCode = code;
+    }
+  }
+  return bestCode;
+}
+
+function buildStateClusters(points: GeocodedServerPoint[]): LocationCluster[] {
+  const grouped = new Map<string, GeocodedServerPoint[]>();
+  for (const point of points) {
+    const code = resolveStateCodeForPoint(point);
+    if (!grouped.has(code)) grouped.set(code, []);
+    grouped.get(code)!.push(point);
+  }
+
+  const clusters: LocationCluster[] = [];
+  for (const [code, group] of grouped.entries()) {
+    const lats = group.map((g) => g.lat);
+    const lons = group.map((g) => g.lon);
+    // Center on the mean position of this state's actual servers, not the
+    // state's fixed geographic centroid — for a large state, the shape's
+    // center can sit far from where any server actually is (e.g. Texas'
+    // centroid is near Abilene, nowhere near a Dallas/Houston/Austin
+    // cluster), which would pan a drill-down into empty map with no bubbles.
+    clusters.push({
+      key: `state:${code}`,
+      label: code,
+      count: group.length,
+      centerLat: lats.reduce((s, n) => s + n, 0) / lats.length,
+      centerLon: lons.reduce((s, n) => s + n, 0) / lons.length,
+      minLat: Math.min(...lats),
+      maxLat: Math.max(...lats),
+      minLon: Math.min(...lons),
+      maxLon: Math.max(...lons),
+    });
+  }
+  return clusters.sort((a, b) => b.count - a.count);
+}
+
+/** Bubble size/color scale with server count — sqrt-scaled area so a 4x
+ * larger cluster reads as roughly 2x the visual size, not 4x. */
+function clusterBubbleSize(count: number): number {
+  return Math.max(20, Math.min(64, 16 + Math.sqrt(count) * 7));
+}
+
+function clusterBubbleColor(count: number): string {
+  if (count >= 25) return '#1e3a8a';
+  if (count >= 8) return '#2563eb';
+  return '#60a5fa';
+}
+
+// This component fully unmounts (and its ~1,500+ server records get
+// re-fetched from the DB) every time the user leaves the Analytics tab and
+// comes back, or switches the Segmented control away from "US Server Map"
+// and back — same module-level cache pattern as Dashboard.tsx/
+// FeatureCost3DChart.tsx, so a revisit within the TTL renders instantly
+// instead of re-querying the database.
+const SERVER_LOCATION_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+interface ServerLocationCacheEntry {
+  rawPoints: RawServerPoint[];
+  fetchedAt: number;
+}
+let serverLocationCache: ServerLocationCacheEntry | null = null;
+function freshServerLocationCache(): ServerLocationCacheEntry | null {
+  return serverLocationCache && Date.now() - serverLocationCache.fetchedAt < SERVER_LOCATION_CACHE_TTL_MS ? serverLocationCache : null;
+}
+
 export default function ServerLocationMap() {
-  const [loading, setLoading] = useState(true);
-  const [rawPoints, setRawPoints] = useState<RawServerPoint[]>([]);
+  const [loading, setLoading] = useState(() => !freshServerLocationCache());
+  const [rawPoints, setRawPoints] = useState<RawServerPoint[]>(() => freshServerLocationCache()?.rawPoints || []);
   const [zoom, setZoom] = useState(3.1);
   const [center, setCenter] = useState<{ lat: number; lon: number }>({ lat: 38.5, lon: -96.2 });
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
@@ -331,10 +481,28 @@ export default function ServerLocationMap() {
     setMapHeight(Math.max(420, Math.min(1100, Math.floor(availableHeight))));
   };
 
+  // Shared with both the "Jump to cluster" dropdown and drilling into a
+  // cluster bubble by clicking it — estimates the map's rendered pixel width
+  // so estimateFitZoom can compute a zoom level that actually fits the
+  // cluster's extent on screen.
+  const estimateMapWidth = () => (typeof window === 'undefined'
+    ? 1000
+    : Math.max(520, window.innerWidth >= 1280 ? Math.floor(window.innerWidth * 0.64) : window.innerWidth - 40));
+
   useEffect(() => {
+    if (freshServerLocationCache()) {
+      // Already applied via the lazy initializers above.
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     getDashboardServerLocationPoints()
-      .then((payload) => setRawPoints(payload.points || []))
+      .then((payload) => {
+        const points = payload.points || [];
+        setRawPoints(points);
+        serverLocationCache = { rawPoints: points, fetchedAt: Date.now() };
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -361,40 +529,16 @@ export default function ServerLocationMap() {
   }, []);
 
   const geocodedPoints = useMemo(() => rawPoints.map(geocodeServer).filter(Boolean) as GeocodedServerPoint[], [rawPoints]);
-  const locationClusters = useMemo(() => {
-    const grouped = new Map<string, GeocodedServerPoint[]>();
-    for (const point of geocodedPoints) {
-      const key = `${point.lat.toFixed(6)}|${point.lon.toFixed(6)}`;
-      if (!grouped.has(key)) grouped.set(key, []);
-      grouped.get(key)!.push(point);
-    }
-
-    const clusters: LocationCluster[] = [];
-    for (const [key, group] of grouped.entries()) {
-      if (group.length < 2) continue;
-      const lats = group.map((g) => g.lat);
-      const lons = group.map((g) => g.lon);
-      const centerLat = lats.reduce((s, n) => s + n, 0) / lats.length;
-      const centerLon = lons.reduce((s, n) => s + n, 0) / lons.length;
-      const sampleLabel = group[0].locationLabel || `${centerLat.toFixed(2)}, ${centerLon.toFixed(2)}`;
-      clusters.push({
-        key,
-        label: sampleLabel,
-        count: group.length,
-        centerLat,
-        centerLon,
-        minLat: Math.min(...lats),
-        maxLat: Math.max(...lats),
-        minLon: Math.min(...lons),
-        maxLon: Math.max(...lons),
-      });
-    }
-
-    return clusters.sort((a, b) => {
-      if (b.count !== a.count) return b.count - a.count;
-      return a.label.localeCompare(b.label);
-    });
-  }, [geocodedPoints]);
+  const anchorGroups = useMemo(() => groupPointsByAnchor(geocodedPoints), [geocodedPoints]);
+  // Only anchors with 2+ servers — feeds the "Jump to cluster" dropdown,
+  // where a single-server "cluster" wouldn't be a meaningful shortcut.
+  const locationClusters = useMemo(() => clustersFromAnchorGroups(anchorGroups, 2), [anchorGroups]);
+  // Every anchor, including single-server ones — feeds the map's mid-tier
+  // (city/coord-level) bubbles in the granularity drill-down below.
+  const anchorClusters = useMemo(() => clustersFromAnchorGroups(anchorGroups, 1), [anchorGroups]);
+  // Coarsest tier — one bubble per state, shown at the most zoomed-out level.
+  const stateClusters = useMemo(() => buildStateClusters(geocodedPoints), [geocodedPoints]);
+  const mapTier = useMemo(() => tierForZoom(zoom), [zoom]);
 
   const applicationOptions = useMemo(() => {
     const seen = new Map<string, string>();
@@ -476,6 +620,33 @@ export default function ServerLocationMap() {
       ? plotPoints.filter((point) => associatedServerIds.has(point._id))
       : plotPoints;
 
+    // Granularity drill-down: at the state/anchor tiers, replace the
+    // per-server dots entirely with aggregate bubbles (one per state, or one
+    // per unique geocoded location) — skipped while an application is
+    // highlighted, which keeps its own dedicated whole-US rendering below
+    // regardless of zoom (a pre-existing, separate feature).
+    if (!selectedApplicationKey && mapTier !== 'individual') {
+      const clustersForTier = mapTier === 'state' ? stateClusters : anchorClusters;
+      return [{
+        type: 'scattermapbox',
+        mode: 'markers+text',
+        name: mapTier === 'state' ? 'State clusters' : 'Location clusters',
+        lat: clustersForTier.map((c) => c.centerLat),
+        lon: clustersForTier.map((c) => c.centerLon),
+        text: clustersForTier.map((c) => String(c.count)),
+        textfont: { color: '#ffffff', size: 11 },
+        textposition: 'middle center',
+        customdata: clustersForTier.map((c) => ({ clusterKey: c.key, tier: mapTier })),
+        hovertemplate: clustersForTier.map((c) => `<b>${c.label}</b><br>${c.count} server${c.count === 1 ? '' : 's'}<br>Click to drill down<extra></extra>`),
+        marker: {
+          size: clustersForTier.map((c) => clusterBubbleSize(c.count)),
+          color: clustersForTier.map((c) => clusterBubbleColor(c.count)),
+          opacity: 0.85,
+          line: { width: 1.5, color: '#ffffff' },
+        },
+      }];
+    }
+
     const markerSize = Math.max(7, Math.min(13, 7 + (zoom - 3.1) * 0.7));
     const haloColor = 'rgba(0,0,0,0.38)';
 
@@ -485,6 +656,7 @@ export default function ServerLocationMap() {
       hostName: point.hostName || '-',
       location: point.locationLabel,
       primaryLabel: getPrimaryNoteLabel(point),
+      vulnerabilitySeverity: worstSeverityForServer(point),
       pinColor: pinColorForServer(point),
       overlapCount: point.overlapCount,
       operationalStatus: point.operationalStatus || '-',
@@ -524,7 +696,7 @@ export default function ServerLocationMap() {
     });
 
     if (overlays.includes('riskHalo')) {
-      const riskPoints = visiblePoints.filter((p) => ['EXPOSURE_CRITICAL', 'OS_EOL', 'KNOWN_OS_VULNERABILITIES'].includes(getPrimaryNoteLabel(p)));
+      const riskPoints = visiblePoints.filter((p) => colorSeverityBucket(worstSeverityForServer(p)) === 'high');
       if (riskPoints.length) {
         layers.push({
           type: 'scattermapbox',
@@ -594,6 +766,7 @@ export default function ServerLocationMap() {
       hovertemplate: [
         '<b>%{customdata.name}</b>',
         '%{customdata.location}',
+        'Vulnerability: %{customdata.vulnerabilitySeverity}',
         'Note Category: %{customdata.primaryLabel}',
         '<extra></extra>',
       ].join('<br>'),
@@ -606,7 +779,7 @@ export default function ServerLocationMap() {
     });
 
     return layers;
-  }, [plotPoints, overlays, zoom, selectedApplicationKey, associatedServerIds]);
+  }, [plotPoints, overlays, zoom, selectedApplicationKey, associatedServerIds, mapTier, stateClusters, anchorClusters]);
 
   if (loading) {
     return <div style={{ padding: 48, textAlign: 'center' }}><Spin size="large" /></div>;
@@ -662,12 +835,8 @@ export default function ServerLocationMap() {
                     const cluster = locationClusters.find((item) => item.key === nextKey);
                     if (!cluster) return;
 
-                    const estimatedWidth = typeof window === 'undefined'
-                      ? 1000
-                      : Math.max(520, window.innerWidth >= 1280 ? Math.floor(window.innerWidth * 0.64) : window.innerWidth - 40);
-
                     setCenter({ lat: cluster.centerLat, lon: cluster.centerLon });
-                    setZoom(estimateFitZoom(cluster, estimatedWidth, mapHeight));
+                    setZoom(estimateFitZoom(cluster, estimateMapWidth(), mapHeight));
                   }}
                 />
                 <Select
@@ -731,9 +900,31 @@ export default function ServerLocationMap() {
               </div>
             )}
           >
-            <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
-              Click a server dot to open full properties in the panel on the right.
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Tag color={mapTier === 'state' ? 'blue' : mapTier === 'anchor' ? 'geekblue' : 'green'}>
+                {mapTier === 'state' ? 'Viewing: States' : mapTier === 'anchor' ? 'Viewing: Locations' : 'Viewing: Individual Servers'}
+              </Tag>
+              {mapTier === 'individual'
+                ? 'Click a server dot to open full properties in the panel on the right.'
+                : 'Click a bubble to drill down, or zoom in to reveal the next level of detail.'}
             </Typography.Paragraph>
+
+            {mapTier === 'individual' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 8, fontSize: 12, color: '#475569' }}>
+                <span style={{ fontWeight: 600 }}>Vulnerability:</span>
+                {([
+                  ['none', 'None'],
+                  ['low', 'Low'],
+                  ['medium', 'Medium'],
+                  ['high', 'High/Critical'],
+                ] as const).map(([bucket, label]) => (
+                  <span key={bucket} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                    <span style={{ width: 10, height: 10, borderRadius: '50%', background: VULNERABILITY_SEVERITY_COLORS[bucket], display: 'inline-block' }} />
+                    {label}
+                  </span>
+                ))}
+              </div>
+            )}
 
             <Plot
               data={traces}
@@ -758,7 +949,26 @@ export default function ServerLocationMap() {
                 }
               }}
               onClick={(eventData: any) => {
-                const id = eventData?.points?.[0]?.customdata?.id;
+                const point = eventData?.points?.[0];
+                const clusterKey = point?.customdata?.clusterKey;
+                if (clusterKey) {
+                  const tier: MapTier = point.customdata.tier;
+                  const source = tier === 'state' ? stateClusters : anchorClusters;
+                  const cluster = source.find((item) => item.key === clusterKey);
+                  if (cluster) {
+                    // Fit the cluster's own extent, but never land short of
+                    // the next tier's threshold — a tight cluster (e.g. one
+                    // server) should still visibly drill down, not just
+                    // re-center at the same zoom level.
+                    const fitZoom = estimateFitZoom(cluster, estimateMapWidth(), mapHeight);
+                    const minDrillZoom = tier === 'state' ? STATE_TIER_MAX_ZOOM + 0.3 : ANCHOR_TIER_MAX_ZOOM + 0.3;
+                    setCenter({ lat: cluster.centerLat, lon: cluster.centerLon });
+                    setZoom(Math.max(fitZoom, minDrillZoom));
+                  }
+                  return;
+                }
+
+                const id = point?.customdata?.id;
                 if (id) setSelectedServerId(String(id));
               }}
             />

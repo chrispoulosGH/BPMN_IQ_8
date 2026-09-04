@@ -1,5 +1,6 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
-import { Spin, Select, Segmented, Empty, Card, Row, Col, Statistic, Table, Tag } from 'antd';
+import { Fragment, useState, useEffect, useMemo, useRef } from 'react';
+import { Spin, Select, Segmented, Empty, Card, Row, Col, Statistic, Table, Tag, Button } from 'antd';
+import { ReloadOutlined } from '@ant-design/icons';
 import {
   BarChart,
   Bar,
@@ -22,12 +23,11 @@ import {
   Cell,
 } from 'recharts';
 import { enhanceColumnsWithSortAndFilters } from '../utils/tableEnhancer';
-import { getDashboardTaskRisk, getDashboardFlowRisk, getDashboardCostByYear, getDashboardCapabilityCostByYear, getDashboardCapabilityFlowRelationships, getDashboardFeatureCost3D } from '../api';
+import { getDashboardTaskRisk, getDashboardFlowRisk, getDashboardCostByYear, getDashboardCapabilityCostByYear, getDashboardCapabilityFlowRelationships, getDashboardFeatureCost3D, getBusinessFlowMap, getDiagram } from '../api';
 import type { CapabilityCostByYearItem, CostByYearItem, TaskCostByYearItem, FeatureCostPoint } from '../api';
-import Flow3DChart from './Flow3DChart';
 import FeatureCost3DChart from './FeatureCost3DChart';
-import LobDrilldownTree from './LobDrilldownTree';
 import ServerLocationMap from './ServerLocationMap';
+import BpmnMiniViewer from './BpmnMiniViewer';
 
 // ─── Types ──────────────────────────────────────────────────
 interface YNCount { yes: number; no: number; unknown: number }
@@ -110,16 +110,21 @@ const COMPLIANCE_LABELS: Record<string, string> = {
 
 const COLORS = ['#1890ff', '#52c41a', '#faad14', '#f5222d', '#722ed1', '#13c2c2', '#eb2f96', '#fa8c16', '#a0d911', '#2f54eb'];
 const RISK_COLORS = { low: '#52c41a', medium: '#faad14', high: '#fa541c', critical: '#f5222d' };
-// Business Flow Comparison's 2x2 quadrant grid — both quadrants in a row
-// start at this height, and both columns start at an even split; the user
-// can then drag either boundary to resize. CHART_HEIGHT_OFFSET is how much
-// of a quadrant's height is taken up by the Card's own header/padding, left
-// over for the chart itself.
-const QUADRANT_HEIGHT = 480;
+// Business Flow Comparison's 3x3 grid — all 3 rows start at this height and
+// all 3 columns start at an even split; the user can then drag any of the
+// grid's 4 interior boundaries (2 vertical, 2 horizontal) to resize the
+// cells on either side of it. CHART_HEIGHT_OFFSET is how much of a cell's
+// height is taken up by the Card's own header/padding, left over for the
+// chart itself.
+const QUADRANT_HEIGHT = 360;
 const CHART_HEIGHT_OFFSET = 100;
-const MIN_QUADRANT_SIZE = 220;
-const MIN_COL_SPLIT_PERCENT = 20;
-const MAX_COL_SPLIT_PERCENT = 80;
+// Floors for the pairwise (col/row) and bottom-edge drags below — 0 lets a
+// row or column be dragged all the way down to fully collapsed, which is
+// how a specific row/column gets "maximized": collapse its siblings to 0
+// and it naturally fills the rest of the grid. Drag the divider back out to
+// restore it.
+const MIN_QUADRANT_SIZE = 0;
+const MIN_COL_WIDTH_PERCENT = 0;
 const VULNERABILITY_LABELS: Record<string, string> = {
   serverVulnerabilities: 'Server Vulns',
   dbVulnerabilities: 'DB Vulns',
@@ -140,28 +145,110 @@ function complianceYesTotal(item: Record<string, any>): number {
   return COMPLIANCE_FIELDS.reduce((sum, field) => sum + ((item[field] as YNCount)?.yes || 0), 0);
 }
 
+interface DashboardProps {
+  // Framework this dashboard instance belongs to — needed to look up a
+  // Business Process Flow's diagram by name (see onViewDiagramClick below).
+  neighborhoodName?: string;
+  // "View Diagram" link in the Business Process Flow Diagram quadrant —
+  // same handler App.tsx already wires into ComponentsViewer/SearchAll's
+  // own "View Diagram" links, so this jumps to the Diagrams tab with that
+  // flow's diagram loaded exactly the same way those do.
+  onViewDiagramClick?: (businessFlowName: string, neighborhoodName: string) => void;
+}
+
+// ─── Cross-mount data cache ────────────────────────────────
+// The app's outer tab bar fully unmounts this component whenever the user
+// switches away from the Analytics tab (destroyInactiveTabPane), so every
+// revisit re-ran all 6 of the dashboard's parallel API calls from scratch —
+// a visible loading spinner every single time. Cache the fetched result in
+// module scope (survives the component unmounting; only cleared by a full
+// page reload or the "Refresh" button below), keyed by neighborhoodName, so
+// a revisit within DASHBOARD_CACHE_TTL_MS renders instantly from cache
+// instead of waiting on the network again.
+const DASHBOARD_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+interface DashboardCachedData {
+  taskData: TaskProfile[];
+  flowData: FlowProfile[];
+  flowCostData: CostByYearItem[];
+  taskCostData: TaskCostByYearItem[];
+  capabilityCostData: CapabilityCostByYearItem[];
+  capRelData: CapabilityFlowRelationshipData | null;
+  featureCostPoints: FeatureCostPoint[];
+  fetchedAt: number;
+}
+const dashboardDataCache = new Map<string, DashboardCachedData>();
+
+// Which sub-view and which business flow (if any) was selected — kept
+// separately from the fetched data above (no TTL; a user's place in the UI
+// doesn't go "stale" the way fetched data does) so that leaving Analytics
+// for another tab and coming back restores exactly where they left off:
+// same sub-view, same flow selected, all 3 Business Flow Comparison frames
+// populated with that flow's data again instead of resetting to empty.
+interface DashboardSelectionState {
+  view: 'flows' | 'featurecost3d' | 'servermap';
+  featureCostFlowRequest: { flow: string; nonce: number } | null;
+}
+const dashboardSelectionCache = new Map<string, DashboardSelectionState>();
+
+// Business Process Flow Diagram quadrant's own two DB round-trips — the
+// flow-name→diagram-id map, and each diagram's own XML — cached the same
+// way so re-selecting an already-seen flow (including via the selection
+// restore above, after a remount) doesn't hit the database again either.
+const DIAGRAM_LOOKUP_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+// Keyed by neighborhood (like dashboardDataCache above) so switching
+// frameworks can't serve a stale flow→diagram map from a different one.
+const businessFlowMapCache = new Map<string, { map: Record<string, string>; fetchedAt: number }>();
+const diagramXmlCache = new Map<string, string>();
+async function getCachedBusinessFlowMap(neighborhoodKey: string): Promise<Record<string, string>> {
+  const cached = businessFlowMapCache.get(neighborhoodKey);
+  if (cached && Date.now() - cached.fetchedAt < DIAGRAM_LOOKUP_CACHE_TTL_MS) return cached.map;
+  const map = await getBusinessFlowMap();
+  businessFlowMapCache.set(neighborhoodKey, { map, fetchedAt: Date.now() });
+  return map;
+}
+async function getCachedDiagramXml(diagramId: string): Promise<string> {
+  const cached = diagramXmlCache.get(diagramId);
+  if (cached !== undefined) return cached;
+  const diagram = await getDiagram(diagramId);
+  diagramXmlCache.set(diagramId, diagram.xml);
+  return diagram.xml;
+}
+
 // ─── Component ──────────────────────────────────────────────
-export default function Dashboard() {
+export default function Dashboard({ neighborhoodName, onViewDiagramClick }: DashboardProps = {}) {
   const COST_YEAR = 2025;
-  const [taskData, setTaskData] = useState<TaskProfile[]>([]);
-  const [flowData, setFlowData] = useState<FlowProfile[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<'tasks' | 'flows' | '3d' | 'featurecost3d' | 'caprels' | 'drilltree' | 'servermap'>('flows');
+  const cacheKey = neighborhoodName || '__default__';
+  const freshCacheEntry = () => {
+    const cached = dashboardDataCache.get(cacheKey);
+    return cached && Date.now() - cached.fetchedAt < DASHBOARD_CACHE_TTL_MS ? cached : null;
+  };
+  const [taskData, setTaskData] = useState<TaskProfile[]>(() => freshCacheEntry()?.taskData || []);
+  const [flowData, setFlowData] = useState<FlowProfile[]>(() => freshCacheEntry()?.flowData || []);
+  const [loading, setLoading] = useState(() => !freshCacheEntry());
+  const [view, setView] = useState<'flows' | 'featurecost3d' | 'servermap'>(() => dashboardSelectionCache.get(cacheKey)?.view || 'flows');
   const [selectedFlow, setSelectedFlow] = useState<string | null>(null);
-  const [flowCostData, setFlowCostData] = useState<CostByYearItem[]>([]);
-  const [taskCostData, setTaskCostData] = useState<TaskCostByYearItem[]>([]);
-  const [capabilityCostData, setCapabilityCostData] = useState<CapabilityCostByYearItem[]>([]);
-  const [capRelData, setCapRelData] = useState<CapabilityFlowRelationshipData | null>(null);
+  const [flowCostData, setFlowCostData] = useState<CostByYearItem[]>(() => freshCacheEntry()?.flowCostData || []);
+  const [taskCostData, setTaskCostData] = useState<TaskCostByYearItem[]>(() => freshCacheEntry()?.taskCostData || []);
+  const [capabilityCostData, setCapabilityCostData] = useState<CapabilityCostByYearItem[]>(() => freshCacheEntry()?.capabilityCostData || []);
+  const [capRelData, setCapRelData] = useState<CapabilityFlowRelationshipData | null>(() => freshCacheEntry()?.capRelData || null);
   // Same underlying ApplicationFeatureDevCost data the YoY Feature Cost 3D
   // chart uses — reused here so the flow-comparison dashboard's top-flows
   // chart is driven by the same dev-cost source, not the older op/dev cost
   // seed data.
-  const [featureCostPoints, setFeatureCostPoints] = useState<FeatureCostPoint[]>([]);
+  const [featureCostPoints, setFeatureCostPoints] = useState<FeatureCostPoint[]>(() => freshCacheEntry()?.featureCostPoints || []);
   // Set when a bar in the Business Flow Comparison dev-cost chart is
   // clicked — jumps to the YoY Feature Cost view with that flow selected.
   // The nonce forces re-application even when the same flow is clicked
   // twice in a row (e.g. after the user manually cleared the selection).
-  const [featureCostFlowRequest, setFeatureCostFlowRequest] = useState<{ flow: string; nonce: number } | null>(null);
+  // Restored from dashboardSelectionCache on mount so revisiting Analytics
+  // after switching tabs doesn't lose the selected flow.
+  const [featureCostFlowRequest, setFeatureCostFlowRequest] = useState<{ flow: string; nonce: number } | null>(() => dashboardSelectionCache.get(cacheKey)?.featureCostFlowRequest || null);
+
+  // Keep the cache in sync with whatever the user last selected, so the next
+  // mount (after navigating away and back) can restore it.
+  useEffect(() => {
+    dashboardSelectionCache.set(cacheKey, { view, featureCostFlowRequest });
+  }, [cacheKey, view, featureCostFlowRequest]);
 
   // Stays on the Business Flow Comparison screen — just updates the YoY
   // Feature Cost chart embedded in its top-right quadrant, rather than
@@ -170,7 +257,26 @@ export default function Dashboard() {
     setFeatureCostFlowRequest({ flow: flowName, nonce: Date.now() });
   };
 
-  useEffect(() => {
+  // force=true bypasses the cache (used by the "Refresh" button below) —
+  // otherwise a still-fresh cache entry is served immediately and no
+  // network request is made at all.
+  const loadDashboardData = (force = false) => {
+    if (!force) {
+      const cached = freshCacheEntry();
+      if (cached) {
+        setTaskData(cached.taskData);
+        setFlowData(cached.flowData);
+        setFlowCostData(cached.flowCostData);
+        setTaskCostData(cached.taskCostData);
+        setCapabilityCostData(cached.capabilityCostData);
+        setCapRelData(cached.capRelData);
+        setFeatureCostPoints(cached.featureCostPoints);
+        setLoading(false);
+        return;
+      }
+    }
+
+    setLoading(true);
     Promise.all([
       getDashboardTaskRisk(),
       getDashboardFlowRisk(),
@@ -187,9 +293,27 @@ export default function Dashboard() {
         setCapabilityCostData(capabilityCost.capabilities);
         setCapRelData(caprels);
         setFeatureCostPoints(featureCost.points);
+        dashboardDataCache.set(cacheKey, {
+          taskData: tasks,
+          flowData: flows,
+          flowCostData: cost.flows,
+          taskCostData: cost.tasks,
+          capabilityCostData: capabilityCost.capabilities,
+          capRelData: caprels,
+          featureCostPoints: featureCost.points,
+          fetchedAt: Date.now(),
+        });
       })
       .finally(() => setLoading(false));
-  }, []);
+  };
+
+  useEffect(() => {
+    loadDashboardData();
+    // Only re-run when the underlying framework actually changes — a fresh
+    // cache hit above already short-circuits the common "revisited the same
+    // tab" case without needing this effect to re-fire at all.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cacheKey]);
 
   const flowNames = useMemo(() => [...new Set(taskData.map((t) => t.businessFlow))].sort(), [taskData]);
 
@@ -206,43 +330,29 @@ export default function Dashboard() {
       <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
         <Segmented
           value={view}
-          onChange={(v) => setView(v as 'tasks' | 'flows' | '3d' | 'featurecost3d' | 'caprels' | 'drilltree' | 'servermap')}
+          onChange={(v) => setView(v as 'flows' | 'featurecost3d' | 'servermap')}
           options={[
             { label: 'Business Flow Comparison', value: 'flows' },
-            { label: 'Task Comparison', value: 'tasks' },
-            { label: 'Capability Cost & Flow', value: 'caprels' },
-            { label: 'LOB Drilldown Tree', value: 'drilltree' },
-            { label: 'US Server Map', value: 'servermap' },
-            { label: 'YoY Business Flow Cost', value: '3d' },
             { label: 'YoY Feature Cost', value: 'featurecost3d' },
+            { label: 'US Server Map', value: 'servermap' },
           ]}
         />
-        {view === 'tasks' && (
-          <Select
-            allowClear
-            placeholder="Filter by Business Flow"
-            style={{ minWidth: 220 }}
-            value={selectedFlow}
-            onChange={setSelectedFlow}
-            options={flowNames.map((f) => ({ label: f, value: f }))}
-          />
-        )}
+        <Button
+          size="small"
+          icon={<ReloadOutlined />}
+          onClick={() => loadDashboardData(true)}
+          title="Refresh dashboard data (cached data is reused automatically for a few minutes on revisit)"
+        >
+          Refresh
+        </Button>
       </div>
 
-      {view === 'tasks' ? (
-        <TaskDashboard tasks={filteredTasks} allTasks={taskData} costData={taskCostData} costYear={COST_YEAR} />
-      ) : view === 'caprels' ? (
-        <CapabilityFlowRelationshipDashboard data={capRelData} costData={capabilityCostData} costYear={COST_YEAR} />
-      ) : view === 'drilltree' ? (
-        <LobDrilldownTree />
-      ) : view === 'servermap' ? (
+      {view === 'servermap' ? (
         <ServerLocationMap />
       ) : view === 'flows' ? (
-        <FlowDashboard flows={flowData} costData={flowCostData} costYear={COST_YEAR} devCostPoints={featureCostPoints} onFlowCostBarClick={handleFlowCostBarClick} featureCostFlowRequest={featureCostFlowRequest} />
-      ) : view === 'featurecost3d' ? (
-        <FeatureCost3DChart requestedFlow={featureCostFlowRequest} />
+        <FlowDashboard flows={flowData} costData={flowCostData} costYear={COST_YEAR} devCostPoints={featureCostPoints} onFlowCostBarClick={handleFlowCostBarClick} featureCostFlowRequest={featureCostFlowRequest} onViewFullFeatureCost={() => setView('featurecost3d')} neighborhoodName={neighborhoodName} onViewDiagramClick={onViewDiagramClick} />
       ) : (
-        <Flow3DChart />
+        <FeatureCost3DChart requestedFlow={featureCostFlowRequest} />
       )}
     </div>
   );
@@ -822,7 +932,7 @@ function TaskDashboard({ tasks, allTasks, costData, costYear }: { tasks: TaskPro
 }
 
 // ─── Flow Dashboard ─────────────────────────────────────────
-function FlowDashboard({ flows, costData, costYear, devCostPoints, onFlowCostBarClick, featureCostFlowRequest }: { flows: FlowProfile[]; costData: CostByYearItem[]; costYear: number; devCostPoints: FeatureCostPoint[]; onFlowCostBarClick?: (flowName: string) => void; featureCostFlowRequest?: { flow: string; nonce: number } | null }) {
+function FlowDashboard({ flows, costData, costYear, devCostPoints, onFlowCostBarClick, featureCostFlowRequest, onViewFullFeatureCost, neighborhoodName, onViewDiagramClick }: { flows: FlowProfile[]; costData: CostByYearItem[]; costYear: number; devCostPoints: FeatureCostPoint[]; onFlowCostBarClick?: (flowName: string) => void; featureCostFlowRequest?: { flow: string; nonce: number } | null; onViewFullFeatureCost?: () => void; neighborhoodName?: string; onViewDiagramClick?: (businessFlowName: string, neighborhoodName: string) => void }) {
   if (!flows.length) return <Empty description="No business flows with tasks/applications found" />;
 
   const topFlowsByRisk = sortDescBy(flows, (flow) => flow.riskScore).slice(0, 20);
@@ -910,40 +1020,88 @@ function FlowDashboard({ flows, costData, costYear, devCostPoints, onFlowCostBar
   const maxRisk = flows.length ? Math.max(...flows.map((f) => f.riskScore)) : 0;
   const totalApps = flows.reduce((s, f) => s + f.appCount, 0);
 
-  // ─── Quadrant grid resizing ─────────────────────────────────
-  // colSplit is the left column's width as a % of the grid's own width,
-  // shared by both rows so the vertical boundary lines up straight down
-  // the middle; topRowHeight/bottomRowHeight are each row's height in px.
-  // Dragging a handle just updates these — a plain drag-resize, the same
-  // pattern used elsewhere in this app (e.g. the properties panel width
-  // and factory table column widths), not a new dependency.
-  const [colSplit, setColSplit] = useState(50);
-  const [topRowHeight, setTopRowHeight] = useState(QUADRANT_HEIGHT);
-  const [bottomRowHeight, setBottomRowHeight] = useState(QUADRANT_HEIGHT);
+  // ─── 3x3 grid resizing ────────────────────────────────────────
+  // colWidths are the 3 columns' widths as %s of the grid's own width
+  // (sum to 100, shared by all 3 rows so the vertical boundaries line up
+  // straight down the grid); rowHeights are the 3 rows' heights in px.
+  // Each of the grid's 4 interior boundaries (2 vertical, 2 horizontal) is
+  // its own drag handle, resizing just the pair of columns/rows on either
+  // side of it (their combined size stays fixed — a plain zero-sum
+  // drag-resize, the same pattern used elsewhere in this app for the
+  // properties panel width and factory table column widths, not a new
+  // dependency).
+  const [colWidths, setColWidths] = useState<[number, number, number]>([100 / 3, 100 / 3, 100 / 3]);
+  const [rowHeights, setRowHeights] = useState<[number, number, number]>([QUADRANT_HEIGHT, QUADRANT_HEIGHT, QUADRANT_HEIGHT]);
   const quadrantGridRef = useRef<HTMLDivElement>(null);
+
+  // Columns already fill 100% of the grid's width (flex-grow based), so
+  // "cover the entire screen evenly" only needs the rows' starting heights
+  // fixed — QUADRANT_HEIGHT above was just a flat guess, unrelated to the
+  // viewport. Size all 3 rows evenly to fill whatever vertical space is
+  // actually left below the grid's own top, the same
+  // measure-from-here-to-window-bottom pattern ServerLocationMap.tsx uses
+  // for its own fit-to-screen button. Runs once per mount (this component is
+  // unmounted/remounted by the Segmented switch above, not kept alive) and
+  // again on window resize; a manual drag afterward isn't overwritten until
+  // the next resize.
+  useEffect(() => {
+    const fitGridToScreen = () => {
+      if (typeof window === 'undefined' || !quadrantGridRef.current) return;
+      const top = quadrantGridRef.current.getBoundingClientRect().top;
+      const rowDividerCount = 3; // row0/row1, row1/row2, and the bottom-edge handle
+      const bottomMargin = 16; // matches the outer Dashboard() wrapper's own padding
+      const available = window.innerHeight - top - rowDividerCount * 10 - bottomMargin;
+      const perRow = Math.max(180, Math.floor(available / 3));
+      setRowHeights([perRow, perRow, perRow]);
+    };
+
+    fitGridToScreen();
+    window.addEventListener('resize', fitGridToScreen);
+    return () => window.removeEventListener('resize', fitGridToScreen);
+  }, []);
   const quadrantDragRef = useRef<{
-    mode: 'col' | 'row';
+    mode: 'col' | 'row' | 'rowEdge';
+    index: 0 | 1; // which interior boundary: 0 = between item 0/1, 1 = between item 1/2 (unused for 'rowEdge')
     startX: number;
     startY: number;
-    startColSplit: number;
-    startTopHeight: number;
-    startBottomHeight: number;
+    startA: number; // size of item[index] at drag start ('rowEdge': row 2's own height)
+    startB: number; // size of item[index + 1] at drag start (unused for 'rowEdge')
     containerWidth: number;
   } | null>(null);
 
   const handleQuadrantPointerMove = (e: PointerEvent) => {
     const drag = quadrantDragRef.current;
     if (!drag) return;
+    const pairTotal = drag.startA + drag.startB;
     if (drag.mode === 'col') {
       const deltaPercent = ((e.clientX - drag.startX) / drag.containerWidth) * 100;
-      const next = Math.max(MIN_COL_SPLIT_PERCENT, Math.min(MAX_COL_SPLIT_PERCENT, drag.startColSplit + deltaPercent));
-      setColSplit(next);
-    } else {
+      const nextA = Math.max(MIN_COL_WIDTH_PERCENT, Math.min(pairTotal - MIN_COL_WIDTH_PERCENT, drag.startA + deltaPercent));
+      setColWidths((current) => {
+        const next = [...current] as [number, number, number];
+        next[drag.index] = nextA;
+        next[drag.index + 1] = pairTotal - nextA;
+        return next;
+      });
+    } else if (drag.mode === 'row') {
       const deltaY = e.clientY - drag.startY;
-      const nextTop = Math.max(MIN_QUADRANT_SIZE, drag.startTopHeight + deltaY);
-      const nextBottom = Math.max(MIN_QUADRANT_SIZE, drag.startBottomHeight - deltaY);
-      setTopRowHeight(nextTop);
-      setBottomRowHeight(nextBottom);
+      const nextA = Math.max(MIN_QUADRANT_SIZE, Math.min(pairTotal - MIN_QUADRANT_SIZE, drag.startA + deltaY));
+      setRowHeights((current) => {
+        const next = [...current] as [number, number, number];
+        next[drag.index] = nextA;
+        next[drag.index + 1] = pairTotal - nextA;
+        return next;
+      });
+    } else {
+      // 'rowEdge' — the bottom edge of the last row. Nothing below it to
+      // balance against, so this just grows/shrinks row 3 directly instead
+      // of trading space with a neighbor.
+      const deltaY = e.clientY - drag.startY;
+      const nextA = Math.max(MIN_QUADRANT_SIZE, drag.startA + deltaY);
+      setRowHeights((current) => {
+        const next = [...current] as [number, number, number];
+        next[2] = nextA;
+        return next;
+      });
     }
   };
 
@@ -953,30 +1111,47 @@ function FlowDashboard({ flows, costData, costYear, devCostPoints, onFlowCostBar
     window.removeEventListener('pointerup', handleQuadrantPointerUp);
   };
 
-  const startColDrag = (e: React.PointerEvent) => {
+  const startColDrag = (index: 0 | 1) => (e: React.PointerEvent) => {
     e.preventDefault();
     quadrantDragRef.current = {
       mode: 'col',
+      index,
       startX: e.clientX,
       startY: e.clientY,
-      startColSplit: colSplit,
-      startTopHeight: topRowHeight,
-      startBottomHeight: bottomRowHeight,
+      startA: colWidths[index],
+      startB: colWidths[index + 1],
       containerWidth: quadrantGridRef.current?.getBoundingClientRect().width || 1000,
     };
     window.addEventListener('pointermove', handleQuadrantPointerMove);
     window.addEventListener('pointerup', handleQuadrantPointerUp);
   };
 
-  const startRowDrag = (e: React.PointerEvent) => {
+  const startRowDrag = (index: 0 | 1) => (e: React.PointerEvent) => {
     e.preventDefault();
     quadrantDragRef.current = {
       mode: 'row',
+      index,
       startX: e.clientX,
       startY: e.clientY,
-      startColSplit: colSplit,
-      startTopHeight: topRowHeight,
-      startBottomHeight: bottomRowHeight,
+      startA: rowHeights[index],
+      startB: rowHeights[index + 1],
+      containerWidth: 0,
+    };
+    window.addEventListener('pointermove', handleQuadrantPointerMove);
+    window.addEventListener('pointerup', handleQuadrantPointerUp);
+  };
+
+  // Bottom edge of the last row — grows/shrinks the whole grid's total
+  // height, rather than trading space with a sibling row.
+  const startRowEdgeDrag = (e: React.PointerEvent) => {
+    e.preventDefault();
+    quadrantDragRef.current = {
+      mode: 'rowEdge',
+      index: 0,
+      startX: e.clientX,
+      startY: e.clientY,
+      startA: rowHeights[2],
+      startB: 0,
       containerWidth: 0,
     };
     window.addEventListener('pointermove', handleQuadrantPointerMove);
@@ -984,8 +1159,7 @@ function FlowDashboard({ flows, costData, costYear, devCostPoints, onFlowCostBar
   };
 
   const colDividerStyle: React.CSSProperties = {
-    width: 10,
-    flexShrink: 0,
+    flex: '0 0 10px',
     cursor: 'col-resize',
     display: 'flex',
     alignItems: 'center',
@@ -1003,273 +1177,195 @@ function FlowDashboard({ flows, costData, costYear, devCostPoints, onFlowCostBar
   const colGripStyle: React.CSSProperties = { width: 3, height: 36, background: '#d9d9d9', borderRadius: 2 };
   const rowGripStyle: React.CSSProperties = { height: 3, width: 36, background: '#d9d9d9', borderRadius: 2 };
 
+  const renderEmptyCell = (height: number) => (
+    <Card size="small" style={{ height }} bodyStyle={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <span style={{ color: '#bfbfbf', fontSize: 12 }}>Empty</span>
+    </Card>
+  );
+
+  const renderDevCostCell = (height: number) => (
+    <Card title="Top 20 Business Flows by Dev Cost — All Years" size="small" style={{ height }}>
+      {devCostBarData.length > 0 ? (
+        <ResponsiveContainer width="100%" height={Math.max(150, height - CHART_HEIGHT_OFFSET)}>
+          <BarChart data={devCostBarData} margin={{ top: 5, right: 30, left: 20, bottom: 80 }}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="name" angle={-45} textAnchor="end" interval={0} height={80} tick={{ fontSize: 11 }} />
+            <YAxis tickFormatter={(v) => fmtM(v)} width={70} />
+            <Tooltip content={({ payload }) => {
+              if (!payload?.length) return null;
+              const d = payload[0].payload;
+              const isSelected = d.fullName === featureCostFlowRequest?.flow;
+              return <div style={{ background: '#fff', border: '1px solid #ccc', padding: 8, borderRadius: 4, fontSize: 12 }}>
+                <div style={{ fontWeight: 600 }}>{d.fullName}</div>
+                <div style={{ color: isSelected ? '#1677ff' : '#d29922' }}>Development Cost: {fmtM(d.devCost)}</div>
+                {onFlowCostBarClick && <div style={{ color: '#999', marginTop: 4 }}>Click to view YoY Feature Cost →</div>}
+              </div>;
+            }} />
+            <Bar
+              dataKey="devCost"
+              name="Development Cost"
+              radius={[4, 4, 0, 0]}
+              cursor={onFlowCostBarClick ? 'pointer' : undefined}
+              onClick={(data: any) => onFlowCostBarClick?.(data.fullName)}
+            >
+              {devCostBarData.map((entry) => {
+                const isSelected = entry.fullName === featureCostFlowRequest?.flow;
+                return (
+                  <Cell
+                    key={entry.fullName}
+                    fill={isSelected ? '#1677ff' : '#d29922'}
+                    stroke={isSelected ? '#0958d9' : undefined}
+                    strokeWidth={isSelected ? 2 : 0}
+                  />
+                );
+              })}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      ) : (
+        <Empty description="No dev cost data available" style={{ marginTop: 48 }} />
+      )}
+    </Card>
+  );
+
+  const renderFeatureCostCell = (height: number) => (
+    <Card
+      title={onViewFullFeatureCost ? (
+        <a
+          onClick={onViewFullFeatureCost}
+          title="Open the full YoY Feature Cost view for this business flow"
+        >
+          YoY Feature Cost
+        </a>
+      ) : 'YoY Feature Cost'}
+      size="small"
+      style={{ height }}
+      bodyStyle={{ height: `calc(100% - 40px)` }}
+    >
+      <div style={{ height: '100%' }}>
+        <FeatureCost3DChart requestedFlow={featureCostFlowRequest} autoSelectDefaultFlow={false} />
+      </div>
+    </Card>
+  );
+
+  // (1,3) — the BPMN2.0 diagram for whichever flow was last clicked in the
+  // dev-cost chart (same trigger as the YoY Feature Cost cell above, driven
+  // by the same featureCostFlowRequest). Looked up via the flow→diagram id
+  // map and rendered read-only through BpmnMiniViewer (no palette/properties
+  // panel — a NavigatedViewer, not a Modeler — since this is a display-only
+  // embed, not an editing surface).
+  const [diagramXml, setDiagramXml] = useState<string | null>(null);
+  const [diagramFlowName, setDiagramFlowName] = useState<string | null>(featureCostFlowRequest?.flow || null);
+  const [diagramLoading, setDiagramLoading] = useState(Boolean(featureCostFlowRequest));
+  const [diagramNotFound, setDiagramNotFound] = useState(false);
+
+  useEffect(() => {
+    if (!featureCostFlowRequest) return;
+    let cancelled = false;
+    setDiagramFlowName(featureCostFlowRequest.flow);
+    setDiagramLoading(true);
+    setDiagramNotFound(false);
+    (async () => {
+      try {
+        const flowMap = await getCachedBusinessFlowMap(neighborhoodName || '__default__');
+        const diagramId = flowMap[featureCostFlowRequest.flow];
+        if (!diagramId) {
+          if (!cancelled) { setDiagramXml(null); setDiagramNotFound(true); }
+          return;
+        }
+        const xml = await getCachedDiagramXml(diagramId);
+        if (!cancelled) setDiagramXml(xml);
+      } catch {
+        if (!cancelled) { setDiagramXml(null); setDiagramNotFound(true); }
+      } finally {
+        if (!cancelled) setDiagramLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [featureCostFlowRequest]);
+
+  const canOpenDiagramTab = Boolean(diagramFlowName && diagramXml && !diagramNotFound && onViewDiagramClick && neighborhoodName);
+
+  const renderDiagramCell = (height: number) => (
+    <Card
+      title={canOpenDiagramTab ? (
+        <a
+          onClick={() => onViewDiagramClick!(diagramFlowName!, neighborhoodName!)}
+          title="Open this diagram in the Diagrams tab"
+        >
+          Business Process Flow Diagram
+        </a>
+      ) : 'Business Process Flow Diagram'}
+      size="small"
+      style={{ height }}
+      bodyStyle={{ height: `calc(100% - 40px)`, padding: 0 }}
+    >
+      {!diagramFlowName ? (
+        <Empty description="Click a bar in the Top 20 Business Flows chart to view its diagram" style={{ marginTop: 48 }} />
+      ) : diagramLoading ? (
+        <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Spin /></div>
+      ) : diagramNotFound || !diagramXml ? (
+        <Empty description={`No diagram found for "${diagramFlowName}"`} style={{ marginTop: 48 }} />
+      ) : (
+        <BpmnMiniViewer xml={diagramXml} diagramName={diagramFlowName} />
+      )}
+    </Card>
+  );
+
+  // (row, col), both 0-indexed — (0,0)/(0,1)/(0,2) are (1,1)/(1,2)/(1,3) in
+  // the 1-indexed terms the grid is described in above. Every other cell is
+  // empty for now.
+  const gridCellRenderers: ((height: number) => React.ReactNode)[][] = [
+    [renderDevCostCell, renderFeatureCostCell, renderDiagramCell],
+    [renderEmptyCell, renderEmptyCell, renderEmptyCell],
+    [renderEmptyCell, renderEmptyCell, renderEmptyCell],
+  ];
+
   return (
     <>
-      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col xs={12} sm={6}><Card size="small"><Statistic title="Business Flows" value={flows.length} /></Card></Col>
-        <Col xs={12} sm={6}><Card size="small"><Statistic title="Avg Risk Score" value={avgRisk} /></Card></Col>
-        <Col xs={12} sm={6}><Card size="small"><Statistic title="Max Risk Score" value={maxRisk} valueStyle={{ color: riskLevel(maxRisk).color }} /></Card></Col>
-        <Col xs={12} sm={6}><Card size="small"><Statistic title="Total Unique Apps" value={totalApps} /></Card></Col>
-      </Row>
-
-      {/* ─── Quadrants ───────────────────────────────────────────
-          Top-left: dev cost (same ApplicationFeatureDevCost source as the
-          YoY Feature Cost 3D chart, summed across every available year).
-          Top-right: that same YoY Feature Cost 3D chart, embedded live.
-          Bottom-left: risk score. Bottom-right: compliance flags.
-          Every boundary — the vertical line between columns and the
-          horizontal line between rows — is a drag handle; grab one to
-          resize the quadrants on either side of it. */}
-      <div ref={quadrantGridRef} style={{ marginBottom: 24 }}>
-        <div style={{ display: 'flex' }}>
-          <div style={{ width: `calc(${colSplit}% - 5px)` }}>
-            <Card title="Top 20 Business Flows by Dev Cost — All Years" size="small" style={{ height: topRowHeight }}>
-              {devCostBarData.length > 0 ? (
-                <ResponsiveContainer width="100%" height={Math.max(150, topRowHeight - CHART_HEIGHT_OFFSET)}>
-                  <BarChart data={devCostBarData} margin={{ top: 5, right: 30, left: 20, bottom: 80 }}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="name" angle={-45} textAnchor="end" interval={0} height={80} tick={{ fontSize: 11 }} />
-                    <YAxis tickFormatter={(v) => fmtM(v)} width={70} />
-                    <Tooltip content={({ payload }) => {
-                      if (!payload?.length) return null;
-                      const d = payload[0].payload;
-                      return <div style={{ background: '#fff', border: '1px solid #ccc', padding: 8, borderRadius: 4, fontSize: 12 }}>
-                        <div style={{ fontWeight: 600 }}>{d.fullName}</div>
-                        <div style={{ color: '#d29922' }}>Development Cost: {fmtM(d.devCost)}</div>
-                        {onFlowCostBarClick && <div style={{ color: '#999', marginTop: 4 }}>Click to view YoY Feature Cost →</div>}
-                      </div>;
-                    }} />
-                    <Bar
-                      dataKey="devCost"
-                      name="Development Cost"
-                      fill="#d29922"
-                      radius={[4, 4, 0, 0]}
-                      cursor={onFlowCostBarClick ? 'pointer' : undefined}
-                      onClick={(data: any) => onFlowCostBarClick?.(data.fullName)}
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
-              ) : (
-                <Empty description="No dev cost data available" style={{ marginTop: 48 }} />
-              )}
-            </Card>
-          </div>
-          <div style={colDividerStyle} onPointerDown={startColDrag} title="Drag to resize columns">
-            <div style={colGripStyle} />
-          </div>
-          <div style={{ width: `calc(${100 - colSplit}% - 5px)` }}>
-            <Card title="YoY Feature Cost" size="small" style={{ height: topRowHeight }} bodyStyle={{ height: `calc(100% - 40px)` }}>
-              <div style={{ height: '100%' }}>
-                <FeatureCost3DChart requestedFlow={featureCostFlowRequest} />
+      {/* ─── 3x3 grid ────────────────────────────────────────────
+          (1,1) dev cost (same ApplicationFeatureDevCost source as the YoY
+          Feature Cost 3D chart, summed across every available year).
+          (1,2) that same YoY Feature Cost 3D chart, embedded live.
+          Every other cell is left empty for now. Every interior boundary —
+          both vertical lines between columns and both horizontal lines
+          between rows — is its own drag handle; grab one to resize just
+          the two cells on either side of it. */}
+      <div ref={quadrantGridRef}>
+        {([0, 1, 2] as const).map((rowIdx) => (
+          <Fragment key={rowIdx}>
+            <div style={{ display: 'flex' }}>
+              {([0, 1, 2] as const).map((colIdx) => (
+                <Fragment key={colIdx}>
+                  {/* overflow: hidden keeps a cell's own content (e.g. the YoY
+                      Feature Cost chart, which enforces a minimum plot height)
+                      from visually bleeding past its fixed-height Card into the
+                      row divider strip directly below it — otherwise that
+                      overflowing content sits on top of the divider and steals
+                      its drag events, making that stretch of the handle
+                      unresponsive. */}
+                  <div style={{ flex: `${colWidths[colIdx]} 0 0%`, minWidth: 0, height: rowHeights[rowIdx], overflow: 'hidden' }}>
+                    {gridCellRenderers[rowIdx][colIdx](rowHeights[rowIdx])}
+                  </div>
+                  {colIdx < 2 && (
+                    <div style={colDividerStyle} onPointerDown={startColDrag(colIdx as 0 | 1)} title="Drag to resize columns">
+                      <div style={colGripStyle} />
+                    </div>
+                  )}
+                </Fragment>
+              ))}
+            </div>
+            {rowIdx < 2 && (
+              <div style={rowDividerStyle} onPointerDown={startRowDrag(rowIdx as 0 | 1)} title="Drag to resize rows">
+                <div style={rowGripStyle} />
               </div>
-            </Card>
-          </div>
-        </div>
-
-        <div style={rowDividerStyle} onPointerDown={startRowDrag} title="Drag to resize rows">
+            )}
+          </Fragment>
+        ))}
+        <div style={rowDividerStyle} onPointerDown={startRowEdgeDrag} title="Drag to resize the bottom row's height">
           <div style={rowGripStyle} />
         </div>
-
-        <div style={{ display: 'flex' }}>
-          <div style={{ width: `calc(${colSplit}% - 5px)` }}>
-            <Card title="Top 20 Business Flows by Risk Score" size="small" style={{ height: bottomRowHeight }}>
-              <ResponsiveContainer width="100%" height={Math.max(150, bottomRowHeight - CHART_HEIGHT_OFFSET)}>
-                <BarChart data={riskBarData} margin={{ top: 5, right: 30, left: 10, bottom: 80 }}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="name" angle={-45} textAnchor="end" interval={0} height={80} tick={{ fontSize: 11 }} />
-                  <YAxis />
-                  <Tooltip content={({ payload }) => {
-                    if (!payload?.length) return null;
-                    const d = payload[0].payload;
-                    return <div style={{ background: '#fff', border: '1px solid #ccc', padding: 8, borderRadius: 4 }}>
-                      <div style={{ fontWeight: 600 }}>{d.fullName}</div>
-                      <div>Risk Score: {d.riskScore}</div>
-                      <div>Tasks: {d.taskCount}</div>
-                      <div>Applications: {d.appCount}</div>
-                    </div>;
-                  }} />
-                  <Bar dataKey="riskScore" fill="#722ed1" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </Card>
-          </div>
-          <div style={colDividerStyle} onPointerDown={startColDrag} title="Drag to resize columns">
-            <div style={colGripStyle} />
-          </div>
-          <div style={{ width: `calc(${100 - colSplit}% - 5px)` }}>
-            <Card title="Compliance Flags per Business Flow (Top 20 by Compliance)" size="small" style={{ height: bottomRowHeight }}>
-              <ResponsiveContainer width="100%" height={Math.max(150, bottomRowHeight - CHART_HEIGHT_OFFSET)}>
-                <BarChart data={complianceBarData} margin={{ top: 5, right: 30, left: 10, bottom: 80 }}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="name" angle={-45} textAnchor="end" interval={0} height={80} tick={{ fontSize: 11 }} />
-                  <YAxis />
-                  <Tooltip />
-                  <Legend />
-                  {COMPLIANCE_FIELDS.map((field, i) => (
-                    <Bar key={field} dataKey={field} name={COMPLIANCE_LABELS[field]} stackId="a" fill={COLORS[i % COLORS.length]} />
-                  ))}
-                </BarChart>
-              </ResponsiveContainer>
-            </Card>
-          </div>
-        </div>
       </div>
-
-      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col xs={24} md={12}>
-          <Card title="Server Vulnerabilities per Business Flow (Top 20 by Server Vulnerabilities)" size="small">
-            <ResponsiveContainer width="100%" height={320}>
-              <BarChart data={serverVulnerabilityBarData} margin={{ top: 5, right: 30, left: 10, bottom: 80 }}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" angle={-45} textAnchor="end" interval={0} height={80} tick={{ fontSize: 11 }} />
-                <YAxis />
-                <Tooltip content={({ payload }) => {
-                  if (!payload?.length) return null;
-                  const d = payload[0].payload;
-                  return <div style={{ background: '#fff', border: '1px solid #ccc', padding: 8, borderRadius: 4 }}>
-                    <div style={{ fontWeight: 600 }}>{d.fullName}</div>
-                    <div>Server Vulnerabilities: {d.serverVulnerabilities}</div>
-                  </div>;
-                }} />
-                <Legend />
-                <Bar dataKey="serverVulnerabilities" name={VULNERABILITY_LABELS.serverVulnerabilities} fill="#ff7a45" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </Card>
-        </Col>
-        <Col xs={24} md={12}>
-          <Card title="DB Vulnerabilities per Business Flow (Top 20 by DB Vulnerabilities)" size="small">
-            <ResponsiveContainer width="100%" height={320}>
-              <BarChart data={dbVulnerabilityBarData} margin={{ top: 5, right: 30, left: 10, bottom: 80 }}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="name" angle={-45} textAnchor="end" interval={0} height={80} tick={{ fontSize: 11 }} />
-                <YAxis />
-                <Tooltip content={({ payload }) => {
-                  if (!payload?.length) return null;
-                  const d = payload[0].payload;
-                  return <div style={{ background: '#fff', border: '1px solid #ccc', padding: 8, borderRadius: 4 }}>
-                    <div style={{ fontWeight: 600 }}>{d.fullName}</div>
-                    <div>DB Vulnerabilities: {d.dbVulnerabilities}</div>
-                  </div>;
-                }} />
-                <Legend />
-                <Bar dataKey="dbVulnerabilities" name={VULNERABILITY_LABELS.dbVulnerabilities} fill="#36cfc9" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </Card>
-        </Col>
-      </Row>
-
-      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        {/* Criticality Pie */}
-        <Col xs={24} md={12}>
-          <Card
-            title="Application Criticality Distribution"
-            size="small"
-            extra={
-              <Select
-                mode="multiple"
-                allowClear
-                placeholder="All flows"
-                style={{ minWidth: 200, maxWidth: 340 }}
-                maxTagCount={2}
-                value={critFlows}
-                onChange={setCritFlows}
-                showSearch
-                filterOption={(input, opt) => (opt?.label as string ?? '').toLowerCase().includes(input.toLowerCase())}
-                options={flows.map((f) => ({ label: f.name, value: f.name })).sort((a, b) => a.label.localeCompare(b.label))}
-              />
-            }
-          >
-            <ResponsiveContainer width="100%" height={300}>
-              <PieChart>
-                <Pie data={critPieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} label={({ name, percent }) => `${name} (${((percent ?? 0) * 100).toFixed(0)}%)`} labelLine>
-                  {critPieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-                </Pie>
-                <Tooltip />
-              </PieChart>
-            </ResponsiveContainer>
-          </Card>
-        </Col>
-
-        {/* Radar */}
-        <Col xs={24} md={12}>
-          <Card
-            title={radarTitle}
-            size="small"
-            extra={
-              <Select
-                mode="multiple"
-                allowClear
-                placeholder="Top 5 by risk"
-                style={{ minWidth: 200, maxWidth: 340 }}
-                maxTagCount={2}
-                value={radarSelected}
-                onChange={(vals) => setRadarSelected(vals.slice(0, 5))}
-                showSearch
-                filterOption={(input, opt) => (opt?.label as string ?? '').toLowerCase().includes(input.toLowerCase())}
-                options={flows.map((f) => ({ label: f.name, value: f.name })).sort((a, b) => a.label.localeCompare(b.label))}
-              />
-            }
-          >
-            {radarFlows.length < 2 ? (
-              <div style={{ height: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8b949e' }}>
-                Select at least 2 flows to display the radar
-              </div>
-            ) : (
-              <ResponsiveContainer width="100%" height={300}>
-                <RadarChart data={radarData}>
-                  <PolarGrid />
-                  <PolarAngleAxis dataKey="subject" tick={{ fontSize: 11 }} />
-                  <PolarRadiusAxis />
-                  {radarFlows.map((f, i) => (
-                    <Radar
-                      key={f.name}
-                      name={f.name.length > 20 ? f.name.slice(0, 17) + '...' : f.name}
-                      dataKey={`flow${i}`}
-                      stroke={COLORS[i]}
-                      fill={COLORS[i]}
-                      fillOpacity={0.15}
-                    />
-                  ))}
-                  <Legend />
-                  <Tooltip />
-                </RadarChart>
-              </ResponsiveContainer>
-            )}
-          </Card>
-        </Col>
-      </Row>
-
-      {/* Flow Table */}
-      <Card title="All Business Flows — Risk & Compliance Summary" size="small">
-        <Table
-          dataSource={flows}
-          rowKey="name"
-          size="small"
-          pagination={{ pageSize: 15, showSizeChanger: true, position: ['topRight'] }}
-          scroll={{ x: 1000 }}
-          columns={enhanceColumnsWithSortAndFilters([
-            { title: 'Business Flow', dataIndex: 'name', key: 'name', ellipsis: true, width: 200, sorter: (a, b) => a.name.localeCompare(b.name) },
-            { title: 'Tasks', dataIndex: 'taskCount', key: 'tasks', width: 60, sorter: (a, b) => a.taskCount - b.taskCount },
-            { title: 'Apps', dataIndex: 'appCount', key: 'apps', width: 60, sorter: (a, b) => a.appCount - b.appCount },
-            {
-              title: 'Risk', dataIndex: 'riskScore', key: 'risk', width: 90,
-              sorter: (a, b) => a.riskScore - b.riskScore,
-              defaultSortOrder: 'descend',
-              render: (v: number) => { const r = riskLevel(v); return <Tag color={r.color}>{v} ({r.label})</Tag>; },
-            },
-            { title: 'CPNI', key: 'cpni', width: 55, render: (_, r) => r.cpni.yes || '-' },
-            { title: 'SPI', key: 'spi', width: 55, render: (_, r) => (r.handleSpi.yes + r.storeSpi.yes) || '-' },
-            { title: 'PCI', key: 'pci', width: 55, render: (_, r) => (r.pciData.yes + r.pciDataStored.yes) || '-' },
-            { title: 'SOX', key: 'sox', width: 55, render: (_, r) => r.soxFsa.yes || '-' },
-            { title: 'Cust.', key: 'cf', width: 55, render: (_, r) => r.customerFacing.yes || '-' },
-            { title: 'Inet.', key: 'if', width: 55, render: (_, r) => r.internetFacing.yes || '-' },
-            { title: 'Srv Vulns', dataIndex: 'serverVulnerabilities', key: 'sv', width: 90, sorter: (a, b) => a.serverVulnerabilities - b.serverVulnerabilities },
-            { title: 'DB Vulns', dataIndex: 'dbVulnerabilities', key: 'dv', width: 90, sorter: (a, b) => a.dbVulnerabilities - b.dbVulnerabilities },
-          ], flows)}
-        />
-      </Card>
     </>
   );
 }

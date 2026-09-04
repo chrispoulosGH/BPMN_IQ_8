@@ -820,13 +820,14 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   const factoryDropSideRef = useRef<'before' | 'after'>('after');
   const [factoryDropTarget, setFactoryDropTarget] = useState<{ key: string; side: 'before' | 'after' } | null>(null);
 
-  const OUTER_TAB_KEYS = ['analytics', 'valueStreams', 'bpmn', 'data', 'neighborhoods'];
+  // Value Streams/Journeys, Analytics, Diagrams, Reports, Frameworks, System Components, SearchAll
+  const OUTER_TAB_KEYS = ['valueStreams', 'analytics', 'bpmn', 'reports', 'neighborhoods', 'data', 'searchAll'];
   const ANALYTICS_TAB_KEYS = ['dashboard', 'reports'];
   const DATA_TAB_KEYS = ['databases', 'applications', 'servers'];
 
   const [outerTabOrder, setOuterTabOrder] = useState<string[]>(() => {
     try {
-      const saved = localStorage.getItem('bpmniq_outer_tab_order');
+      const saved = localStorage.getItem('bpmniq_outer_tab_order_v4');
       if (saved) {
         const parsed: string[] = JSON.parse(saved);
         return [...parsed.filter((k) => OUTER_TAB_KEYS.includes(k)), ...OUTER_TAB_KEYS.filter((k) => !parsed.includes(k))];
@@ -867,7 +868,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   }, [neighborhoodTabOrder]);
 
   useEffect(() => {
-    try { localStorage.setItem('bpmniq_outer_tab_order', JSON.stringify(outerTabOrder)); } catch { /* ignore */ }
+    try { localStorage.setItem('bpmniq_outer_tab_order_v4', JSON.stringify(outerTabOrder)); } catch { /* ignore */ }
   }, [outerTabOrder]);
   useEffect(() => {
     try { localStorage.setItem('bpmniq_analytics_tab_order', JSON.stringify(analyticsTabOrder)); } catch { /* ignore */ }
@@ -3021,33 +3022,16 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
     ),
   })), [activeValueStreamsModeByModel, handleValueStreamCapabilitySelect, handleValueStreamFlowSelect, handleValueStreamRollupSelect, neighborhoodTabLabel, selectedValueStreamEntity, sortedValueStreamModels]);
 
+  // Reports used to live here as a sub-tab alongside Dashboards — moved to
+  // its own top-level tab (see the 'reports' entry in the outer Tabs below),
+  // since ReportsPanel is a standalone, non-model-scoped component. Only
+  // Dashboards is left under Analytics, so the per-model pane renders it
+  // directly instead of through a now-single-item nested Tabs.
   const analyticsModelTabItems = useMemo(() => sortedAnalyticsModels.map((model) => ({
     key: model.name,
     label: neighborhoodTabLabel(model.name, model.name),
-    children: (
-      <Tabs
-        className="factory-tabs"
-        activeKey={activeAnalyticsTabsByModel[model.name] || activeAnalyticsTab || 'dashboard'}
-        onChange={(key) => {
-          setActiveAnalyticsTab(key);
-          setActiveAnalyticsTabsByModel((current) => ({ ...current, [model.name]: key }));
-        }}
-        destroyInactiveTabPane
-        items={[
-          {
-            key: 'dashboard',
-            label: analyticsTabLabel('dashboard', <span><DashboardOutlined /> Dashboards</span>),
-            children: <Dashboard key={`dashboard:${model.name}`} />,
-          },
-          {
-            key: 'reports',
-            label: analyticsTabLabel('reports', <span><FileTextOutlined /> Reports</span>),
-            children: <ReportsPanel key={`reports:${model.name}`} />,
-          },
-        ].sort((a, b) => analyticsTabOrder.indexOf(a.key) - analyticsTabOrder.indexOf(b.key))}
-      />
-    ),
-  })), [activeAnalyticsTab, activeAnalyticsTabsByModel, analyticsTabLabel, neighborhoodTabLabel, sortedAnalyticsModels]);
+    children: <Dashboard key={`dashboard:${model.name}`} neighborhoodName={model.name} onViewDiagramClick={handleViewDiagramForBusinessFlow} />,
+  })), [neighborhoodTabLabel, sortedAnalyticsModels, handleViewDiagramForBusinessFlow]);
 
   const dataTabItems = useMemo(() => visibleDataTabs.map((tab) => {
     const componentType = tab.key;
@@ -3404,6 +3388,11 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                 ),
               },
               {
+                key: 'reports',
+                label: outerTabLabel('reports', <span><FileTextOutlined /> Reports</span>),
+                children: <ReportsPanel />,
+              },
+              {
                 key: 'valueStreams',
                 label: outerTabLabel('valueStreams', <span><BranchesOutlined /> Value Streams/Journeys</span>),
                 children: (
@@ -3600,6 +3589,71 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                 ),
               },
               {
+                // Same horizontal-tree + search UI as Frameworks > [a framework] >
+                // Model Components (ComponentsViewer, same wiring/handlers), just
+                // promoted to a top-level tab so it's reachable without drilling
+                // into Frameworks first. Scoped to activeNeighborhoodTab — the
+                // same "current framework" state Frameworks itself uses — with
+                // its own picker here so the framework can be changed without
+                // leaving this tab.
+                key: 'searchAll',
+                label: outerTabLabel('searchAll', <span><SearchOutlined /> SearchAll</span>),
+                children: (
+                  <div className="flex h-full min-h-0 flex-col">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 16px', borderBottom: '1px solid #dbe3ec', background: '#f8fafc' }}>
+                      <span style={{ fontSize: 13, color: '#475569', fontWeight: 500 }}>Framework:</span>
+                      <Select
+                        size="small"
+                        style={{ minWidth: 240 }}
+                        value={activeNeighborhoodTab || undefined}
+                        placeholder="Select a framework"
+                        onChange={setActiveNeighborhoodTab}
+                        options={neighborhoodTabs.map((n) => ({ value: n.name, label: n.name }))}
+                      />
+                    </div>
+                    {activeNeighborhoodTab ? renderScrollablePane(
+                      <ComponentsViewer
+                        neighborhoodName={activeNeighborhoodTab}
+                        availableComponentIds={(neighborhoodFactories[activeNeighborhoodTab] || []).map((f) => f._id)}
+                        requestedComponent={modelComponentNavRequest[activeNeighborhoodTab] || null}
+                        onComponentTabSelect={(componentId) => {
+                          setActiveModelComponentTabs((current) => ({ ...current, [activeNeighborhoodTab]: componentId }));
+                        }}
+                        onApplicationLinkClick={handleApplicationLinkClick}
+                        onViewDiagramClick={handleViewDiagramForBusinessFlow}
+                        renderComponentContent={(componentId, componentName, highlightedRowName) => {
+                          const factoryComponent = (neighborhoodFactories[activeNeighborhoodTab] || []).find((f) => f._id === componentId);
+                          if (!factoryComponent) return <div>Component not found</div>;
+
+                          return (
+                            <NeighborhoodFactory
+                              canManageFactories={canEditFactories}
+                              userRole={user?.role}
+                              fixedNeighborhoodName={activeNeighborhoodTab}
+                              fixedFactoryId={componentId}
+                              defaultRowSearch={highlightedRowName || factorySearch[componentId]}
+                              defaultRowSearchColumn="name"
+                              defaultAddData={factoryAdd[componentId]}
+                              hideFactoryList
+                              onNeighborhoodsChanged={loadNeighborhoodTabs}
+                              onFactoryDeleted={() => loadNeighborhoodFactoriesFor(activeNeighborhoodTab)}
+                              onApplicationLinkClick={handleApplicationLinkClick}
+                              onRowsChanged={() => {
+                                if (activeNeighborhoodTab === scopedNeighborhoodName) {
+                                  refreshReferenceData(scopedNeighborhoodName);
+                                }
+                              }}
+                            />
+                          );
+                        }}
+                      />,
+                    ) : (
+                      <Empty description="No frameworks available" style={{ marginTop: 48 }} />
+                    )}
+                  </div>
+                ),
+              },
+              {
                 key: 'neighborhoods',
                 label: outerTabLabel('neighborhoods', <span><ShoppingOutlined /> Frameworks</span>),
                 children: loadingNeighborhoodTabs ? (
@@ -3637,11 +3691,18 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
         </Content>
 
         {/* ─── Right Sidebar ──────────────────────────────── */}
+        {/* This panel only ever has content when a Value Streams/Journeys
+            entity is selected — on every other tab (and on this one before
+            anything's selected) it rendered empty but still reserved
+            rightWidth px, needlessly narrowing every other view (e.g. the
+            Business Flow Comparison grid). Fold "nothing to show" into the
+            same collapsed state as the manual toggle, rather than adding a
+            second visibility concept. */}
         <Sider
-          width={rightCollapsed ? 0 : rightWidth}
+          width={(rightCollapsed || !selectedValueStreamEntity) ? 0 : rightWidth}
           className="sidebar-panel"
           collapsedWidth={0}
-          collapsed={rightCollapsed}
+          collapsed={rightCollapsed || !selectedValueStreamEntity}
           trigger={null}
           style={{ position: 'relative', transition: rightResizing.current ? 'none' : 'width 0.2s' }}
         >
@@ -3769,7 +3830,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
             )}
           </div>
         </Sider>
-        {rightCollapsed && (
+        {rightCollapsed && selectedValueStreamEntity && (
           <div style={{ display: 'flex', alignItems: 'flex-start', paddingTop: 8 }}>
             <Button
               size="small"
