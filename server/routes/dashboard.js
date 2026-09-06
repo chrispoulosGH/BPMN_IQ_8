@@ -8,9 +8,16 @@ const Server = require('../models/Server');
 const DatabaseInstance = require('../models/DatabaseInstance');
 const Model = require('../models/Model');
 const ApplicationFeatureDevCost = require('../models/ApplicationFeatureDevCost');
+const CanonicalData = require('../models/CanonicalData');
 const { getNeighborhoodName, withNeighborhood } = require('../utils/neighborhoodScope');
 const { loadScopedFlowCostDocumentsFromComponentsAndDiagrams } = require('../utils/flowCostSource');
 const { listApplicationReferences } = require('../utils/applicationReferenceLookup');
+
+// Applications/Servers/Software/APIs canonical data (security-risk scoring
+// below) all live under this reference-data neighborhood regardless of
+// which framework tab is active — same constant/value as routes/servers.js
+// and routes/databases.js.
+const SYSTEM_COMPONENTS_NEIGHBORHOOD = 'System Components';
 
 // buildServerScopeQuery()/buildDatabaseScopeQuery() build their $in lists from
 // normalizeIdentifier()'d (lower-cased) application correlationId/acronym/name
@@ -1539,6 +1546,526 @@ router.get('/capability-cost-by-year', async (req, res) => {
       .slice(0, 10);
 
     res.json({ capabilities, year });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Business Flow Security Risk ───────────────────────────
+// "Top 20 Business Process Flows by security vulnerability" — examines the
+// real Servers/Software/APIs behind each flow's Applications for externally
+// established security issues (CVEs, missed patches, expired OS/software
+// support, non-compliant posture) to produce a probability-of-breach score,
+// and separately rates how severe a breach WOULD be from each Application's
+// own data/security classification (financial/proprietary/PII data ranks
+// higher than, say, an internal HR tool) — two independent axes, exactly as
+// requested: a probability score, plus a High/Med/Low severity rating.
+
+// Excel serial-day numbers (how this canonical data's date columns are
+// stored — see import_llm_ami_servers.js's own copy of this same
+// conversion) — converted back to real dates for EOL/end-of-support checks.
+function excelSerialToDate(serial) {
+  const numeric = Number(serial);
+  if (!Number.isFinite(numeric) || !numeric) return null;
+  const utcDays = Math.floor(numeric - 25569); // Excel epoch -> Unix epoch, in days
+  const date = new Date(utcDays * 86400 * 1000);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+// Servers/Software/APIs all reference their owning Application via an
+// FK_ column, but the exact header text isn't perfectly consistent across
+// them ("FK_System Components[Applications].APP_ID" — plural "Components"
+// — for Servers/Software, "FK_System Component[Applications].APP_ID" —
+// singular — for APIs) — match either rather than hardcoding one.
+const FK_APPLICATION_ID_KEY_REGEX = /^FK_System Components?\[Applications\]\.APP_ID$/i;
+function getFkApplicationId(values) {
+  for (const key of Object.keys(values || {})) {
+    if (FK_APPLICATION_ID_KEY_REGEX.test(key)) return String(values[key] || '').trim();
+  }
+  return '';
+}
+
+// A server/software asset counts as having an externally established
+// security issue if it trips any of these — real signals already present in
+// the imported data (a known critical/high CVE, an OS or software version
+// past its own vendor's support/EOL date, behind on patching, or flagged
+// non-compliant), not a vague point score. Probability of breach below is
+// literally "what fraction of this flow's infrastructure has one of these,"
+// which both stays naturally bounded to 0-100% and — checked empirically
+// against this data — spreads flows across a real, useful range (roughly
+// 3%-60%) instead of everything clustering near one end.
+function isServerAtRisk(values) {
+  if ((Number(values['CRITICAL_VULNS Qualifier']) || 0) > 0) return true;
+  const eolDate = excelSerialToDate(values['OS_EOL_DATE Qualifier']);
+  if (eolDate && eolDate < new Date()) return true;
+  if (String(values['PATCHING_STATUS Qualifier'] || '') === 'Critical') return true;
+  if (String(values['COMPLIANCE_STATUS Aggregate'] || '') === 'Non-Compliant') return true;
+  return false;
+}
+
+// KNOWN_SECURITY_ISSUES is free text that already embeds a severity word
+// per real issue (e.g. "CVE-2024-21407 (Critical) - Hyper-V Remote Code
+// Execution"), or "End of Support - No security updates", or "None".
+function isSoftwareAtRisk(values) {
+  const issues = String(values['KNOWN_SECURITY_ISSUES Qualifier'] || '');
+  if (/\(critical\)/i.test(issues) || /\(high\)/i.test(issues)) return true;
+  if (/end of support/i.test(issues)) return true;
+  const endOfSupport = excelSerialToDate(values['END_OF_SUPPORT_DATE Qualifier']);
+  if (endOfSupport && endOfSupport < new Date()) return true;
+  return false;
+}
+
+// Severity of potential damage — independent of how LIKELY a breach is —
+// based on what kind of data/how classified the Application itself is.
+// Financial (SOX/PCI), regulated-privacy (GDPR/CCPA/HIPAA), and export-
+// controlled (ITAR) data, or anything already tagged "Critical"/PII, ranks
+// High; general confidential business data ranks Medium; everything else
+// (e.g. an internal tool with nothing more sensitive than employee emails)
+// ranks Low — matching the financial-data-vs-employee-email-id example.
+const SENSITIVE_COMPLIANCE_REGEX = /\b(SOX|PCI|GDPR|CCPA|ITAR|HIPAA)\b/i;
+function applicationSeverityRank(profile) {
+  if (!profile) return 1;
+  if (
+    profile.securityClassification === 'Critical'
+    || profile.dataClassification === 'PII/Sensitive'
+    || SENSITIVE_COMPLIANCE_REGEX.test(profile.complianceRequirements)
+  ) {
+    return 3; // High
+  }
+  if (profile.securityClassification === 'High' || profile.dataClassification === 'Confidential') {
+    return 2; // Med
+  }
+  return 1; // Low
+}
+const SEVERITY_RANK_LABELS = { 1: 'Low', 2: 'Med', 3: 'High' };
+
+// Shared by both routes below: Business Flow -> Set<app_id> (straight from
+// the Application component's own rows — each carries every (domain,
+// subdomain, businessFlow) combination it's used in via __lineageVariants,
+// so this needs no per-Task resolution at all), the Application
+// security/data-classification profiles, and the Servers/Software/APIs
+// behind each one — a handful of queries total, not one per flow or per
+// application, regardless of which route needs it.
+async function loadSecurityRiskContext(req) {
+  const appComponent = await Component.findOne(
+    withNeighborhood(req, { name: { $regex: /^application$/i } }),
+    { rows: 1 }
+  ).lean();
+
+  const flowToAppIds = new Map();
+  for (const row of Array.isArray(appComponent?.rows) ? appComponent.rows : []) {
+    const values = getRowValues(row?.values);
+    const appId = String(values.app_id || '').trim();
+    if (!appId) continue;
+    const variants = Array.isArray(values.__lineageVariants) && values.__lineageVariants.length
+      ? values.__lineageVariants
+      : (values.__lineage ? [values.__lineage] : []);
+    for (const variant of variants) {
+      const flowName = String(variant?.businessFlow || '').trim();
+      if (!flowName) continue;
+      if (!flowToAppIds.has(flowName)) flowToAppIds.set(flowName, new Set());
+      flowToAppIds.get(flowName).add(appId);
+    }
+  }
+
+  const [canonicalApps, canonicalServers, canonicalSoftware, canonicalApis] = await Promise.all([
+    CanonicalData.find({ neighborhoodName: SYSTEM_COMPONENTS_NEIGHBORHOOD, componentType: 'Applications' }, { values: 1 }).lean(),
+    CanonicalData.find({ neighborhoodName: SYSTEM_COMPONENTS_NEIGHBORHOOD, componentType: 'Servers' }, { values: 1 }).lean(),
+    CanonicalData.find({ neighborhoodName: SYSTEM_COMPONENTS_NEIGHBORHOOD, componentType: 'Software' }, { values: 1 }).lean(),
+    CanonicalData.find({ neighborhoodName: SYSTEM_COMPONENTS_NEIGHBORHOOD, componentType: 'APIs' }, { values: 1 }).lean(),
+  ]);
+
+  const appProfileById = new Map();
+  for (const doc of canonicalApps) {
+    const v = doc.values || {};
+    const appId = String(v['APP_ID Qualifier'] || '').trim();
+    if (!appId) continue;
+    appProfileById.set(appId, {
+      name: String(v['APP_NAME Qualifier'] || v['APP_ACRONYM Component'] || appId).trim(),
+      securityClassification: String(v['SECURITY_CLASSIFICATION Aggregator'] || '').trim(),
+      dataClassification: String(v['DATA_CLASSIFICATION Aggregator'] || '').trim(),
+      complianceRequirements: String(v['COMPLIANCE_REQUIREMENTS Qualifier'] || '').trim(),
+      internetFacing: String(v['INTERNET_FACING Qualifier'] || '').trim(),
+      customerFacing: String(v['CUSTOMER_FACING Qualifier'] || '').trim(),
+      businessCriticality: String(v['BUSINESS_CRITICALITY Aggregator'] || '').trim(),
+    });
+  }
+
+  function groupByApplicationId(docs) {
+    const byApp = new Map();
+    for (const doc of docs) {
+      const appId = getFkApplicationId(doc.values);
+      if (!appId) continue;
+      if (!byApp.has(appId)) byApp.set(appId, []);
+      byApp.get(appId).push(doc.values || {});
+    }
+    return byApp;
+  }
+
+  return {
+    flowToAppIds,
+    appProfileById,
+    serversByApp: groupByApplicationId(canonicalServers),
+    softwareByApp: groupByApplicationId(canonicalSoftware),
+    apisByApp: groupByApplicationId(canonicalApis),
+  };
+}
+
+/**
+ * GET /api/dashboard/business-flow-security-risk
+ * Top business flows ranked by an estimated probability of a security
+ * breach, each with a High/Med/Low severity rating for how damaging that
+ * breach would actually be.
+ */
+router.get('/business-flow-security-risk', async (req, res) => {
+  try {
+    const { flowToAppIds, appProfileById, serversByApp, softwareByApp, apisByApp } = await loadSecurityRiskContext(req);
+
+    const flows = [];
+    for (const [businessFlow, appIdSet] of flowToAppIds.entries()) {
+      let atRiskCount = 0;
+      let assetCount = 0;
+      let serverCount = 0;
+      let softwareCount = 0;
+      let apiCount = 0;
+      let criticalServerCount = 0;
+      let criticalSoftwareCount = 0;
+      let severityRankSum = 0;
+      let anyInternetFacing = false;
+      const appNames = [];
+
+      for (const appId of appIdSet) {
+        const servers = serversByApp.get(appId) || [];
+        const software = softwareByApp.get(appId) || [];
+        const apis = apisByApp.get(appId) || [];
+        serverCount += servers.length;
+        softwareCount += software.length;
+        apiCount += apis.length;
+        assetCount += servers.length + software.length;
+
+        for (const v of servers) if (isServerAtRisk(v)) { atRiskCount += 1; criticalServerCount += 1; }
+        for (const v of software) if (isSoftwareAtRisk(v)) { atRiskCount += 1; criticalSoftwareCount += 1; }
+
+        const profile = appProfileById.get(appId);
+        if (profile?.name) appNames.push(profile.name);
+        if (profile?.internetFacing === 'Yes') anyInternetFacing = true;
+        severityRankSum += applicationSeverityRank(profile);
+      }
+
+      // Probability = the literal fraction of this flow's examined
+      // infrastructure (servers + software) carrying a real, externally
+      // established issue — internet-facing exposure adds a modest flat
+      // bump on top, since a publicly reachable app is more reachable by an
+      // attacker in the first place, independent of its own patch/CVE state.
+      let probability = assetCount ? Math.round(100 * (atRiskCount / assetCount)) : 0;
+      if (anyInternetFacing) probability = Math.min(100, probability + 5);
+
+      // Severity uses the AVERAGE classification rank across the flow's
+      // applications, not the single worst one — a flow touching one
+      // Critical-classified app alongside several Low ones lands at Medium,
+      // not automatically High just because one component happens to be
+      // sensitive.
+      const avgSeverityRank = appIdSet.size ? Math.round(severityRankSum / appIdSet.size) : 1;
+
+      flows.push({
+        businessFlow,
+        probability,
+        severity: SEVERITY_RANK_LABELS[avgSeverityRank] || 'Low',
+        applicationCount: appIdSet.size,
+        applicationNames: appNames,
+        serverCount,
+        softwareCount,
+        apiCount,
+        criticalServerCount,
+        criticalSoftwareCount,
+      });
+    }
+
+    flows.sort((a, b) => b.probability - a.probability || a.businessFlow.localeCompare(b.businessFlow));
+
+    res.json({ flows: flows.slice(0, 20) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Caps how many at-risk servers/software are returned per application in
+// the detail breakdown below — an application can have dozens of each, and
+// the point of this list is "here's what to go look at first", not a full
+// inventory dump.
+const SECURITY_RISK_DETAIL_LIST_CAP = 12;
+
+function serverRiskSummary(values) {
+  const eolDate = excelSerialToDate(values['OS_EOL_DATE Qualifier']);
+  return {
+    name: String(values['SERVER_NAME Component'] || values['SERVER_ID Qualifier'] || 'Unknown server').trim(),
+    criticalVulns: Number(values['CRITICAL_VULNS Qualifier']) || 0,
+    highVulns: Number(values['HIGH_VULNS Qualifier']) || 0,
+    patchingStatus: String(values['PATCHING_STATUS Qualifier'] || '').trim(),
+    complianceStatus: String(values['COMPLIANCE_STATUS Aggregate'] || '').trim(),
+    osName: String(values['OS_NAME Aggregate'] || '').trim(),
+    osEol: Boolean(eolDate && eolDate < new Date()),
+  };
+}
+
+function softwareRiskSummary(values) {
+  const endOfSupportDate = excelSerialToDate(values['END_OF_SUPPORT_DATE Qualifier']);
+  return {
+    name: String(values['SOFTWARE_NAME Component'] || values['SOFTWARE_ID Qualifier'] || 'Unknown software').trim(),
+    knownSecurityIssues: String(values['KNOWN_SECURITY_ISSUES Qualifier'] || '').trim(),
+    endOfSupport: Boolean(endOfSupportDate && endOfSupportDate < new Date()),
+  };
+}
+
+/**
+ * GET /api/dashboard/business-flow-security-risk/apps?flow=<name>
+ * Per-application breakdown for one business flow — probability/severity
+ * for each application it depends on, plus enough detail (which servers/
+ * software actually tripped the "at risk" check, and why the application is
+ * rated the severity it is) to explain the numbers once one is selected.
+ */
+router.get('/business-flow-security-risk/apps', async (req, res) => {
+  try {
+    const flowName = String(req.query.flow || '').trim();
+    if (!flowName) return res.status(400).json({ error: 'flow query parameter is required' });
+
+    const { flowToAppIds, appProfileById, serversByApp, softwareByApp, apisByApp } = await loadSecurityRiskContext(req);
+    const appIdSet = flowToAppIds.get(flowName);
+    if (!appIdSet || !appIdSet.size) return res.json({ businessFlow: flowName, applications: [] });
+
+    const applications = [];
+    for (const appId of appIdSet) {
+      const servers = serversByApp.get(appId) || [];
+      const software = softwareByApp.get(appId) || [];
+      const apis = apisByApp.get(appId) || [];
+      const profile = appProfileById.get(appId);
+
+      const atRiskServers = servers.filter(isServerAtRisk);
+      const atRiskSoftware = software.filter(isSoftwareAtRisk);
+      const assetCount = servers.length + software.length;
+      const atRiskCount = atRiskServers.length + atRiskSoftware.length;
+
+      let probability = assetCount ? Math.round(100 * (atRiskCount / assetCount)) : 0;
+      if (profile?.internetFacing === 'Yes') probability = Math.min(100, probability + 5);
+
+      applications.push({
+        appId,
+        name: profile?.name || appId,
+        probability,
+        severity: SEVERITY_RANK_LABELS[applicationSeverityRank(profile)] || 'Low',
+        securityClassification: profile?.securityClassification || '',
+        dataClassification: profile?.dataClassification || '',
+        complianceRequirements: profile?.complianceRequirements || '',
+        internetFacing: profile?.internetFacing || '',
+        customerFacing: profile?.customerFacing || '',
+        serverCount: servers.length,
+        softwareCount: software.length,
+        apiCount: apis.length,
+        atRiskServerCount: atRiskServers.length,
+        atRiskSoftwareCount: atRiskSoftware.length,
+        atRiskServers: atRiskServers.slice(0, SECURITY_RISK_DETAIL_LIST_CAP).map(serverRiskSummary),
+        atRiskSoftware: atRiskSoftware.slice(0, SECURITY_RISK_DETAIL_LIST_CAP).map(softwareRiskSummary),
+      });
+    }
+
+    applications.sort((a, b) => b.probability - a.probability || a.name.localeCompare(b.name));
+
+    res.json({ businessFlow: flowName, applications });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Business Flow Defect Risk ─────────────────────────────
+// "Top 20 Business Process Flows by Defect Risk" — same shape as the
+// security-risk section above (same shared context, same probability-ratio
+// + averaged-rank methodology, calibrated the same way against the real
+// data), but for operational reliability instead of security: probability
+// of failure comes from hardware/software health signals unrelated to
+// security (out-of-warranty age, stale firmware, overutilization, weak
+// backup cadence, lapsed software support) rather than CVEs/compliance;
+// business criticality of failure comes from each Application's own
+// BUSINESS_CRITICALITY rating rather than its data-sensitivity classification.
+
+// Calibrated like isServerAtRisk/isSoftwareAtRisk above — checked against
+// this data before picking these specific conditions. A server tripping ANY
+// of {out-of-warranty, cpu/memory overutilized} counted alone or in a wide
+// OR would flag ~73% of the fleet (useless for ranking); this narrower
+// combination flags ~32%, which — combined with software's own near-0%
+// rate — produces the same kind of well-spread 0-100% range the security
+// score has, instead of everything clustering near one end.
+function isServerDefectRisk(values) {
+  const now = new Date();
+  const warrantyExpiry = excelSerialToDate(values['WARRANTY_EXPIRY Qualifier']);
+  const warrantyExpired = Boolean(warrantyExpiry && warrantyExpiry < now);
+  const lastFirmwareUpdate = excelSerialToDate(values['LAST_FIRMWARE_UPDATE Qualifier']);
+  const firmwareStale = Boolean(lastFirmwareUpdate && (now - lastFirmwareUpdate.getTime()) > 2 * 365 * 86400 * 1000);
+  const cpuUtil = Number(values['CPU_UTIL_AVG_PCT Qualifier']) || 0;
+  const memUtil = Number(values['MEMORY_UTIL_AVG_PCT Qualifier']) || 0;
+  const overutilized = cpuUtil > 85 || memUtil > 85;
+  const backupWeak = String(values['BACKUP_STATUS Qualifier'] || '') === 'Weekly';
+
+  if (warrantyExpired && firmwareStale) return true;
+  if (overutilized) return true;
+  if (warrantyExpired && backupWeak) return true;
+  return false;
+}
+
+// Software here carries no defect/bug-count field of its own — lapsed
+// vendor support is the one real signal available (unsupported software
+// keeps whatever bugs it already has), same low base rate role software
+// played in the security score above.
+function isSoftwareDefectRisk(values) {
+  const endOfSupport = excelSerialToDate(values['END_OF_SUPPORT_DATE Qualifier']);
+  return Boolean(endOfSupport && endOfSupport < new Date());
+}
+
+// Only 3 of the 5 usual tiers show up in this data (no "Critical"/"Low"
+// values) — Mission Critical outranks Business Critical outranks plain
+// High, so that's the order mapped here, same 3-bucket High/Med/Low scale
+// as the security score for visual consistency between the two charts.
+function applicationCriticalityRank(profile) {
+  if (!profile) return 1;
+  if (profile.businessCriticality === 'Mission Critical') return 3; // High
+  if (profile.businessCriticality === 'Business Critical') return 2; // Med
+  return 1; // Low ("High" tier, or unset)
+}
+
+/**
+ * GET /api/dashboard/business-flow-defect-risk
+ * Top business flows ranked by an estimated probability of an operational
+ * defect/failure, each with a High/Med/Low rating for how business-critical
+ * that failure would actually be.
+ */
+router.get('/business-flow-defect-risk', async (req, res) => {
+  try {
+    const { flowToAppIds, appProfileById, serversByApp, softwareByApp, apisByApp } = await loadSecurityRiskContext(req);
+
+    const flows = [];
+    for (const [businessFlow, appIdSet] of flowToAppIds.entries()) {
+      let atRiskCount = 0;
+      let assetCount = 0;
+      let serverCount = 0;
+      let softwareCount = 0;
+      let apiCount = 0;
+      let criticalServerCount = 0;
+      let criticalSoftwareCount = 0;
+      let criticalityRankSum = 0;
+      const appNames = [];
+
+      for (const appId of appIdSet) {
+        const servers = serversByApp.get(appId) || [];
+        const software = softwareByApp.get(appId) || [];
+        const apis = apisByApp.get(appId) || [];
+        serverCount += servers.length;
+        softwareCount += software.length;
+        apiCount += apis.length;
+        assetCount += servers.length + software.length;
+
+        for (const v of servers) if (isServerDefectRisk(v)) { atRiskCount += 1; criticalServerCount += 1; }
+        for (const v of software) if (isSoftwareDefectRisk(v)) { atRiskCount += 1; criticalSoftwareCount += 1; }
+
+        const profile = appProfileById.get(appId);
+        if (profile?.name) appNames.push(profile.name);
+        criticalityRankSum += applicationCriticalityRank(profile);
+      }
+
+      const probability = assetCount ? Math.round(100 * (atRiskCount / assetCount)) : 0;
+      const avgCriticalityRank = appIdSet.size ? Math.round(criticalityRankSum / appIdSet.size) : 1;
+
+      flows.push({
+        businessFlow,
+        probability,
+        criticality: SEVERITY_RANK_LABELS[avgCriticalityRank] || 'Low',
+        applicationCount: appIdSet.size,
+        applicationNames: appNames,
+        serverCount,
+        softwareCount,
+        apiCount,
+        criticalServerCount,
+        criticalSoftwareCount,
+      });
+    }
+
+    flows.sort((a, b) => b.probability - a.probability || a.businessFlow.localeCompare(b.businessFlow));
+
+    res.json({ flows: flows.slice(0, 20) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+function serverDefectSummary(values) {
+  const now = new Date();
+  const warrantyExpiry = excelSerialToDate(values['WARRANTY_EXPIRY Qualifier']);
+  const lastFirmwareUpdate = excelSerialToDate(values['LAST_FIRMWARE_UPDATE Qualifier']);
+  return {
+    name: String(values['SERVER_NAME Component'] || values['SERVER_ID Qualifier'] || 'Unknown server').trim(),
+    cpuUtilPct: Number(values['CPU_UTIL_AVG_PCT Qualifier']) || 0,
+    memoryUtilPct: Number(values['MEMORY_UTIL_AVG_PCT Qualifier']) || 0,
+    backupStatus: String(values['BACKUP_STATUS Qualifier'] || '').trim(),
+    warrantyExpired: Boolean(warrantyExpiry && warrantyExpiry < now),
+    firmwareStale: Boolean(lastFirmwareUpdate && (now - lastFirmwareUpdate.getTime()) > 2 * 365 * 86400 * 1000),
+  };
+}
+
+function softwareDefectSummary(values) {
+  const endOfSupportDate = excelSerialToDate(values['END_OF_SUPPORT_DATE Qualifier']);
+  return {
+    name: String(values['SOFTWARE_NAME Component'] || values['SOFTWARE_ID Qualifier'] || 'Unknown software').trim(),
+    endOfSupport: Boolean(endOfSupportDate && endOfSupportDate < new Date()),
+  };
+}
+
+/**
+ * GET /api/dashboard/business-flow-defect-risk/apps?flow=<name>
+ * Per-application breakdown for one business flow — probability of defect/
+ * failure and business-criticality rating for each application it depends
+ * on, plus which specific servers/software tripped the "at risk" check.
+ */
+router.get('/business-flow-defect-risk/apps', async (req, res) => {
+  try {
+    const flowName = String(req.query.flow || '').trim();
+    if (!flowName) return res.status(400).json({ error: 'flow query parameter is required' });
+
+    const { flowToAppIds, appProfileById, serversByApp, softwareByApp, apisByApp } = await loadSecurityRiskContext(req);
+    const appIdSet = flowToAppIds.get(flowName);
+    if (!appIdSet || !appIdSet.size) return res.json({ businessFlow: flowName, applications: [] });
+
+    const applications = [];
+    for (const appId of appIdSet) {
+      const servers = serversByApp.get(appId) || [];
+      const software = softwareByApp.get(appId) || [];
+      const apis = apisByApp.get(appId) || [];
+      const profile = appProfileById.get(appId);
+
+      const atRiskServers = servers.filter(isServerDefectRisk);
+      const atRiskSoftware = software.filter(isSoftwareDefectRisk);
+      const assetCount = servers.length + software.length;
+      const atRiskCount = atRiskServers.length + atRiskSoftware.length;
+      const probability = assetCount ? Math.round(100 * (atRiskCount / assetCount)) : 0;
+
+      applications.push({
+        appId,
+        name: profile?.name || appId,
+        probability,
+        criticality: SEVERITY_RANK_LABELS[applicationCriticalityRank(profile)] || 'Low',
+        businessCriticality: profile?.businessCriticality || '',
+        internetFacing: profile?.internetFacing || '',
+        customerFacing: profile?.customerFacing || '',
+        serverCount: servers.length,
+        softwareCount: software.length,
+        apiCount: apis.length,
+        atRiskServerCount: atRiskServers.length,
+        atRiskSoftwareCount: atRiskSoftware.length,
+        atRiskServers: atRiskServers.slice(0, SECURITY_RISK_DETAIL_LIST_CAP).map(serverDefectSummary),
+        atRiskSoftware: atRiskSoftware.slice(0, SECURITY_RISK_DETAIL_LIST_CAP).map(softwareDefectSummary),
+      });
+    }
+
+    applications.sort((a, b) => b.probability - a.probability || a.name.localeCompare(b.name));
+
+    res.json({ businessFlow: flowName, applications });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

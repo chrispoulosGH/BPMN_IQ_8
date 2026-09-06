@@ -584,6 +584,123 @@ export interface FeatureCostPoint { businessFlow: string; application: string; y
 export const getDashboardFeatureCost3D = (): Promise<{ businessFlows: string[]; applications: string[]; points: FeatureCostPoint[] }> =>
   api.get('/dashboard/feature-cost-3d').then((r) => r.data);
 
+// Top business flows by estimated security-breach probability — probability
+// is the fraction of the flow's actual Servers/Software examined that carry
+// a real, externally established issue (CVE, missed patch, expired
+// OS/software support, non-compliant posture); severity is a separate
+// High/Med/Low rating of how damaging a breach would be, based on the
+// flow's Applications' own data/security classification.
+export interface BusinessFlowSecurityRisk {
+  businessFlow: string;
+  probability: number;
+  severity: 'High' | 'Med' | 'Low';
+  applicationCount: number;
+  applicationNames: string[];
+  serverCount: number;
+  softwareCount: number;
+  apiCount: number;
+  criticalServerCount: number;
+  criticalSoftwareCount: number;
+}
+export const getDashboardBusinessFlowSecurityRisk = (): Promise<{ flows: BusinessFlowSecurityRisk[] }> =>
+  api.get('/dashboard/business-flow-security-risk').then((r) => r.data);
+
+// Per-application breakdown for one business flow, selected from the Top 20
+// Security Vulnerability chart — same probability/severity per application,
+// plus enough detail (which specific servers/software tripped the "at
+// risk" check, and why the application is rated the severity it is) to
+// explain the numbers once an application is selected in the 3D view.
+export interface BusinessFlowSecurityRiskServer {
+  name: string;
+  criticalVulns: number;
+  highVulns: number;
+  patchingStatus: string;
+  complianceStatus: string;
+  osName: string;
+  osEol: boolean;
+}
+export interface BusinessFlowSecurityRiskSoftware {
+  name: string;
+  knownSecurityIssues: string;
+  endOfSupport: boolean;
+}
+export interface BusinessFlowSecurityRiskApp {
+  appId: string;
+  name: string;
+  probability: number;
+  severity: 'High' | 'Med' | 'Low';
+  securityClassification: string;
+  dataClassification: string;
+  complianceRequirements: string;
+  internetFacing: string;
+  customerFacing: string;
+  serverCount: number;
+  softwareCount: number;
+  apiCount: number;
+  atRiskServerCount: number;
+  atRiskSoftwareCount: number;
+  atRiskServers: BusinessFlowSecurityRiskServer[];
+  atRiskSoftware: BusinessFlowSecurityRiskSoftware[];
+}
+export const getDashboardBusinessFlowSecurityRiskApps = (flow: string): Promise<{ businessFlow: string; applications: BusinessFlowSecurityRiskApp[] }> =>
+  api.get('/dashboard/business-flow-security-risk/apps', { params: { flow } }).then((r) => r.data);
+
+// Top business flows by estimated operational-defect/failure probability —
+// same ratio methodology as security risk above, but the "at risk" signals
+// are reliability ones (out-of-warranty + stale firmware, CPU/memory
+// overutilization, weak backup cadence, lapsed software support) instead of
+// security ones; criticality is a separate High/Med/Low rating of how
+// business-critical a failure would be, based on the flow's Applications'
+// own BUSINESS_CRITICALITY rating.
+export interface BusinessFlowDefectRisk {
+  businessFlow: string;
+  probability: number;
+  criticality: 'High' | 'Med' | 'Low';
+  applicationCount: number;
+  applicationNames: string[];
+  serverCount: number;
+  softwareCount: number;
+  apiCount: number;
+  criticalServerCount: number;
+  criticalSoftwareCount: number;
+}
+export const getDashboardBusinessFlowDefectRisk = (): Promise<{ flows: BusinessFlowDefectRisk[] }> =>
+  api.get('/dashboard/business-flow-defect-risk').then((r) => r.data);
+
+// Per-application breakdown for one business flow, selected from the Top 20
+// Defect Risk chart — same probability/criticality per application, plus
+// which specific servers/software tripped the "at risk" check.
+export interface BusinessFlowDefectRiskServer {
+  name: string;
+  cpuUtilPct: number;
+  memoryUtilPct: number;
+  backupStatus: string;
+  warrantyExpired: boolean;
+  firmwareStale: boolean;
+}
+export interface BusinessFlowDefectRiskSoftware {
+  name: string;
+  endOfSupport: boolean;
+}
+export interface BusinessFlowDefectRiskApp {
+  appId: string;
+  name: string;
+  probability: number;
+  criticality: 'High' | 'Med' | 'Low';
+  businessCriticality: string;
+  internetFacing: string;
+  customerFacing: string;
+  serverCount: number;
+  softwareCount: number;
+  apiCount: number;
+  atRiskServerCount: number;
+  atRiskSoftwareCount: number;
+  atRiskServers: BusinessFlowDefectRiskServer[];
+  atRiskSoftware: BusinessFlowDefectRiskSoftware[];
+}
+export const getDashboardBusinessFlowDefectRiskApps = (flow: string): Promise<{ businessFlow: string; applications: BusinessFlowDefectRiskApp[] }> =>
+  api.get('/dashboard/business-flow-defect-risk/apps', { params: { flow } }).then((r) => r.data);
+
 export interface CostByYearItem { name: string; opCost: number; devCost: number; totalCost: number; }
 export interface TaskCostByYearItem extends CostByYearItem { businessFlow: string; }
 export const getDashboardCostByYear = (year: number): Promise<{ flows: CostByYearItem[]; tasks: TaskCostByYearItem[]; year: number }> =>

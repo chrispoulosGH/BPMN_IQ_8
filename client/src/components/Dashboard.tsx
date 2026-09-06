@@ -1,6 +1,6 @@
 import { Fragment, useState, useEffect, useMemo, useRef } from 'react';
 import { Spin, Select, Segmented, Empty, Card, Row, Col, Statistic, Table, Tag, Button } from 'antd';
-import { ReloadOutlined } from '@ant-design/icons';
+import { ReloadOutlined, RightOutlined } from '@ant-design/icons';
 import {
   BarChart,
   Bar,
@@ -23,11 +23,13 @@ import {
   Cell,
 } from 'recharts';
 import { enhanceColumnsWithSortAndFilters } from '../utils/tableEnhancer';
-import { getDashboardTaskRisk, getDashboardFlowRisk, getDashboardCostByYear, getDashboardCapabilityCostByYear, getDashboardCapabilityFlowRelationships, getDashboardFeatureCost3D, getBusinessFlowMap, getDiagram } from '../api';
-import type { CapabilityCostByYearItem, CostByYearItem, TaskCostByYearItem, FeatureCostPoint } from '../api';
+import { getDashboardTaskRisk, getDashboardFlowRisk, getDashboardCostByYear, getDashboardCapabilityCostByYear, getDashboardCapabilityFlowRelationships, getDashboardFeatureCost3D, getBusinessFlowMap, getDiagram, getDashboardBusinessFlowSecurityRisk, getDashboardBusinessFlowDefectRisk } from '../api';
+import type { CapabilityCostByYearItem, CostByYearItem, TaskCostByYearItem, FeatureCostPoint, BusinessFlowSecurityRisk, BusinessFlowDefectRisk } from '../api';
 import FeatureCost3DChart from './FeatureCost3DChart';
 import ServerLocationMap from './ServerLocationMap';
 import BpmnMiniViewer from './BpmnMiniViewer';
+import SecurityRiskAppChart from './SecurityRiskAppChart';
+import DefectRiskAppChart from './DefectRiskAppChart';
 
 // ─── Types ──────────────────────────────────────────────────
 interface YNCount { yes: number; no: number; unknown: number }
@@ -174,6 +176,8 @@ interface DashboardCachedData {
   capabilityCostData: CapabilityCostByYearItem[];
   capRelData: CapabilityFlowRelationshipData | null;
   featureCostPoints: FeatureCostPoint[];
+  securityRiskFlows: BusinessFlowSecurityRisk[];
+  defectRiskFlows: BusinessFlowDefectRisk[];
   fetchedAt: number;
 }
 const dashboardDataCache = new Map<string, DashboardCachedData>();
@@ -187,6 +191,14 @@ const dashboardDataCache = new Map<string, DashboardCachedData>();
 interface DashboardSelectionState {
   view: 'flows' | 'featurecost3d' | 'servermap';
   featureCostFlowRequest: { flow: string; nonce: number } | null;
+  // Selected flow in the Top 20 Security Vulnerability chart (row 2, col 1)
+  // — set by FlowDashboard, not Dashboard() itself. Both write into this
+  // same cache entry, so each does a read-modify-write below rather than a
+  // blind overwrite, or one would clobber the other's field.
+  securityRiskFlow: string | null;
+  // Selected flow in the Top 20 Defect Risk chart (row 3, col 1) — same
+  // ownership/read-modify-write rules as securityRiskFlow above.
+  defectRiskFlow: string | null;
 }
 const dashboardSelectionCache = new Map<string, DashboardSelectionState>();
 
@@ -236,6 +248,15 @@ export default function Dashboard({ neighborhoodName, onViewDiagramClick }: Dash
   // chart is driven by the same dev-cost source, not the older op/dev cost
   // seed data.
   const [featureCostPoints, setFeatureCostPoints] = useState<FeatureCostPoint[]>(() => freshCacheEntry()?.featureCostPoints || []);
+  // Top 20 Business Process Flows by security vulnerability (row 2, col 1) —
+  // probability of breach + High/Med/Low severity, examined from the real
+  // Servers/Software/APIs behind each flow's Applications.
+  const [securityRiskFlows, setSecurityRiskFlows] = useState<BusinessFlowSecurityRisk[]>(() => freshCacheEntry()?.securityRiskFlows || []);
+  // Top 20 Business Process Flows by defect risk (row 3, col 1) —
+  // probability of operational failure + High/Med/Low business-criticality
+  // rating, examined from the same real Servers/Software behind each flow's
+  // Applications, but for reliability signals instead of security ones.
+  const [defectRiskFlows, setDefectRiskFlows] = useState<BusinessFlowDefectRisk[]>(() => freshCacheEntry()?.defectRiskFlows || []);
   // Set when a bar in the Business Flow Comparison dev-cost chart is
   // clicked — jumps to the YoY Feature Cost view with that flow selected.
   // The nonce forces re-application even when the same flow is clicked
@@ -245,9 +266,17 @@ export default function Dashboard({ neighborhoodName, onViewDiagramClick }: Dash
   const [featureCostFlowRequest, setFeatureCostFlowRequest] = useState<{ flow: string; nonce: number } | null>(() => dashboardSelectionCache.get(cacheKey)?.featureCostFlowRequest || null);
 
   // Keep the cache in sync with whatever the user last selected, so the next
-  // mount (after navigating away and back) can restore it.
+  // mount (after navigating away and back) can restore it. Read-modify-write
+  // — FlowDashboard below writes its own securityRiskFlow field into this
+  // same cache entry, so a blind overwrite here would clobber that.
   useEffect(() => {
-    dashboardSelectionCache.set(cacheKey, { view, featureCostFlowRequest });
+    const current = dashboardSelectionCache.get(cacheKey);
+    dashboardSelectionCache.set(cacheKey, {
+      view,
+      featureCostFlowRequest,
+      securityRiskFlow: current?.securityRiskFlow ?? null,
+      defectRiskFlow: current?.defectRiskFlow ?? null,
+    });
   }, [cacheKey, view, featureCostFlowRequest]);
 
   // Stays on the Business Flow Comparison screen — just updates the YoY
@@ -271,6 +300,8 @@ export default function Dashboard({ neighborhoodName, onViewDiagramClick }: Dash
         setCapabilityCostData(cached.capabilityCostData);
         setCapRelData(cached.capRelData);
         setFeatureCostPoints(cached.featureCostPoints);
+        setSecurityRiskFlows(cached.securityRiskFlows);
+        setDefectRiskFlows(cached.defectRiskFlows);
         setLoading(false);
         return;
       }
@@ -284,8 +315,10 @@ export default function Dashboard({ neighborhoodName, onViewDiagramClick }: Dash
       getDashboardCapabilityCostByYear(COST_YEAR),
       getDashboardCapabilityFlowRelationships(),
       getDashboardFeatureCost3D(),
+      getDashboardBusinessFlowSecurityRisk(),
+      getDashboardBusinessFlowDefectRisk(),
     ])
-      .then(([tasks, flows, cost, capabilityCost, caprels, featureCost]) => {
+      .then(([tasks, flows, cost, capabilityCost, caprels, featureCost, securityRisk, defectRisk]) => {
         setTaskData(tasks);
         setFlowData(flows);
         setFlowCostData(cost.flows);
@@ -293,6 +326,8 @@ export default function Dashboard({ neighborhoodName, onViewDiagramClick }: Dash
         setCapabilityCostData(capabilityCost.capabilities);
         setCapRelData(caprels);
         setFeatureCostPoints(featureCost.points);
+        setSecurityRiskFlows(securityRisk.flows);
+        setDefectRiskFlows(defectRisk.flows);
         dashboardDataCache.set(cacheKey, {
           taskData: tasks,
           flowData: flows,
@@ -301,6 +336,8 @@ export default function Dashboard({ neighborhoodName, onViewDiagramClick }: Dash
           capabilityCostData: capabilityCost.capabilities,
           capRelData: caprels,
           featureCostPoints: featureCost.points,
+          securityRiskFlows: securityRisk.flows,
+          defectRiskFlows: defectRisk.flows,
           fetchedAt: Date.now(),
         });
       })
@@ -350,7 +387,7 @@ export default function Dashboard({ neighborhoodName, onViewDiagramClick }: Dash
       {view === 'servermap' ? (
         <ServerLocationMap />
       ) : view === 'flows' ? (
-        <FlowDashboard flows={flowData} costData={flowCostData} costYear={COST_YEAR} devCostPoints={featureCostPoints} onFlowCostBarClick={handleFlowCostBarClick} featureCostFlowRequest={featureCostFlowRequest} onViewFullFeatureCost={() => setView('featurecost3d')} neighborhoodName={neighborhoodName} onViewDiagramClick={onViewDiagramClick} />
+        <FlowDashboard flows={flowData} costData={flowCostData} costYear={COST_YEAR} devCostPoints={featureCostPoints} onFlowCostBarClick={handleFlowCostBarClick} featureCostFlowRequest={featureCostFlowRequest} onViewFullFeatureCost={() => setView('featurecost3d')} neighborhoodName={neighborhoodName} onViewDiagramClick={onViewDiagramClick} securityRiskFlows={securityRiskFlows} defectRiskFlows={defectRiskFlows} />
       ) : (
         <FeatureCost3DChart requestedFlow={featureCostFlowRequest} />
       )}
@@ -932,7 +969,30 @@ function TaskDashboard({ tasks, allTasks, costData, costYear }: { tasks: TaskPro
 }
 
 // ─── Flow Dashboard ─────────────────────────────────────────
-function FlowDashboard({ flows, costData, costYear, devCostPoints, onFlowCostBarClick, featureCostFlowRequest, onViewFullFeatureCost, neighborhoodName, onViewDiagramClick }: { flows: FlowProfile[]; costData: CostByYearItem[]; costYear: number; devCostPoints: FeatureCostPoint[]; onFlowCostBarClick?: (flowName: string) => void; featureCostFlowRequest?: { flow: string; nonce: number } | null; onViewFullFeatureCost?: () => void; neighborhoodName?: string; onViewDiagramClick?: (businessFlowName: string, neighborhoodName: string) => void }) {
+function FlowDashboard({ flows, costData, costYear, devCostPoints, onFlowCostBarClick, featureCostFlowRequest, onViewFullFeatureCost, neighborhoodName, onViewDiagramClick, securityRiskFlows, defectRiskFlows }: { flows: FlowProfile[]; costData: CostByYearItem[]; costYear: number; devCostPoints: FeatureCostPoint[]; onFlowCostBarClick?: (flowName: string) => void; featureCostFlowRequest?: { flow: string; nonce: number } | null; onViewFullFeatureCost?: () => void; neighborhoodName?: string; onViewDiagramClick?: (businessFlowName: string, neighborhoodName: string) => void; securityRiskFlows?: BusinessFlowSecurityRisk[]; defectRiskFlows?: BusinessFlowDefectRisk[] }) {
+  // Selected flow in the Top 20 Security Vulnerability chart (row 2, col 1)
+  // — drives the 3D app chart in row 2, col 2. Restored from the same
+  // cross-mount cache Dashboard() itself uses for view/featureCostFlowRequest
+  // (a merge-safe read-modify-write, since both write into the same entry —
+  // see the DashboardSelectionState comment above), so it survives leaving
+  // Analytics and coming back too. Declared before the early return below
+  // since hooks can't be conditional.
+  const selectionCacheKey = neighborhoodName || '__default__';
+  const [securityRiskFlow, setSecurityRiskFlow] = useState<string | null>(() => dashboardSelectionCache.get(selectionCacheKey)?.securityRiskFlow || null);
+  // Selected flow in the Top 20 Defect Risk chart (row 3, col 1) — same
+  // restore/merge-safe-persist pattern as securityRiskFlow above, now a
+  // third field coexisting in the same cache entry.
+  const [defectRiskFlow, setDefectRiskFlow] = useState<string | null>(() => dashboardSelectionCache.get(selectionCacheKey)?.defectRiskFlow || null);
+  useEffect(() => {
+    const current = dashboardSelectionCache.get(selectionCacheKey);
+    dashboardSelectionCache.set(selectionCacheKey, {
+      view: current?.view || 'flows',
+      featureCostFlowRequest: current?.featureCostFlowRequest ?? null,
+      securityRiskFlow,
+      defectRiskFlow,
+    });
+  }, [selectionCacheKey, securityRiskFlow, defectRiskFlow]);
+
   if (!flows.length) return <Empty description="No business flows with tasks/applications found" />;
 
   const topFlowsByRisk = sortDescBy(flows, (flow) => flow.riskScore).slice(0, 20);
@@ -1173,15 +1233,36 @@ function FlowDashboard({ flows, costData, costYear, devCostPoints, onFlowCostBar
     alignItems: 'center',
     justifyContent: 'center',
     touchAction: 'none',
+    background: '#bfbfbf',
   };
-  const colGripStyle: React.CSSProperties = { width: 3, height: 36, background: '#d9d9d9', borderRadius: 2 };
-  const rowGripStyle: React.CSSProperties = { height: 3, width: 36, background: '#d9d9d9', borderRadius: 2 };
+  const rowGripStyle: React.CSSProperties = { height: 3, width: 36, background: '#8c8c8c', borderRadius: 2 };
 
-  const renderEmptyCell = (height: number) => (
-    <Card size="small" style={{ height }} bodyStyle={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <span style={{ color: '#bfbfbf', fontSize: 12 }}>Empty</span>
-    </Card>
-  );
+  // Col 1 in every row of this grid is the "driver" — selecting a bar there
+  // is what populates col 2 and col 3 for that same row. A chevron glyph in
+  // place of the plain resize grip between col 1→2 and col 2→3 makes that
+  // left-to-right dependency a permanent, structural cue rather than
+  // something the user has to notice from a highlighted bar alone — same
+  // element, same drag behavior, just reads as "flows into" instead of a
+  // neutral handle.
+  const colFlowGlyph = <RightOutlined style={{ fontSize: 12, color: '#8c8c8c' }} />;
+
+  // Appends a bold, filled "← <selected flow>" pill to a col 2/col 3 card's
+  // title once col 1's chart in that row has a selection — a solid colored
+  // tag, not quiet inline text, specifically so it can't be mistaken for
+  // ambient UI chrome and skimmed past. Renders as just `base` (unchanged)
+  // until something is selected.
+  function dependentCardTitle(base: React.ReactNode, flowName: string | null): React.ReactNode {
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', flexWrap: 'wrap', columnGap: 10, rowGap: 4 }}>
+        <span>{base}</span>
+        {flowName && (
+          <Tag color="blue" style={{ fontSize: 13, fontWeight: 600, padding: '2px 10px', marginRight: 0 }}>
+            SHOWING: {flowName.toUpperCase()}
+          </Tag>
+        )}
+      </span>
+    );
+  }
 
   const renderDevCostCell = (height: number) => (
     <Card title="Top 20 Business Flows by Dev Cost — All Years" size="small" style={{ height }}>
@@ -1228,16 +1309,181 @@ function FlowDashboard({ flows, costData, costYear, devCostPoints, onFlowCostBar
     </Card>
   );
 
+  // (2,1) — Top 20 Business Process Flows by security vulnerability.
+  // probability (bar height) is the fraction of the flow's actual Servers/
+  // Software examined that carry a real, externally established issue
+  // (CVE, missed patch, expired OS/software support, non-compliant
+  // posture); severity (bar color) is a separate High/Med/Low rating of
+  // how damaging a breach would actually be, based on the flow's own
+  // Applications' data/security classification — a breach of financial or
+  // proprietary-design data ranks higher than one of, say, employee emails.
+  const securityRiskBarData = (securityRiskFlows || []).map((f) => ({
+    name: f.businessFlow.length > 25 ? f.businessFlow.slice(0, 22) + '...' : f.businessFlow,
+    fullName: f.businessFlow,
+    probability: f.probability,
+    severity: f.severity,
+    applicationCount: f.applicationCount,
+    applicationNames: f.applicationNames,
+    serverCount: f.serverCount,
+    softwareCount: f.softwareCount,
+    apiCount: f.apiCount,
+    criticalServerCount: f.criticalServerCount,
+    criticalSoftwareCount: f.criticalSoftwareCount,
+  }));
+  const SEVERITY_BAR_COLOR: Record<string, string> = { High: RISK_COLORS.critical, Med: RISK_COLORS.medium, Low: RISK_COLORS.low };
+
+  const renderSecurityRiskCell = (height: number) => (
+    <Card title="Top 20 Business Flows by Security Vulnerability" size="small" style={{ height }}>
+      {securityRiskBarData.length > 0 ? (
+        <ResponsiveContainer width="100%" height={Math.max(150, height - CHART_HEIGHT_OFFSET)}>
+          <BarChart data={securityRiskBarData} margin={{ top: 5, right: 30, left: 20, bottom: 80 }}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="name" angle={-45} textAnchor="end" interval={0} height={80} tick={{ fontSize: 11 }} />
+            <YAxis tickFormatter={(v) => `${v}%`} width={50} domain={[0, 100]} />
+            <Tooltip content={({ payload }) => {
+              if (!payload?.length) return null;
+              const d = payload[0].payload;
+              return <div style={{ background: '#fff', border: '1px solid #ccc', padding: 8, borderRadius: 4, fontSize: 12, maxWidth: 280 }}>
+                <div style={{ fontWeight: 600 }}>{d.fullName}</div>
+                <div style={{ color: SEVERITY_BAR_COLOR[d.severity] }}>Probability of breach: {d.probability}% &middot; Severity: {d.severity}</div>
+                <div style={{ color: '#666', marginTop: 4 }}>{d.applicationCount} application{d.applicationCount === 1 ? '' : 's'}: {d.applicationNames.join(', ')}</div>
+                <div style={{ color: '#999', marginTop: 4 }}>
+                  {d.serverCount} servers ({d.criticalServerCount} at risk) &middot; {d.softwareCount} software ({d.criticalSoftwareCount} at risk) &middot; {d.apiCount} APIs
+                </div>
+                <div style={{ color: '#999', marginTop: 4 }}>Click to view its applications in 3D →</div>
+              </div>;
+            }} />
+            <Bar
+              dataKey="probability"
+              name="Probability of Breach"
+              radius={[4, 4, 0, 0]}
+              cursor="pointer"
+              onClick={(data: any) => setSecurityRiskFlow(data.fullName)}
+            >
+              {securityRiskBarData.map((entry) => {
+                const isSelected = entry.fullName === securityRiskFlow;
+                return (
+                  <Cell
+                    key={entry.fullName}
+                    fill={SEVERITY_BAR_COLOR[entry.severity] || RISK_COLORS.low}
+                    stroke={isSelected ? '#1677ff' : undefined}
+                    strokeWidth={isSelected ? 3 : 0}
+                  />
+                );
+              })}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      ) : (
+        <Empty description="No security vulnerability data available" style={{ marginTop: 48 }} />
+      )}
+    </Card>
+  );
+
+  // (2,2) — 3D breakdown (application x severity x probability) of whichever
+  // flow was last clicked in the Security Vulnerability chart above. Clicking
+  // an application marker opens a details panel on the right, in this same
+  // frame, showing that application's own vulnerability/severity specifics.
+  const renderSecurityRiskAppCell = (height: number) => (
+    <Card title={dependentCardTitle('Security Vulnerability by Application', securityRiskFlow)} size="small" style={{ height }} bodyStyle={{ height: `calc(100% - 40px)`, padding: 0 }}>
+      <SecurityRiskAppChart flow={securityRiskFlow} />
+    </Card>
+  );
+
+  // (3,1) — Top 20 Business Process Flows by defect risk. Mirrors the
+  // security-vulnerability row above exactly, but for operational
+  // reliability instead of security: probability (bar height) is the
+  // fraction of the flow's actual Servers/Software examined that show a
+  // real reliability red flag (out-of-warranty + stale firmware,
+  // CPU/memory overutilization, weak backup cadence, lapsed software
+  // support); criticality (bar color) is a separate High/Med/Low rating of
+  // how business-critical a failure would actually be, based on the flow's
+  // own Applications' BUSINESS_CRITICALITY rating.
+  const defectRiskBarData = (defectRiskFlows || []).map((f) => ({
+    name: f.businessFlow.length > 25 ? f.businessFlow.slice(0, 22) + '...' : f.businessFlow,
+    fullName: f.businessFlow,
+    probability: f.probability,
+    criticality: f.criticality,
+    applicationCount: f.applicationCount,
+    applicationNames: f.applicationNames,
+    serverCount: f.serverCount,
+    softwareCount: f.softwareCount,
+    apiCount: f.apiCount,
+    criticalServerCount: f.criticalServerCount,
+    criticalSoftwareCount: f.criticalSoftwareCount,
+  }));
+  const CRITICALITY_BAR_COLOR: Record<string, string> = { High: RISK_COLORS.critical, Med: RISK_COLORS.medium, Low: RISK_COLORS.low };
+
+  const renderDefectRiskCell = (height: number) => (
+    <Card title="Top 20 Business Flows by Defect Risk" size="small" style={{ height }}>
+      {defectRiskBarData.length > 0 ? (
+        <ResponsiveContainer width="100%" height={Math.max(150, height - CHART_HEIGHT_OFFSET)}>
+          <BarChart data={defectRiskBarData} margin={{ top: 5, right: 30, left: 20, bottom: 80 }}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="name" angle={-45} textAnchor="end" interval={0} height={80} tick={{ fontSize: 11 }} />
+            <YAxis tickFormatter={(v) => `${v}%`} width={50} domain={[0, 100]} />
+            <Tooltip content={({ payload }) => {
+              if (!payload?.length) return null;
+              const d = payload[0].payload;
+              return <div style={{ background: '#fff', border: '1px solid #ccc', padding: 8, borderRadius: 4, fontSize: 12, maxWidth: 280 }}>
+                <div style={{ fontWeight: 600 }}>{d.fullName}</div>
+                <div style={{ color: CRITICALITY_BAR_COLOR[d.criticality] }}>Probability of failure: {d.probability}% &middot; Business criticality: {d.criticality}</div>
+                <div style={{ color: '#666', marginTop: 4 }}>{d.applicationCount} application{d.applicationCount === 1 ? '' : 's'}: {d.applicationNames.join(', ')}</div>
+                <div style={{ color: '#999', marginTop: 4 }}>
+                  {d.serverCount} servers ({d.criticalServerCount} at risk) &middot; {d.softwareCount} software ({d.criticalSoftwareCount} at risk) &middot; {d.apiCount} APIs
+                </div>
+                <div style={{ color: '#999', marginTop: 4 }}>Click to view its applications in 3D →</div>
+              </div>;
+            }} />
+            <Bar
+              dataKey="probability"
+              name="Probability of Failure"
+              radius={[4, 4, 0, 0]}
+              cursor="pointer"
+              onClick={(data: any) => setDefectRiskFlow(data.fullName)}
+            >
+              {defectRiskBarData.map((entry) => {
+                const isSelected = entry.fullName === defectRiskFlow;
+                return (
+                  <Cell
+                    key={entry.fullName}
+                    fill={CRITICALITY_BAR_COLOR[entry.criticality] || RISK_COLORS.low}
+                    stroke={isSelected ? '#1677ff' : undefined}
+                    strokeWidth={isSelected ? 3 : 0}
+                  />
+                );
+              })}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      ) : (
+        <Empty description="No defect risk data available" style={{ marginTop: 48 }} />
+      )}
+    </Card>
+  );
+
+  // (3,2) — 3D breakdown (application x business criticality x probability
+  // of failure) of whichever flow was last clicked in the Defect Risk chart
+  // above. Same click-to-open-detail-panel pattern as (2,2).
+  const renderDefectRiskAppCell = (height: number) => (
+    <Card title={dependentCardTitle('Defect Risk by Application', defectRiskFlow)} size="small" style={{ height }} bodyStyle={{ height: `calc(100% - 40px)`, padding: 0 }}>
+      <DefectRiskAppChart flow={defectRiskFlow} />
+    </Card>
+  );
+
   const renderFeatureCostCell = (height: number) => (
     <Card
-      title={onViewFullFeatureCost ? (
-        <a
-          onClick={onViewFullFeatureCost}
-          title="Open the full YoY Feature Cost view for this business flow"
-        >
-          YoY Feature Cost
-        </a>
-      ) : 'YoY Feature Cost'}
+      title={dependentCardTitle(
+        onViewFullFeatureCost ? (
+          <a
+            onClick={onViewFullFeatureCost}
+            title="Open the full YoY Feature Cost view for this business flow"
+          >
+            YoY Feature Cost
+          </a>
+        ) : 'YoY Feature Cost',
+        featureCostFlowRequest?.flow || null
+      )}
       size="small"
       style={{ height }}
       bodyStyle={{ height: `calc(100% - 40px)` }}
@@ -1248,77 +1494,97 @@ function FlowDashboard({ flows, costData, costYear, devCostPoints, onFlowCostBar
     </Card>
   );
 
-  // (1,3) — the BPMN2.0 diagram for whichever flow was last clicked in the
-  // dev-cost chart (same trigger as the YoY Feature Cost cell above, driven
-  // by the same featureCostFlowRequest). Looked up via the flow→diagram id
-  // map and rendered read-only through BpmnMiniViewer (no palette/properties
-  // panel — a NavigatedViewer, not a Modeler — since this is a display-only
-  // embed, not an editing surface).
-  const [diagramXml, setDiagramXml] = useState<string | null>(null);
-  const [diagramFlowName, setDiagramFlowName] = useState<string | null>(featureCostFlowRequest?.flow || null);
-  const [diagramLoading, setDiagramLoading] = useState(Boolean(featureCostFlowRequest));
-  const [diagramNotFound, setDiagramNotFound] = useState(false);
+  // (1,3) and (2,3) both show "the BPMN2.0 diagram for whichever flow was
+  // last selected in [some chart]" — same lookup (flow→diagram id map, then
+  // that diagram's XML, both cached), same read-only BpmnMiniViewer render
+  // (no palette/properties panel — a NavigatedViewer, not a Modeler, since
+  // this is a display-only embed, not an editing surface), just driven by a
+  // different trigger. Factored into one hook so the two cells don't
+  // duplicate the fetch/cancellation logic.
+  function useBpmnDiagramForFlow(flowName: string | null) {
+    const [xml, setXml] = useState<string | null>(null);
+    const [loadedFlowName, setLoadedFlowName] = useState<string | null>(flowName);
+    const [loading, setLoading] = useState(Boolean(flowName));
+    const [notFound, setNotFound] = useState(false);
 
-  useEffect(() => {
-    if (!featureCostFlowRequest) return;
-    let cancelled = false;
-    setDiagramFlowName(featureCostFlowRequest.flow);
-    setDiagramLoading(true);
-    setDiagramNotFound(false);
-    (async () => {
-      try {
-        const flowMap = await getCachedBusinessFlowMap(neighborhoodName || '__default__');
-        const diagramId = flowMap[featureCostFlowRequest.flow];
-        if (!diagramId) {
-          if (!cancelled) { setDiagramXml(null); setDiagramNotFound(true); }
-          return;
+    useEffect(() => {
+      if (!flowName) return;
+      let cancelled = false;
+      setLoadedFlowName(flowName);
+      setLoading(true);
+      setNotFound(false);
+      (async () => {
+        try {
+          const flowMap = await getCachedBusinessFlowMap(neighborhoodName || '__default__');
+          const diagramId = flowMap[flowName];
+          if (!diagramId) {
+            if (!cancelled) { setXml(null); setNotFound(true); }
+            return;
+          }
+          const diagramXml = await getCachedDiagramXml(diagramId);
+          if (!cancelled) setXml(diagramXml);
+        } catch {
+          if (!cancelled) { setXml(null); setNotFound(true); }
+        } finally {
+          if (!cancelled) setLoading(false);
         }
-        const xml = await getCachedDiagramXml(diagramId);
-        if (!cancelled) setDiagramXml(xml);
-      } catch {
-        if (!cancelled) { setDiagramXml(null); setDiagramNotFound(true); }
-      } finally {
-        if (!cancelled) setDiagramLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [featureCostFlowRequest]);
+      })();
+      return () => { cancelled = true; };
+    }, [flowName]);
 
-  const canOpenDiagramTab = Boolean(diagramFlowName && diagramXml && !diagramNotFound && onViewDiagramClick && neighborhoodName);
+    return { xml, flowName: loadedFlowName, loading, notFound };
+  }
 
-  const renderDiagramCell = (height: number) => (
-    <Card
-      title={canOpenDiagramTab ? (
-        <a
-          onClick={() => onViewDiagramClick!(diagramFlowName!, neighborhoodName!)}
-          title="Open this diagram in the Diagrams tab"
-        >
-          Business Process Flow Diagram
-        </a>
-      ) : 'Business Process Flow Diagram'}
-      size="small"
-      style={{ height }}
-      bodyStyle={{ height: `calc(100% - 40px)`, padding: 0 }}
-    >
-      {!diagramFlowName ? (
-        <Empty description="Click a bar in the Top 20 Business Flows chart to view its diagram" style={{ marginTop: 48 }} />
-      ) : diagramLoading ? (
-        <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Spin /></div>
-      ) : diagramNotFound || !diagramXml ? (
-        <Empty description={`No diagram found for "${diagramFlowName}"`} style={{ marginTop: 48 }} />
-      ) : (
-        <BpmnMiniViewer xml={diagramXml} diagramName={diagramFlowName} />
-      )}
-    </Card>
-  );
+  const devCostDiagram = useBpmnDiagramForFlow(featureCostFlowRequest?.flow || null);
+  const securityRiskDiagram = useBpmnDiagramForFlow(securityRiskFlow);
+  const defectRiskDiagram = useBpmnDiagramForFlow(defectRiskFlow);
+
+  function renderBpmnDiagramCell(
+    diagram: { xml: string | null; flowName: string | null; loading: boolean; notFound: boolean },
+    height: number,
+    emptyHint: string,
+  ) {
+    const canOpenDiagramTab = Boolean(diagram.flowName && diagram.xml && !diagram.notFound && onViewDiagramClick && neighborhoodName);
+    return (
+      <Card
+        title={dependentCardTitle(
+          canOpenDiagramTab ? (
+            <a
+              onClick={() => onViewDiagramClick!(diagram.flowName!, neighborhoodName!)}
+              title="Open this diagram in the Diagrams tab"
+            >
+              Business Process Flow Diagram
+            </a>
+          ) : 'Business Process Flow Diagram',
+          diagram.flowName
+        )}
+        size="small"
+        style={{ height }}
+        bodyStyle={{ height: `calc(100% - 40px)`, padding: 0 }}
+      >
+        {!diagram.flowName ? (
+          <Empty description={emptyHint} style={{ marginTop: 48 }} />
+        ) : diagram.loading ? (
+          <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Spin /></div>
+        ) : diagram.notFound || !diagram.xml ? (
+          <Empty description={`No diagram found for "${diagram.flowName}"`} style={{ marginTop: 48 }} />
+        ) : (
+          <BpmnMiniViewer xml={diagram.xml} diagramName={diagram.flowName} />
+        )}
+      </Card>
+    );
+  }
+
+  const renderDiagramCell = (height: number) => renderBpmnDiagramCell(devCostDiagram, height, 'Click a bar in the Top 20 Business Flows chart to view its diagram');
+  const renderSecurityRiskDiagramCell = (height: number) => renderBpmnDiagramCell(securityRiskDiagram, height, 'Click a bar in the Top 20 Business Flows by Security Vulnerability chart to view its diagram');
+  const renderDefectRiskDiagramCell = (height: number) => renderBpmnDiagramCell(defectRiskDiagram, height, 'Click a bar in the Top 20 Business Flows by Defect Risk chart to view its diagram');
 
   // (row, col), both 0-indexed — (0,0)/(0,1)/(0,2) are (1,1)/(1,2)/(1,3) in
-  // the 1-indexed terms the grid is described in above. Every other cell is
-  // empty for now.
+  // the 1-indexed terms the grid is described in above.
   const gridCellRenderers: ((height: number) => React.ReactNode)[][] = [
     [renderDevCostCell, renderFeatureCostCell, renderDiagramCell],
-    [renderEmptyCell, renderEmptyCell, renderEmptyCell],
-    [renderEmptyCell, renderEmptyCell, renderEmptyCell],
+    [renderSecurityRiskCell, renderSecurityRiskAppCell, renderSecurityRiskDiagramCell],
+    [renderDefectRiskCell, renderDefectRiskAppCell, renderDefectRiskDiagramCell],
   ];
 
   return (
@@ -1348,8 +1614,8 @@ function FlowDashboard({ flows, costData, costYear, devCostPoints, onFlowCostBar
                     {gridCellRenderers[rowIdx][colIdx](rowHeights[rowIdx])}
                   </div>
                   {colIdx < 2 && (
-                    <div style={colDividerStyle} onPointerDown={startColDrag(colIdx as 0 | 1)} title="Drag to resize columns">
-                      <div style={colGripStyle} />
+                    <div style={colDividerStyle} onPointerDown={startColDrag(colIdx as 0 | 1)} title="Drag to resize columns — column 1 drives columns 2 and 3">
+                      {colFlowGlyph}
                     </div>
                   )}
                 </Fragment>
