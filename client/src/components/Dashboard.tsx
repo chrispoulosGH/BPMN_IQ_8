@@ -1218,14 +1218,6 @@ function FlowDashboard({ flows, costData, costYear, devCostPoints, onFlowCostBar
     window.addEventListener('pointerup', handleQuadrantPointerUp);
   };
 
-  const colDividerStyle: React.CSSProperties = {
-    flex: '0 0 10px',
-    cursor: 'col-resize',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    touchAction: 'none',
-  };
   const rowDividerStyle: React.CSSProperties = {
     height: 10,
     cursor: 'row-resize',
@@ -1237,30 +1229,101 @@ function FlowDashboard({ flows, costData, costYear, devCostPoints, onFlowCostBar
   };
   const rowGripStyle: React.CSSProperties = { height: 3, width: 36, background: '#8c8c8c', borderRadius: 2 };
 
+  // ─── Row-band grouping ──────────────────────────────────────
   // Col 1 in every row of this grid is the "driver" — selecting a bar there
-  // is what populates col 2 and col 3 for that same row. A chevron glyph in
-  // place of the plain resize grip between col 1→2 and col 2→3 makes that
-  // left-to-right dependency a permanent, structural cue rather than
-  // something the user has to notice from a highlighted bar alone — same
-  // element, same drag behavior, just reads as "flows into" instead of a
-  // neutral handle.
-  const colFlowGlyph = <RightOutlined style={{ fontSize: 12, color: '#8c8c8c' }} />;
+  // is what populates col 2 and col 3 for that same row, and col 2/col 3
+  // don't drive each other. Rather than three equal-looking cards with a
+  // small badge as an afterthought, each row is one bordered/tinted band:
+  // col 1 sits in a warm "input" frame, col 2+3 share one blue "output"
+  // frame (so they read as one linked pair, not two more independent
+  // panels), and a single "driven by <flow>" caption sits once at the top
+  // of the band rather than being repeated per cell.
+  const INPUT_ACCENT = '#ad6f10';
+  const INPUT_ACCENT_BG = '#fdf3e0';
+  const INPUT_ACCENT_BORDER = '#ecd19d';
+  const OUTPUT_ACCENT = '#1677ff';
+  const OUTPUT_ACCENT_BG = '#eaf2ff';
+  const OUTPUT_ACCENT_BORDER = '#bcd9ff';
+  const FRAME_PAD = 6;
 
-  // Appends a bold, filled "← <selected flow>" pill to a col 2/col 3 card's
-  // title once col 1's chart in that row has a selection — a solid colored
-  // tag, not quiet inline text, specifically so it can't be mistaken for
-  // ambient UI chrome and skimmed past. Renders as just `base` (unchanged)
-  // until something is selected.
-  function dependentCardTitle(base: React.ReactNode, flowName: string | null): React.ReactNode {
+  const rowBandStyle: React.CSSProperties = {
+    border: '1px solid #dde3ee',
+    borderRadius: 10,
+    padding: 10,
+    background: '#f6f8fb',
+  };
+  const rowEyebrowStyle: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    padding: '2px 4px 8px',
+    fontSize: 11,
+    letterSpacing: '0.06em',
+    textTransform: 'uppercase',
+    color: '#98a2b3',
+  };
+  const arrowBadgeWrapStyle: React.CSSProperties = {
+    flex: '0 0 40px',
+    cursor: 'col-resize',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    touchAction: 'none',
+  };
+  const arrowBadgeStyle: React.CSSProperties = {
+    width: 26,
+    height: 26,
+    borderRadius: '50%',
+    background: '#fff',
+    border: `1.5px solid ${OUTPUT_ACCENT}`,
+    color: OUTPUT_ACCENT,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    boxShadow: '0 1px 2px rgba(20,26,43,0.12)',
+  };
+  const siblingDividerWrapStyle: React.CSSProperties = {
+    flex: '0 0 10px',
+    cursor: 'col-resize',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    touchAction: 'none',
+  };
+  const siblingDividerStyle: React.CSSProperties = {
+    width: 1,
+    alignSelf: 'stretch',
+    margin: '10px 0',
+    background: OUTPUT_ACCENT_BORDER,
+  };
+
+  // "Driven by" caption shown once per row, above the whole band, instead of
+  // repeating a badge on every dependent cell.
+  function renderRowEyebrow(flowName: string | null) {
     return (
-      <span style={{ display: 'inline-flex', alignItems: 'center', flexWrap: 'wrap', columnGap: 10, rowGap: 4 }}>
-        <span>{base}</span>
-        {flowName && (
-          <Tag color="blue" style={{ fontSize: 13, fontWeight: 600, padding: '2px 10px', marginRight: 0 }}>
-            SHOWING: {flowName.toUpperCase()}
-          </Tag>
+      <div style={rowEyebrowStyle}>
+        <span style={{ color: INPUT_ACCENT, fontWeight: 700 }}>1 · SELECT</span>
+        <RightOutlined style={{ fontSize: 10 }} />
+        <span style={{ color: OUTPUT_ACCENT, fontWeight: 700 }}>2–3 · DRIVEN</span>
+        {flowName ? (
+          <span
+            style={{
+              textTransform: 'none',
+              letterSpacing: 0,
+              fontWeight: 600,
+              color: '#1c2331',
+              background: OUTPUT_ACCENT_BG,
+              border: `1px solid ${OUTPUT_ACCENT_BORDER}`,
+              padding: '1px 8px',
+              borderRadius: 4,
+            }}
+          >
+            {flowName}
+          </span>
+        ) : (
+          <span style={{ textTransform: 'none', fontStyle: 'italic' }}>no flow selected yet</span>
         )}
-      </span>
+      </div>
     );
   }
 
@@ -1385,7 +1448,7 @@ function FlowDashboard({ flows, costData, costYear, devCostPoints, onFlowCostBar
   // an application marker opens a details panel on the right, in this same
   // frame, showing that application's own vulnerability/severity specifics.
   const renderSecurityRiskAppCell = (height: number) => (
-    <Card title={dependentCardTitle('Security Vulnerability by Application', securityRiskFlow)} size="small" style={{ height }} bodyStyle={{ height: `calc(100% - 40px)`, padding: 0 }}>
+    <Card title="Security Vulnerability by Application" size="small" style={{ height }} bodyStyle={{ height: `calc(100% - 40px)`, padding: 0 }}>
       <SecurityRiskAppChart flow={securityRiskFlow} />
     </Card>
   );
@@ -1466,24 +1529,21 @@ function FlowDashboard({ flows, costData, costYear, devCostPoints, onFlowCostBar
   // of failure) of whichever flow was last clicked in the Defect Risk chart
   // above. Same click-to-open-detail-panel pattern as (2,2).
   const renderDefectRiskAppCell = (height: number) => (
-    <Card title={dependentCardTitle('Defect Risk by Application', defectRiskFlow)} size="small" style={{ height }} bodyStyle={{ height: `calc(100% - 40px)`, padding: 0 }}>
+    <Card title="Defect Risk by Application" size="small" style={{ height }} bodyStyle={{ height: `calc(100% - 40px)`, padding: 0 }}>
       <DefectRiskAppChart flow={defectRiskFlow} />
     </Card>
   );
 
   const renderFeatureCostCell = (height: number) => (
     <Card
-      title={dependentCardTitle(
-        onViewFullFeatureCost ? (
-          <a
-            onClick={onViewFullFeatureCost}
-            title="Open the full YoY Feature Cost view for this business flow"
-          >
-            YoY Feature Cost
-          </a>
-        ) : 'YoY Feature Cost',
-        featureCostFlowRequest?.flow || null
-      )}
+      title={onViewFullFeatureCost ? (
+        <a
+          onClick={onViewFullFeatureCost}
+          title="Open the full YoY Feature Cost view for this business flow"
+        >
+          YoY Feature Cost
+        </a>
+      ) : 'YoY Feature Cost'}
       size="small"
       style={{ height }}
       bodyStyle={{ height: `calc(100% - 40px)` }}
@@ -1547,17 +1607,14 @@ function FlowDashboard({ flows, costData, costYear, devCostPoints, onFlowCostBar
     const canOpenDiagramTab = Boolean(diagram.flowName && diagram.xml && !diagram.notFound && onViewDiagramClick && neighborhoodName);
     return (
       <Card
-        title={dependentCardTitle(
-          canOpenDiagramTab ? (
-            <a
-              onClick={() => onViewDiagramClick!(diagram.flowName!, neighborhoodName!)}
-              title="Open this diagram in the Diagrams tab"
-            >
-              Business Process Flow Diagram
-            </a>
-          ) : 'Business Process Flow Diagram',
-          diagram.flowName
-        )}
+        title={canOpenDiagramTab ? (
+          <a
+            onClick={() => onViewDiagramClick!(diagram.flowName!, neighborhoodName!)}
+            title="Open this diagram in the Diagrams tab"
+          >
+            Business Process Flow Diagram
+          </a>
+        ) : 'Business Process Flow Diagram'}
         size="small"
         style={{ height }}
         bodyStyle={{ height: `calc(100% - 40px)`, padding: 0 }}
@@ -1587,47 +1644,103 @@ function FlowDashboard({ flows, costData, costYear, devCostPoints, onFlowCostBar
     [renderDefectRiskCell, renderDefectRiskAppCell, renderDefectRiskDiagramCell],
   ];
 
+  // Which flow is currently driving each row's col 2/col 3 — shown once in
+  // that row's eyebrow caption instead of repeated per cell.
+  const rowDriverFlow: (string | null)[] = [
+    featureCostFlowRequest?.flow || null,
+    securityRiskFlow,
+    defectRiskFlow,
+  ];
+
+  // Col 2 and col 3 share one output frame, so their widths need
+  // renormalizing to percentages of THAT frame's own width rather than the
+  // whole row's — colWidths[1]/colWidths[2] are still stored as fractions
+  // of the full row (so the col1/col2 resize handle's math is unaffected).
+  const outputTotal = colWidths[1] + colWidths[2] || 1;
+  const innerCol2Pct = (colWidths[1] / outputTotal) * 100;
+  const innerCol3Pct = (colWidths[2] / outputTotal) * 100;
+
   return (
     <>
       {/* ─── 3x3 grid ────────────────────────────────────────────
           (1,1) dev cost (same ApplicationFeatureDevCost source as the YoY
           Feature Cost 3D chart, summed across every available year).
           (1,2) that same YoY Feature Cost 3D chart, embedded live.
-          Every other cell is left empty for now. Every interior boundary —
-          both vertical lines between columns and both horizontal lines
-          between rows — is its own drag handle; grab one to resize just
-          the two cells on either side of it. */}
+          Each row is its own bordered/tinted band: col 1 (the driver) sits
+          in a warm "input" frame, col 2+3 (the dependents) share one blue
+          "output" frame — see the row-band comment above. Every interior
+          boundary is still its own drag handle; grab one to resize just the
+          two cells on either side of it. */}
       <div ref={quadrantGridRef}>
-        {([0, 1, 2] as const).map((rowIdx) => (
-          <Fragment key={rowIdx}>
-            <div style={{ display: 'flex' }}>
-              {([0, 1, 2] as const).map((colIdx) => (
-                <Fragment key={colIdx}>
-                  {/* overflow: hidden keeps a cell's own content (e.g. the YoY
-                      Feature Cost chart, which enforces a minimum plot height)
-                      from visually bleeding past its fixed-height Card into the
-                      row divider strip directly below it — otherwise that
-                      overflowing content sits on top of the divider and steals
-                      its drag events, making that stretch of the handle
-                      unresponsive. */}
-                  <div style={{ flex: `${colWidths[colIdx]} 0 0%`, minWidth: 0, height: rowHeights[rowIdx], overflow: 'hidden' }}>
-                    {gridCellRenderers[rowIdx][colIdx](rowHeights[rowIdx])}
+        {([0, 1, 2] as const).map((rowIdx) => {
+          const innerHeight = Math.max(0, rowHeights[rowIdx] - FRAME_PAD * 2);
+          return (
+            <Fragment key={rowIdx}>
+              <div style={rowBandStyle}>
+                {renderRowEyebrow(rowDriverFlow[rowIdx])}
+                <div style={{ display: 'flex' }}>
+                  {/* col 1 — the driver, warm "input" frame */}
+                  <div
+                    style={{
+                      flex: `${colWidths[0]} 0 0%`,
+                      minWidth: 0,
+                      height: rowHeights[rowIdx],
+                      overflow: 'hidden',
+                      background: INPUT_ACCENT_BG,
+                      border: `1px solid ${INPUT_ACCENT_BORDER}`,
+                      borderRadius: 8,
+                      padding: FRAME_PAD,
+                      boxSizing: 'border-box',
+                    }}
+                  >
+                    {gridCellRenderers[rowIdx][0](innerHeight)}
                   </div>
-                  {colIdx < 2 && (
-                    <div style={colDividerStyle} onPointerDown={startColDrag(colIdx as 0 | 1)} title="Drag to resize columns — column 1 drives columns 2 and 3">
-                      {colFlowGlyph}
+
+                  {/* col 1 → col 2/3 boundary — the one true dependency
+                      arrow, drawn as a solid badge rather than a plain grip */}
+                  <div style={arrowBadgeWrapStyle} onPointerDown={startColDrag(0)} title="Drag to resize — column 1 drives columns 2 and 3">
+                    <span style={arrowBadgeStyle}><RightOutlined style={{ fontSize: 12 }} /></span>
+                  </div>
+
+                  {/* col 2 + col 3 — the dependents, one shared blue "output"
+                      frame so they read as a linked pair, not two more
+                      independent panels */}
+                  <div
+                    style={{
+                      flex: `${colWidths[1] + colWidths[2]} 0 0%`,
+                      minWidth: 0,
+                      height: rowHeights[rowIdx],
+                      overflow: 'hidden',
+                      display: 'flex',
+                      background: OUTPUT_ACCENT_BG,
+                      border: `1px solid ${OUTPUT_ACCENT_BORDER}`,
+                      borderRadius: 8,
+                      padding: FRAME_PAD,
+                      boxSizing: 'border-box',
+                    }}
+                  >
+                    <div style={{ flex: `${innerCol2Pct} 0 0%`, minWidth: 0, height: innerHeight, overflow: 'hidden' }}>
+                      {gridCellRenderers[rowIdx][1](innerHeight)}
                     </div>
-                  )}
-                </Fragment>
-              ))}
-            </div>
-            {rowIdx < 2 && (
-              <div style={rowDividerStyle} onPointerDown={startRowDrag(rowIdx as 0 | 1)} title="Drag to resize rows">
-                <div style={rowGripStyle} />
+                    {/* col 2 / col 3 boundary — siblings, not a dependency
+                        chain, so this stays a quiet rule with no arrow */}
+                    <div style={siblingDividerWrapStyle} onPointerDown={startColDrag(1)} title="Drag to resize columns 2 and 3">
+                      <div style={siblingDividerStyle} />
+                    </div>
+                    <div style={{ flex: `${innerCol3Pct} 0 0%`, minWidth: 0, height: innerHeight, overflow: 'hidden' }}>
+                      {gridCellRenderers[rowIdx][2](innerHeight)}
+                    </div>
+                  </div>
+                </div>
               </div>
-            )}
-          </Fragment>
-        ))}
+              {rowIdx < 2 && (
+                <div style={rowDividerStyle} onPointerDown={startRowDrag(rowIdx as 0 | 1)} title="Drag to resize rows">
+                  <div style={rowGripStyle} />
+                </div>
+              )}
+            </Fragment>
+          );
+        })}
         <div style={rowDividerStyle} onPointerDown={startRowEdgeDrag} title="Drag to resize the bottom row's height">
           <div style={rowGripStyle} />
         </div>

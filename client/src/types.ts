@@ -26,6 +26,32 @@ export interface DiagramMeta {
   updatedAt: string;
 }
 
+// One entry in a sticky note's audit trail — who changed what, and when.
+// Append-only: created fresh on note creation, then one entry per
+// text/color/position edit (see BpmnEditor.tsx's appendNoteHistory).
+export interface DiagramNoteHistoryEntry {
+  userId: string;
+  date: string;
+  change: string;
+}
+
+// A sticky note pinned onto a diagram's canvas (Diagrams tab). dx/dy are
+// stored relative to the diagram's own content anchor (the same top-left
+// point its canvas-anchored title banner uses), not absolute canvas
+// coordinates — see server/models/Diagram.js.
+export interface DiagramNote {
+  id: string;
+  text: string;
+  color: string;
+  dx: number;
+  dy: number;
+  createdBy?: string | null;
+  createdAt?: string;
+  updatedBy?: string | null;
+  updatedAt?: string;
+  history?: DiagramNoteHistoryEntry[];
+}
+
 export interface DiagramTaskApplication {
   name: string;
   correlationId?: string | null;
@@ -509,6 +535,72 @@ export interface CapabilityItem {
   createdAt?: string;
   updatedAt?: string;
   state?: string;
+}
+
+// ─── Process Change Radar ───────────────────────────────────────────────
+// A Jira issue that names one of our three custom fields (Business Process
+// Flow/Application/API) and isn't Done/Closed yet — see
+// server/services/jiraClient.js for how these are built. Business Process
+// Flow names a diagram directly (matched server-side against
+// Diagram.businessFlow/name, so the issue shows up in that diagram's
+// `issues` below) — it has no task-level anchor. `source`/`matchedValue` are
+// only set once the server fans an issue out into issuesByApplicationName
+// (one issue can appear under more than one name, and more than once per
+// name-map, if it names several apps/APIs).
+export interface JiraImpactIssue {
+  key: string;
+  url: string;
+  summary: string;
+  status: string;
+  statusCategory: string;
+  issueType: string | null;
+  priority: string | null;
+  assignee: string | null;
+  updated: string | null;
+  dueDate: string | null;
+  isOverdue: boolean;
+  storyPoints: number;
+  devDays: number;
+  businessFlowNames: string[];
+  applicationNames: string[];
+  apiNames: string[];
+  source?: 'businessFlow' | 'application' | 'api';
+  matchedValue?: string;
+}
+
+// One point for the "impacted applications" 3D map (see
+// ApplicationImpact3DChart.tsx): an application named by at least one of
+// this diagram's matched issues, with its issue count, nearest due date, and
+// business criticality (from System Components reference data — null when
+// that data isn't loaded for the app, which the chart buckets as "Unknown").
+export interface JiraApplicationImpact {
+  name: string;
+  issueCount: number;
+  nearestDueDate: string | null;
+  businessCriticality: string | null;
+}
+
+export interface ProcessChangeRadarDiagramSummary {
+  diagramId: string;
+  name: string;
+  neighborhoodName?: string | null;
+  status?: string | null;
+  domain?: string | null;
+  issueCount: number;
+  atRiskCount: number;
+  totalDevDays: number;
+  // Every issue matched to this diagram (Business Process Flow match, plus
+  // any Application/API match via one of its tasks), deduped by issue key.
+  issues: JiraImpactIssue[];
+  applicationImpact: JiraApplicationImpact[];
+}
+
+export interface ProcessChangeRadarResponse {
+  configured: boolean;
+  generatedAt: string;
+  diagrams: ProcessChangeRadarDiagramSummary[];
+  // Keyed by normalized (trim + lowercase) application name.
+  issuesByApplicationName: Record<string, JiraImpactIssue[]>;
 }
 
 export interface ActorItem {

@@ -116,6 +116,8 @@ app.use('/api/system-components', systemComponentsRouter);
 app.use('/api/reference', referenceDataRouter);
 const materializeRouter = require('./routes/materialize');
 app.use('/api/materialize', materializeRouter);
+const processChangeRadarRouter = require('./routes/processChangeRadar');
+app.use('/api/process-change-radar', processChangeRadarRouter);
 
 // Connect to MongoDB then start server
 async function backfillNeighborhoods() {

@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Diagram, DiagramMeta, DiagramCreatePayload, DiagramUpdatePayload, DiagramValidationRequest, DiagramValidationReport, FileSaveResult, CapabilityMatchResult, TaskRecord, TaskCreatePayload, ReferenceData, RefItem, CapabilityItem, ActorItem, ServerItem, DatabaseItem, FactoryNeighborhoodSummary, CustomFactory, CustomFactoryRow, ModelCatalog, ModelCatalogRow, CatalogTreeResponse, CatalogTreeChildrenResponse, CatalogTreeSearchResponse } from './types';
+import type { Diagram, DiagramMeta, DiagramNote, DiagramCreatePayload, DiagramUpdatePayload, DiagramValidationRequest, DiagramValidationReport, FileSaveResult, CapabilityMatchResult, TaskRecord, TaskCreatePayload, ReferenceData, RefItem, CapabilityItem, ActorItem, ServerItem, DatabaseItem, FactoryNeighborhoodSummary, CustomFactory, CustomFactoryRow, ModelCatalog, ModelCatalogRow, CatalogTreeResponse, CatalogTreeChildrenResponse, CatalogTreeSearchResponse, ProcessChangeRadarResponse } from './types';
 export type { RefItem, CapabilityItem, ActorItem, ServerItem, DatabaseItem, FactoryNeighborhoodSummary, CustomFactory, CustomFactoryRow, ModelCatalog, ModelCatalogRow, CatalogTreeResponse, CatalogTreeChildrenResponse, CatalogTreeSearchResponse };
 
 const api = axios.create({ baseURL: '/api', withCredentials: true });
@@ -65,6 +65,14 @@ export const updateDiagram = (id: string, data: DiagramUpdatePayload): Promise<D
 
 export const deleteDiagram = (id: string): Promise<{ message: string }> =>
   api.delete(`/diagrams/${id}`).then((r) => r.data);
+
+export const getDiagramNotes = (id: string): Promise<DiagramNote[]> =>
+  api.get(`/diagrams/${id}/notes`).then((r) => r.data);
+
+// Always sends the full current set of notes — additions, edits, drags, and
+// deletes are all just a new array here (see server/routes/diagrams.js).
+export const saveDiagramNotes = (id: string, notes: DiagramNote[]): Promise<DiagramNote[]> =>
+  api.put(`/diagrams/${id}/notes`, { notes }).then((r) => r.data);
 
 // Also deletes the diagram's own Business Process Flow component row (and
 // rebuilds the search index) — used by the delete "x" on a diagram tile.
@@ -729,5 +737,13 @@ export const getDashboardServerLocationPoints = (): Promise<{
     }>;
   }>;
 }> => api.get('/dashboard/server-location-points').then((r) => r.data);
+
+// Fetches fresh Jira data every call — no client-side caching — since this
+// is meant to run once, on demand, when the Process Change Radar tab is
+// opened (see ProcessChangeRadar.tsx). A non-2xx response (Jira not
+// configured, or its custom fields not found) still comes back as JSON on
+// err.response.data — read `.error` there for the message to show the user.
+export const getProcessChangeRadar = (): Promise<ProcessChangeRadarResponse> =>
+  api.get('/process-change-radar').then((r) => r.data);
 
 export default api;

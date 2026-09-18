@@ -89,6 +89,44 @@ const diagramSchema = new mongoose.Schema(
     owner: { type: String, default: null, trim: true },
     createdBy: { type: String, default: null, trim: true },
     updatedBy: { type: String, default: null, trim: true },
+    // Sticky notes pinned onto this diagram's canvas (Diagrams tab). Position
+    // (dx/dy) is stored relative to the diagram's own content anchor — the
+    // same top-left anchor point the client uses for its canvas-anchored
+    // title banner — rather than as absolute canvas coordinates, so a note
+    // stays put on its diagram's content whether that diagram is viewed
+    // alone or stacked alongside others on the composite canvas.
+    notes: {
+      type: [
+        {
+          id: { type: String, required: true },
+          text: { type: String, default: '' },
+          color: { type: String, default: '#fff59d' },
+          dx: { type: Number, default: 0 },
+          dy: { type: Number, default: 0 },
+          createdBy: { type: String, default: null, trim: true },
+          createdAt: { type: Date, default: Date.now },
+          updatedBy: { type: String, default: null, trim: true },
+          updatedAt: { type: Date, default: Date.now },
+          // Append-only audit trail — one entry per create/edit/color-change/
+          // move, oldest first. Rendered on the note itself (see
+          // BpmnEditor.tsx's StickyNoteCard) so who-did-what-when is visible
+          // without leaving the canvas.
+          history: {
+            type: [
+              {
+                userId: { type: String, required: true, trim: true },
+                date: { type: Date, default: Date.now },
+                change: { type: String, required: true, trim: true },
+              },
+            ],
+            default: [],
+            _id: false,
+          },
+        },
+      ],
+      default: [],
+      _id: false,
+    },
   },
   { timestamps: true }
 );

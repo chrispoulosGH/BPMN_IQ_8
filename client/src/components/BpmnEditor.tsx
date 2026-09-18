@@ -5,9 +5,10 @@ import {
   BpmnPropertiesProviderModule,
 } from 'bpmn-js-properties-panel';
 import { Modal } from 'antd';
-import { getTaskNames, getServers, getDatabases, getApplicationReferenceForNeighborhood, getSystemComponentLinkedTypes, getSystemComponentRecordsLinkedToApplication } from '../api';
+import dayjs from 'dayjs';
+import { getTaskNames, getServers, getDatabases, getApplicationReferenceForNeighborhood, getSystemComponentLinkedTypes, getSystemComponentRecordsLinkedToApplication, getDiagramNotes, saveDiagramNotes } from '../api';
 import type { LinkedSystemComponentRecord } from '../api';
-import type { ApplicationItem, CapabilityMatch } from '../types';
+import type { ApplicationItem, CapabilityMatch, DiagramNote, DiagramNoteHistoryEntry } from '../types';
 import bpmniqModdle from '../bpmniq-moddle.json';
 import {
   buildExactApplicationIdentifierSet,
@@ -88,12 +89,67 @@ interface BpmnEditorProps {
   onNewDiagram?: () => void;
   onDiagramNameChange?: (name: string) => void;
   diagramBreadcrumb?: string;
+  // The current single diagram's Mongo _id (null for an unsaved/local
+  // diagram) — sticky notes are pinned to this id. Ignored when sectionTitles
+  // is set (composite canvas), where each section carries its own diagramId.
+  diagramId?: string | null;
+  // Signed-in user id — stamped as createdBy/updatedBy and into each sticky
+  // note's history entries (see appendNoteHistory below).
+  currentUserId?: string | null;
   // When the canvas holds more than one diagram stacked together (the
   // composite/rollup view), one canvas-anchored title banner is rendered per
   // section instead of the single diagramName banner — see composeStackedDiagramXml
   // in App.tsx, which produces the same id-prefix scheme used here to group
   // each section's elements.
-  sectionTitles?: Array<{ prefix: string; name: string; breadcrumb?: string }> | null;
+  sectionTitles?: Array<{ prefix: string; name: string; breadcrumb?: string; diagramId?: string }> | null;
+  // Process Change Radar: Jira issues (not yet Done/Closed) that touch this
+  // canvas. impactByDiagramId is keyed by literal diagram id — a Business
+  // Process Flow-linked issue has no task-level anchor, so it badges the
+  // diagram's own title banner instead. impactByApplicationName is keyed by
+  // normalizeImpactName(name) below — a task gets a count-badge overlay if
+  // any of its applications has entries here. Omit both (or leave empty) for
+  // the normal Diagrams tab — no overlays render without them.
+  impactByDiagramId?: Record<string, ImpactIssueLike[]>;
+  impactByApplicationName?: Record<string, ImpactIssueLike[]>;
+  onImpactIndicatorClick?: (issues: ImpactIssueLike[], context: { elementType: 'task' | 'diagram'; elementName: string; diagramId?: string }) => void;
+}
+
+// Minimal shape BpmnEditor itself needs from a Jira impact issue — kept
+// local (rather than importing the full JiraImpactIssue type) so this file
+// doesn't need to know about Process Change Radar's data model beyond
+// "does it have a key, and is it overdue".
+export interface ImpactIssueLike {
+  key: string;
+  isOverdue: boolean;
+}
+
+// Must exactly match the normalization server/routes/processChangeRadar.js
+// uses when building issuesByApplicationName — otherwise an
+// otherwise-matching application name won't find its issues.
+function normalizeImpactName(value: unknown): string {
+  return String(value || '').trim().toLowerCase();
+}
+
+// Sticky-note palette — classic Post-it colors, first is the default for a
+// newly created note.
+const STICKY_NOTE_COLORS = ['#fff59d', '#ffe0b2', '#f8bbd0', '#c8e6c9', '#bbdefb', '#e1bee7'];
+// Human-readable names for the history log ("Changed color to Blue") —
+// parallel to STICKY_NOTE_COLORS above.
+const STICKY_NOTE_COLOR_NAMES: Record<string, string> = {
+  '#fff59d': 'Yellow',
+  '#ffe0b2': 'Peach',
+  '#f8bbd0': 'Pink',
+  '#c8e6c9': 'Green',
+  '#bbdefb': 'Blue',
+  '#e1bee7': 'Purple',
+};
+// Crisp, unambiguous absolute timestamp for a note's created/updated/history
+// dates — e.g. "Sep 9, 3:45 PM". Falls back to an em dash for a note that
+// predates a field (shouldn't happen for new notes, but old data may lack it).
+function formatNoteTimestamp(value?: string | null): string {
+  if (!value) return '—';
+  const parsed = dayjs(value);
+  return parsed.isValid() ? parsed.format('MMM D, h:mm A') : '—';
 }
 
 const DARK_ORANGE = '#cc7000';
@@ -131,7 +187,7 @@ function splitStoredApplicationNames(value: string): string[] {
 }
 
 const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
-  ({ xml, importTrigger, onXmlChange, onDirty, showProperties = true, allApplicationNames = [], allApplications = [], allBusinessFlowNames = [], allTaskNames = [], allActorNames = [], diagramName, diagramStatus, canEditDiagramName = false, isInFactory, isAlreadyLoaded, readOnly, onNavigateToFactory, onApplicationLinkClick, onTaskSelect, selectedCapability, isCapabilityAssigned = false, onCapabilityAssignToggle, onCapabilityViewInCatalog, onCapabilityBack, onAddToFactory, onDeleteAndReload, onSaveAsNew, onDiagramNameClick, onViewBusinessFlowComponent, onNewDiagram, onDiagramNameChange, diagramBreadcrumb, sectionTitles }, ref) => {
+  ({ xml, importTrigger, onXmlChange, onDirty, showProperties = true, allApplicationNames = [], allApplications = [], allBusinessFlowNames = [], allTaskNames = [], allActorNames = [], diagramName, diagramStatus, canEditDiagramName = false, isInFactory, isAlreadyLoaded, readOnly, onNavigateToFactory, onApplicationLinkClick, onTaskSelect, selectedCapability, isCapabilityAssigned = false, onCapabilityAssignToggle, onCapabilityViewInCatalog, onCapabilityBack, onAddToFactory, onDeleteAndReload, onSaveAsNew, onDiagramNameClick, onViewBusinessFlowComponent, onNewDiagram, onDiagramNameChange, diagramBreadcrumb, diagramId, currentUserId, sectionTitles, impactByDiagramId, impactByApplicationName, onImpactIndicatorClick }, ref) => {
     const canvasRef = useRef<HTMLDivElement>(null);
     const propertiesRef = useRef<HTMLDivElement>(null);
     const modelerRef = useRef<any>(null);
@@ -160,6 +216,11 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
     const applicationCatalogRef = useRef<ApplicationItem[] | null>(null);
     const applicationCatalogLoadingRef = useRef<Promise<ApplicationItem[]> | null>(null);
     const renderAppOverlaysRef = useRef<(m?: any) => void>(() => {});
+    const renderImpactOverlaysRef = useRef<(m?: any) => void>(() => {});
+    const impactByApplicationNameRef = useRef(impactByApplicationName);
+    impactByApplicationNameRef.current = impactByApplicationName;
+    const onImpactIndicatorClickRef = useRef(onImpactIndicatorClick);
+    onImpactIndicatorClickRef.current = onImpactIndicatorClick;
     const getTaskAppsRef = useRef<(bo: any) => string[]>(() => []);
     const [selectedApp, setSelectedApp] = useState<{ name: string; taskName: string; taskId: string } | null>(null);
     const [selectedTask, setSelectedTask] = useState<{ name: string; id: string } | null>(null);
@@ -183,6 +244,30 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
     // sectionTitles prop.
     const sectionAnchorsRef = useRef<Array<{ x: number; y: number; name: string; breadcrumb?: string }>>([]);
     const [sectionScreenPositions, setSectionScreenPositions] = useState<Array<{ left: number; top: number; name: string; breadcrumb?: string }>>([]);
+    // Sticky notes (Diagrams tab) — keyed by the Diagram _id they're pinned
+    // to, so both single-diagram and composite (stacked) canvases share the
+    // same storage/rendering path. See DiagramNote in types.ts for why
+    // position is stored relative to each diagram's own content anchor.
+    const [notesByDiagram, setNotesByDiagram] = useState<Record<string, DiagramNote[]>>({});
+    const notesByDiagramRef = useRef<Record<string, DiagramNote[]>>({});
+    notesByDiagramRef.current = notesByDiagram;
+    const loadedNoteDiagramIdsRef = useRef<Set<string>>(new Set());
+    const [notesCollapsed, setNotesCollapsed] = useState(false);
+    // Which stacked diagram (by _id) a click on a composite title banner most
+    // recently selected — that's the diagram new notes attach to. Not used
+    // in single-diagram mode, where diagramId itself is unambiguous.
+    const [selectedNoteTargetId, setSelectedNoteTargetId] = useState<string | null>(null);
+    const selectedNoteTargetIdRef = useRef<string | null>(null);
+    selectedNoteTargetIdRef.current = selectedNoteTargetId;
+    const [noteScreenPositions, setNoteScreenPositions] = useState<Record<string, { left: number; top: number }>>({});
+    const [draggingNoteId, setDraggingNoteId] = useState<string | null>(null);
+    const noteDragStateRef = useRef<{ noteId: string; ownerId: string; startClientX: number; startClientY: number; startDx: number; startDy: number } | null>(null);
+    // Note id -> its text when the textarea gained focus, so blur can tell
+    // whether the user actually changed anything (see handleNoteTextBlur).
+    const noteTextBeforeEditRef = useRef<Record<string, string>>({});
+    const noteContextMenuRef = useRef<HTMLDivElement | null>(null);
+    const diagramIdRef = useRef(diagramId);
+    diagramIdRef.current = diagramId;
     // Generic "what's linked to this application" modal — drives both the
     // right-click menu options and the dialog contents entirely from
     // discoverComponentTypesLinkedToTarget() (server) rather than a fixed
@@ -217,6 +302,43 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
         .catch(() => { if (!cancelled) setLinkedComponentTypes([]); });
       return () => { cancelled = true; };
     }, []);
+
+    // Load sticky notes for whichever diagram(s) are currently on the canvas
+    // — the single diagramId, or every section's diagramId in composite mode
+    // — the first time each is seen. A diagram's notes are re-fetched only
+    // once per mount; edits made here are kept in local state (and persisted
+    // via saveDiagramNotes) rather than re-read from the server.
+    useEffect(() => {
+      const ids = sectionTitles?.length
+        ? Array.from(new Set(sectionTitles.map((section) => section.diagramId).filter((id): id is string => Boolean(id))))
+        : (diagramId ? [diagramId] : []);
+      const toLoad = ids.filter((id) => !loadedNoteDiagramIdsRef.current.has(id));
+      if (!toLoad.length) return;
+      toLoad.forEach((id) => loadedNoteDiagramIdsRef.current.add(id));
+      let cancelled = false;
+      Promise.all(toLoad.map((id) => getDiagramNotes(id).catch(() => [] as DiagramNote[]))).then((results) => {
+        if (cancelled) return;
+        setNotesByDiagram((current) => {
+          const next = { ...current };
+          toLoad.forEach((id, index) => { next[id] = results[index] || []; });
+          return next;
+        });
+      });
+      return () => { cancelled = true; };
+    }, [diagramId, sectionTitles]);
+
+    // Recompute note screen positions whenever the note set itself changes
+    // (loaded, added, deleted) — pan/zoom/import changes are handled by the
+    // updateNoteScreenPositions() calls alongside the title-banner ones above.
+    useEffect(() => {
+      updateNoteScreenPositions();
+      // updateNoteScreenPositions is a plain function redefined every render
+      // (it closes over refs, not state, so redefinition doesn't change its
+      // behavior) — omitted from deps to avoid running on every render.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [notesByDiagram]);
+
+    useEffect(() => () => removeNoteContextMenu(), []);
 
     const getAppMetaMatches = (appName: string) => findExactApplicationMatches(allApplicationsRef.current, appName);
 
@@ -568,12 +690,14 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
         updateTitleScreenPosition();
         computeSectionAnchors();
         updateSectionScreenPositions();
+        updateNoteScreenPositions();
         // Re-render the "+"/application overlays so a freshly-added task
         // (dragged from the palette, or pasted/copied) picks up its
         // "Add applications" affordance immediately — this used to only
         // happen on the next full diagram import, so a brand-new task with
         // zero applications had no visible way to get its first one.
         renderAppOverlaysRef.current();
+        renderImpactOverlaysRef.current();
       });
 
       // Keep the title banner(s) pinned to their diagram-space anchor as the
@@ -581,6 +705,7 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
       modeler.on('canvas.viewbox.changed', () => {
         updateTitleScreenPosition();
         updateSectionScreenPositions();
+        updateNoteScreenPositions();
       });
 
       // Load valid task names for autocomplete
@@ -722,23 +847,36 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
           html.className = 'task-app-overlay';
           html.style.cssText = 'display:flex;flex-direction:column;gap:1px;padding:2px 0;cursor:pointer;font-family:"IBM Plex Sans",Arial,sans-serif;';
           const validSet = buildExactApplicationIdentifierSet(allApplicationsRef.current);
+          const byApp = impactByApplicationNameRef.current;
           for (const appName of appNames) {
             const isValid = validSet.has(normalizeApplicationLookupValue(appName));
             const displayName = getAppDisplayName(appName);
             const applicationMeta = allApplicationsRef.current.find((app) => [app.correlationId, app.acronym, app.name]
               .map((candidate) => normalizeApplicationLookupValue(candidate))
               .includes(normalizeApplicationLookupValue(appName))) || null;
+            // Process Change Radar: Jira issues that named this application,
+            // resolved the same way renderImpactOverlays resolves them for
+            // the task-level badge. Empty outside the Radar view (byApp is
+            // undefined there).
+            const appIssues = byApp?.[normalizeImpactName(appName)] || [];
+            const hasAppImpact = appIssues.length > 0;
+            const appHasOverdue = appIssues.some((issue) => issue.isOverdue);
             const row = document.createElement('div');
             row.title = [
               `Application: ${displayName}`,
               applicationMeta?.correlationId ? `Correlation ID: ${applicationMeta.correlationId}` : null,
               applicationMeta?.acronym ? `Acronym: ${applicationMeta.acronym}` : null,
+              hasAppImpact ? `${appIssues.length} Jira issue${appIssues.length === 1 ? '' : 's'} — click for details` : null,
             ].filter(Boolean).join('\n');
-            row.style.cssText = 'display:flex;align-items:center;gap:3px;white-space:nowrap;cursor:pointer;padding:1px 2px;border-radius:3px;';
-            row.addEventListener('mouseenter', () => { row.style.background = '#f0f5ff'; });
-            row.addEventListener('mouseleave', () => { row.style.background = 'transparent'; });
+            row.style.cssText = `display:flex;align-items:center;gap:3px;white-space:nowrap;cursor:pointer;padding:1px 3px;border-radius:3px;${hasAppImpact ? `background:${appHasOverdue ? '#fff1f0' : '#fffbe6'};border:1px solid ${appHasOverdue ? '#ffa39e' : '#ffe58f'};` : ''}`;
+            row.addEventListener('mouseenter', () => { row.style.background = hasAppImpact ? (appHasOverdue ? '#ffd8d6' : '#fff1b8') : '#f0f5ff'; });
+            row.addEventListener('mouseleave', () => { row.style.background = hasAppImpact ? (appHasOverdue ? '#fff1f0' : '#fffbe6') : 'transparent'; });
             row.addEventListener('click', (e) => {
               e.stopPropagation();
+              if (hasAppImpact && onImpactIndicatorClickRef.current) {
+                onImpactIndicatorClickRef.current(appIssues, { elementType: 'task', elementName: displayName });
+                return;
+              }
               setSelectedApp({ name: appName, taskName: el.businessObject.name || el.id, taskId: el.id });
             });
             row.addEventListener('contextmenu', (e) => {
@@ -754,6 +892,12 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
             label.style.cssText = `font-size:9px;color:${isValid ? '#0284c7' : DARK_ORANGE};line-height:1.1;overflow:hidden;text-overflow:ellipsis;max-width:120px;`;
             row.appendChild(icon);
             row.appendChild(label);
+            if (hasAppImpact) {
+              const countBadge = document.createElement('span');
+              countBadge.textContent = String(appIssues.length);
+              countBadge.style.cssText = `display:inline-flex;align-items:center;justify-content:center;min-width:14px;height:14px;padding:0 3px;border-radius:7px;background:${appHasOverdue ? '#ff4d4f' : '#faad14'};color:#fff;font-size:9px;font-weight:700;line-height:1;flex-shrink:0;`;
+              row.appendChild(countBadge);
+            }
             html.appendChild(row);
           }
           html.addEventListener('contextmenu', (e) => {
@@ -1219,6 +1363,65 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
         } catch { /* ignore */ }
       }
 
+      // ─── Process Change Radar: impact indicator overlays ────────────
+      // A small count badge on every task that has one of its applications
+      // named by a not-yet-Done Jira issue (see impactByApplicationName
+      // prop). Business Process Flow-linked issues have no task-level
+      // anchor — they badge the diagram's own title banner instead (see the
+      // impactByDiagramId-driven badges in the JSX below). Reads from refs
+      // (impactByApplicationNameRef/onImpactIndicatorClickRef) rather than
+      // the props directly, since this closure is captured once at mount but
+      // the Process Change Radar data arrives asynchronously after that.
+      const IMPACT_OVERLAY_TYPE = 'impact-indicator';
+      function renderImpactOverlays(m: any) {
+        try {
+          const overlays = m.get('overlays');
+          const elementRegistry = m.get('elementRegistry');
+          const tasks = elementRegistry.filter((el: any) => isActivityType(el.businessObject?.$type));
+          tasks.forEach((el: any) => overlays.remove({ element: el.id, type: IMPACT_OVERLAY_TYPE }));
+
+          const byApp = impactByApplicationNameRef.current;
+          if (!byApp || !Object.keys(byApp).length) return;
+
+          for (const el of tasks) {
+            const bo = el.businessObject;
+            const combined: any[] = [];
+            const seenKeys = new Set<string>();
+            const addAll = (list?: any[]) => {
+              for (const issue of list || []) {
+                if (seenKeys.has(issue.key)) continue;
+                seenKeys.add(issue.key);
+                combined.push(issue);
+              }
+            };
+            for (const appName of getTaskApps(bo)) {
+              addAll(byApp[normalizeImpactName(appName)]);
+            }
+            if (!combined.length) continue;
+
+            const hasOverdue = combined.some((issue) => issue.isOverdue);
+            const badge = document.createElement('div');
+            badge.title = `${combined.length} Jira issue${combined.length === 1 ? '' : 's'} — click for details`;
+            badge.textContent = String(combined.length);
+            badge.style.cssText = `
+              display:flex;align-items:center;justify-content:center;
+              min-width:18px;height:18px;padding:0 4px;border-radius:9px;
+              background:${hasOverdue ? '#ff4d4f' : '#faad14'};color:#fff;
+              font-size:11px;font-weight:700;font-family:"IBM Plex Sans",Arial,sans-serif;
+              border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,0.35);cursor:pointer;
+            `;
+            badge.addEventListener('click', (e) => {
+              e.stopPropagation();
+              onImpactIndicatorClickRef.current?.(combined, { elementType: 'task', elementName: bo.name || el.id });
+            });
+            overlays.add(el.id, IMPACT_OVERLAY_TYPE, { position: { top: -9, right: -9 }, html: badge });
+          }
+        } catch {
+          // best-effort
+        }
+      }
+      renderImpactOverlaysRef.current = () => renderImpactOverlays(modeler);
+
       // Store reference so XML-import effect can call it
       renderAppOverlaysRef.current = () => renderAppOverlays(modeler);
 
@@ -1469,11 +1672,13 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
         validateLaneActors(modeler);
         // Render application overlays
         renderAppOverlaysRef.current();
+        renderImpactOverlaysRef.current();
         // Position the canvas-anchored title banner(s) for the freshly imported diagram
         computeTitleAnchor();
         updateTitleScreenPosition();
         computeSectionAnchors();
         updateSectionScreenPositions();
+        updateNoteScreenPositions();
         // Surrounding panels (properties/search) can still be resizing right
         // after import — e.g. the properties panel mounting, a filter panel
         // animating in — so the fit above may have sized against a
@@ -1498,12 +1703,26 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [importTrigger]);
 
-    // Re-render overlays when application reference data loads/changes
+    // Re-render overlays when application reference data loads/changes.
+    // Callers like ProcessChangeRadar only ever populate `allApplications`
+    // (not `allApplicationNames`, which is autocomplete-only) — gate on
+    // either so its late-arriving fetch still triggers a re-render.
     useEffect(() => {
-      if (allApplicationNames.length && modelerRef.current) {
+      if ((allApplicationNames.length || allApplications.length) && modelerRef.current) {
         renderAppOverlaysRef.current();
       }
     }, [allApplicationNames, allApplications]);
+
+    // Process Change Radar's Jira data arrives asynchronously after the
+    // diagram itself has already imported — re-render impact badges once it
+    // does (and whenever it's refetched). renderAppOverlays also depends on
+    // it (per-application highlight/count on each task's app row), so both
+    // need to re-run.
+    useEffect(() => {
+      if (!modelerRef.current) return;
+      renderImpactOverlaysRef.current();
+      renderAppOverlaysRef.current();
+    }, [impactByApplicationName]);
 
     // Re-validate task colors when task reference data changes
     useEffect(() => {
@@ -1927,6 +2146,191 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
       }
     }
 
+    // ─── Sticky notes ───────────────────────────────────────────────
+    // A note's dx/dy are relative to its own diagram's content anchor (the
+    // same anchor computeTitleAnchor/computeSectionAnchors compute for that
+    // diagram's title banner) — this helper resolves which anchor that is
+    // for a given diagram id, in either single or composite (stacked) mode.
+    // sectionTitlesRef and sectionAnchorsRef are always the same length and
+    // in the same order (both derived from the sectionTitles prop), so they
+    // can be zipped by index.
+    function getNoteAnchorForDiagramId(id: string | null): { x: number; y: number } | null {
+      if (!id) return null;
+      const sections = sectionTitlesRef.current;
+      if (sections?.length) {
+        const index = sections.findIndex((section) => section.diagramId === id);
+        return index >= 0 ? (sectionAnchorsRef.current[index] || null) : null;
+      }
+      return diagramIdRef.current === id ? titleAnchorRef.current : null;
+    }
+
+    // Converts a viewport click point (clientX/clientY) into diagram-space
+    // coordinates, for placing a note where the user right-clicked.
+    function diagramPointFromClientPoint(clientX: number, clientY: number): { x: number; y: number } | null {
+      const modeler = modelerRef.current;
+      if (!modeler) return null;
+      try {
+        const canvas = modeler.get('canvas');
+        const viewbox = canvas.viewbox();
+        const containerRect = canvas.getContainer().getBoundingClientRect();
+        return {
+          x: viewbox.x + (clientX - containerRect.left) / viewbox.scale,
+          y: viewbox.y + (clientY - containerRect.top) / viewbox.scale,
+        };
+      } catch {
+        return null;
+      }
+    }
+
+    // Screen-space counterpart of updateTitleScreenPosition/
+    // updateSectionScreenPositions, for every currently-loaded note at once.
+    // Reads notesByDiagramRef (not the notesByDiagram state var directly) so
+    // it can be called from the mount-once effect above without going stale.
+    function updateNoteScreenPositions() {
+      const modeler = modelerRef.current;
+      if (!modeler) return;
+      try {
+        const canvas = modeler.get('canvas');
+        const viewbox = canvas.viewbox();
+        const positions: Record<string, { left: number; top: number }> = {};
+        Object.entries(notesByDiagramRef.current).forEach(([id, list]) => {
+          const anchor = getNoteAnchorForDiagramId(id);
+          if (!anchor) return;
+          list.forEach((note) => {
+            positions[note.id] = {
+              left: (anchor.x + note.dx - viewbox.x) * viewbox.scale,
+              top: (anchor.y + note.dy - viewbox.y) * viewbox.scale,
+            };
+          });
+        });
+        setNoteScreenPositions(positions);
+      } catch {
+        // best-effort
+      }
+    }
+
+    async function persistDiagramNotes(id: string, notes: DiagramNote[]) {
+      try {
+        await saveDiagramNotes(id, notes);
+      } catch (err) {
+        console.error('[BpmnEditor] Failed to save sticky note(s):', err);
+      }
+    }
+
+    // Stamps updatedBy/updatedAt and appends one entry to the note's audit
+    // trail — the single place every edit (text/color/move) routes through,
+    // so "who did what, when" stays consistent no matter which field changed.
+    function appendNoteHistory(note: DiagramNote, change: string): DiagramNote {
+      const now = new Date().toISOString();
+      const userId = currentUserId || 'Unknown';
+      const entry: DiagramNoteHistoryEntry = { userId, date: now, change };
+      return {
+        ...note,
+        updatedBy: userId,
+        updatedAt: now,
+        history: [...(note.history || []), entry],
+      };
+    }
+
+    // Which diagram a new note (button or right-click) attaches to: the
+    // single diagramId, or whichever composite section's title was last
+    // clicked (defaulting to the first section until one is).
+    function resolveNoteTargetId(): string | null {
+      const sections = sectionTitlesRef.current;
+      if (sections?.length) {
+        const selected = selectedNoteTargetIdRef.current;
+        if (selected && sections.some((section) => section.diagramId === selected)) return selected;
+        return sections[0]?.diagramId || null;
+      }
+      return diagramIdRef.current || null;
+    }
+
+    function addNoteForDiagram(targetId: string, dx: number, dy: number) {
+      const now = new Date().toISOString();
+      const userId = currentUserId || 'Unknown';
+      const note: DiagramNote = {
+        id: `note_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        text: '',
+        color: STICKY_NOTE_COLORS[0],
+        dx,
+        dy,
+        createdBy: userId,
+        createdAt: now,
+        updatedBy: userId,
+        updatedAt: now,
+        history: [{ userId, date: now, change: 'Created the note' }],
+      };
+      setNotesByDiagram((current) => {
+        const list = [...(current[targetId] || []), note];
+        void persistDiagramNotes(targetId, list);
+        return { ...current, [targetId]: list };
+      });
+      setNotesCollapsed(false);
+    }
+
+    function handleAddNoteButtonClick() {
+      const targetId = resolveNoteTargetId();
+      if (!targetId) return;
+      const count = (notesByDiagramRef.current[targetId] || []).length;
+      const cascade = (count % 6) * 24;
+      addNoteForDiagram(targetId, 60 + cascade, 60 + cascade);
+    }
+
+    function removeNoteContextMenu() {
+      if (noteContextMenuRef.current) {
+        noteContextMenuRef.current.remove();
+        noteContextMenuRef.current = null;
+      }
+    }
+
+    function showNoteContextMenu(clientX: number, clientY: number) {
+      removeNoteContextMenu();
+      const targetId = resolveNoteTargetId();
+      if (!targetId) return;
+
+      const menu = document.createElement('div');
+      menu.style.cssText = `
+        position: fixed;
+        left: ${clientX}px;
+        top: ${clientY}px;
+        z-index: 100000;
+        min-width: 190px;
+        background: #fff;
+        border: 1px solid #d9d9d9;
+        border-radius: 8px;
+        box-shadow: 0 6px 16px rgba(0,0,0,.15);
+        padding: 6px;
+        font-family: 'IBM Plex Sans', Arial, sans-serif;
+        font-size: 12px;
+      `;
+      const item = document.createElement('div');
+      item.textContent = '📌 Add sticky note here';
+      item.style.cssText = 'padding:6px 8px;border-radius:6px;cursor:pointer;';
+      item.addEventListener('mouseenter', () => { item.style.background = '#f0f5ff'; });
+      item.addEventListener('mouseleave', () => { item.style.background = 'transparent'; });
+      item.addEventListener('mousedown', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        removeNoteContextMenu();
+        const anchor = getNoteAnchorForDiagramId(targetId);
+        const point = diagramPointFromClientPoint(clientX, clientY);
+        if (!anchor || !point) return;
+        addNoteForDiagram(targetId, point.x - anchor.x, point.y - anchor.y);
+      });
+      menu.appendChild(item);
+
+      document.body.appendChild(menu);
+      noteContextMenuRef.current = menu;
+
+      const closeOnOutside = (ev: MouseEvent) => {
+        if (!menu.contains(ev.target as Node)) {
+          removeNoteContextMenu();
+          document.removeEventListener('mousedown', closeOnOutside, true);
+        }
+      };
+      setTimeout(() => document.addEventListener('mousedown', closeOnOutside, true), 0);
+    }
+
     const validAppSet = buildExactApplicationIdentifierSet(allApplications);
     const isSelectedAppValid = selectedApp ? validAppSet.has(normalizeApplicationLookupValue(selectedApp.name)) : true;
     const isSelectedTaskValid = selectedTask ? !invalidTaskNamesRef.current.has(selectedTask.name.toLowerCase().trim()) : true;
@@ -1934,8 +2338,169 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
     const isSelectedLaneValid = selectedLane ? validActorSet.has(selectedLane.name.toLowerCase().trim()) : true;
     const diagramNameColor = (diagramStatus || '').toLowerCase() === 'invalid' ? '#cc7000' : '#000000';
 
+    // ─── Sticky note interaction handlers (drag / edit / color / delete) ──
+    // Plain per-render closures (not inside the mount-once effect) since
+    // they're wired to JSX event props below, not bpmn-js's own event bus.
+    const handleNoteDragPointerDown = (ownerId: string, note: DiagramNote) => (e: React.PointerEvent<HTMLDivElement>) => {
+      if (readOnly) return;
+      e.stopPropagation();
+      e.currentTarget.setPointerCapture(e.pointerId);
+      noteDragStateRef.current = {
+        noteId: note.id,
+        ownerId,
+        startClientX: e.clientX,
+        startClientY: e.clientY,
+        startDx: note.dx,
+        startDy: note.dy,
+      };
+      setDraggingNoteId(note.id);
+    };
+
+    const handleNoteDragPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+      const drag = noteDragStateRef.current;
+      if (!drag) return;
+      const modeler = modelerRef.current;
+      let scale = 1;
+      try {
+        scale = modeler ? modeler.get('canvas').viewbox().scale || 1 : 1;
+      } catch { /* keep default scale */ }
+      const nextDx = drag.startDx + (e.clientX - drag.startClientX) / scale;
+      const nextDy = drag.startDy + (e.clientY - drag.startClientY) / scale;
+      setNotesByDiagram((current) => {
+        const list = (current[drag.ownerId] || []).map((n) => (n.id === drag.noteId ? { ...n, dx: nextDx, dy: nextDy } : n));
+        return { ...current, [drag.ownerId]: list };
+      });
+    };
+
+    const handleNoteDragPointerUp = () => {
+      const drag = noteDragStateRef.current;
+      noteDragStateRef.current = null;
+      setDraggingNoteId(null);
+      if (!drag) return;
+      const list = notesByDiagramRef.current[drag.ownerId] || [];
+      const note = list.find((n) => n.id === drag.noteId);
+      if (!note) return;
+      // Only log/persist an actual drag — a plain click (pointerdown+up with
+      // no real movement) shouldn't add "Moved the note" noise to the history.
+      const moved = Math.hypot(note.dx - drag.startDx, note.dy - drag.startDy) > 2;
+      if (!moved) return;
+      const nextList = list.map((n) => (n.id === drag.noteId ? appendNoteHistory(n, 'Moved the note') : n));
+      setNotesByDiagram((current) => ({ ...current, [drag.ownerId]: nextList }));
+      void persistDiagramNotes(drag.ownerId, nextList);
+    };
+
+    const handleNoteTextChange = (ownerId: string, noteId: string, value: string) => {
+      setNotesByDiagram((current) => {
+        const list = (current[ownerId] || []).map((n) => (n.id === noteId ? { ...n, text: value } : n));
+        return { ...current, [ownerId]: list };
+      });
+    };
+
+    // Records the note's text as it stood when editing began, so blur can
+    // tell whether anything actually changed (see handleNoteTextBlur) —
+    // otherwise every focus/blur cycle with no edits would still log a
+    // meaningless "Edited the text" history entry.
+    const handleNoteTextFocus = (ownerId: string, noteId: string) => {
+      const note = (notesByDiagramRef.current[ownerId] || []).find((n) => n.id === noteId);
+      noteTextBeforeEditRef.current[noteId] = note?.text || '';
+    };
+
+    const handleNoteTextBlur = (ownerId: string, noteId: string) => {
+      const list = notesByDiagramRef.current[ownerId] || [];
+      const note = list.find((n) => n.id === noteId);
+      if (!note) return;
+      const before = noteTextBeforeEditRef.current[noteId] ?? '';
+      delete noteTextBeforeEditRef.current[noteId];
+      if (before === note.text) return; // untouched — nothing to log or save
+      const change = before.trim() ? 'Edited the text' : 'Added text';
+      const nextList = list.map((n) => (n.id === noteId ? appendNoteHistory(n, change) : n));
+      setNotesByDiagram((current) => ({ ...current, [ownerId]: nextList }));
+      void persistDiagramNotes(ownerId, nextList);
+    };
+
+    const handleNoteColorChange = (ownerId: string, noteId: string, color: string) => {
+      const list = notesByDiagramRef.current[ownerId] || [];
+      const note = list.find((n) => n.id === noteId);
+      if (!note || note.color === color) return;
+      const colorName = STICKY_NOTE_COLOR_NAMES[color] || color;
+      const nextList = list.map((n) => (n.id === noteId ? appendNoteHistory({ ...n, color }, `Changed color to ${colorName}`) : n));
+      setNotesByDiagram((current) => ({ ...current, [ownerId]: nextList }));
+      void persistDiagramNotes(ownerId, nextList);
+    };
+
+    const handleNoteDelete = (ownerId: string, noteId: string) => {
+      setNotesByDiagram((current) => {
+        const list = (current[ownerId] || []).filter((n) => n.id !== noteId);
+        void persistDiagramNotes(ownerId, list);
+        return { ...current, [ownerId]: list };
+      });
+    };
+
+    // Every note currently on-screen (single diagramId, or every composite
+    // section's diagramId), flattened with the diagram each belongs to.
+    const visibleNoteOwnerIds = sectionTitles?.length
+      ? sectionTitles.map((section) => section.diagramId).filter((id): id is string => Boolean(id))
+      : (diagramId ? [diagramId] : []);
+    const visibleNotes = visibleNoteOwnerIds.flatMap((ownerId) => (notesByDiagram[ownerId] || []).map((note) => ({ note, ownerId })));
+    const canAddNote = !readOnly && Boolean(resolveNoteTargetId());
+    // Clears the properties panel when it's open, and the "show properties"
+    // collapse-toggle arrow button (top-right, ~28px wide) when it's closed.
+    const notesRightOffset = showProperties ? (propsCollapsed ? 44 : propsWidth + 12) : 12;
+
+    // Process Change Radar: small count badge in the corner of a diagram's
+    // title banner when Jira has Business Process Flow-linked issues for it
+    // (see impactByDiagramId prop) — these have no task to anchor a bpmn-js
+    // overlay to, unlike application-linked issues (see renderImpactOverlays).
+    function renderDiagramImpactBadge(forDiagramId: string | null | undefined, elementName: string) {
+      const issues = forDiagramId ? impactByDiagramId?.[forDiagramId] : undefined;
+      if (!issues?.length) return null;
+      const hasOverdue = issues.some((issue) => issue.isOverdue);
+      return (
+        <div
+          title={`${issues.length} Jira issue${issues.length === 1 ? '' : 's'} — click for details`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onImpactIndicatorClick?.(issues, { elementType: 'diagram', elementName, diagramId: forDiagramId || undefined });
+          }}
+          style={{
+            position: 'absolute',
+            top: -9,
+            right: -9,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            minWidth: 18,
+            height: 18,
+            padding: '0 4px',
+            borderRadius: 9,
+            background: hasOverdue ? '#ff4d4f' : '#faad14',
+            color: '#fff',
+            fontSize: 11,
+            fontWeight: 700,
+            border: '2px solid #fff',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.35)',
+            cursor: 'pointer',
+          }}
+        >
+          {issues.length}
+        </div>
+      );
+    }
+
     return (
-      <div className="flex h-full w-full overflow-hidden relative">
+      <div
+        className="flex h-full w-full overflow-hidden relative"
+        onContextMenu={(e) => {
+          if (readOnly) return;
+          // Only claim right-clicks on blank canvas background — clicks on
+          // an actual bpmn-js element are handled by modeler.on('element.contextmenu')
+          // (tasks/lanes) or left to bpmn-js's own default behavior.
+          if ((e.target as HTMLElement).closest('.djs-element')) return;
+          if (!resolveNoteTargetId()) return;
+          e.preventDefault();
+          showNoteContextMenu(e.clientX, e.clientY);
+        }}
+      >
         {!sectionTitles?.length && diagramName && !editingDiagramName && (
           <div
             className="absolute z-20"
@@ -1961,13 +2526,25 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
             }}
             title={canEditDiagramName ? 'Click for properties, double-click to edit name' : 'Click for properties'}
           >
-            <div className={`bg-white/90 backdrop-blur-sm border rounded-md px-5 py-2 shadow-sm ${isInFactory ? 'border-gray-200' : 'border-orange-300'}`} style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+            <div
+              className={`bg-white/90 backdrop-blur-sm border rounded-md px-5 py-2 ${isInFactory ? 'border-gray-200' : 'border-orange-300'}`}
+              style={{
+                position: 'relative',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'flex-start',
+                ...(diagramSelected
+                  ? { borderColor: '#1677ff', borderWidth: 2, boxShadow: '0 0 0 3px rgba(22,119,255,0.18)' }
+                  : { boxShadow: '0 1px 2px rgba(0,0,0,0.08)' }),
+              }}
+            >
               <span className="text-xl font-bold" style={{ color: diagramNameColor, textAlign: 'left' }}>{diagramName}</span>
               {diagramBreadcrumb && (
                 <div style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 400, letterSpacing: '0.02em', marginTop: 2, textAlign: 'left', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 480 }}>
                   {diagramBreadcrumb}
                 </div>
               )}
+              {renderDiagramImpactBadge(diagramId, diagramName)}
             </div>
           </div>
         )}
@@ -2005,29 +2582,50 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
             </div>
           </div>
         )}
-        {/* Composite (stacked) canvas: one display-only, canvas-anchored title
-            banner per section — see sectionTitles prop. */}
-        {sectionTitles?.length ? sectionScreenPositions.map((pos, index) => (
-          <div
-            key={sectionTitles[index]?.prefix || index}
-            className="absolute z-20"
-            style={{
-              left: `${pos.left}px`,
-              top: `${pos.top}px`,
-              transform: 'translate(0, -100%)',
-              pointerEvents: 'none',
-            }}
-          >
-            <div className="bg-white/90 backdrop-blur-sm border border-gray-200 rounded-md px-5 py-2 shadow-sm" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
-              <span className="text-xl font-bold" style={{ color: '#000000', textAlign: 'left' }}>{pos.name}</span>
-              {pos.breadcrumb && (
-                <div style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 400, letterSpacing: '0.02em', marginTop: 2, textAlign: 'left', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 480 }}>
-                  {pos.breadcrumb}
-                </div>
-              )}
+        {/* Composite (stacked) canvas: one canvas-anchored title banner per
+            section — see sectionTitles prop. Clicking a title selects that
+            section's diagram as the target for new sticky notes (there's no
+            per-section properties drawer in composite mode, unlike the
+            single-diagram title above). */}
+        {sectionTitles?.length ? sectionScreenPositions.map((pos, index) => {
+          const sectionDiagramId = sectionTitles[index]?.diagramId;
+          const isNoteTarget = Boolean(sectionDiagramId) && resolveNoteTargetId() === sectionDiagramId;
+          return (
+            <div
+              key={sectionTitles[index]?.prefix || index}
+              className="absolute z-20"
+              style={{
+                left: `${pos.left}px`,
+                top: `${pos.top}px`,
+                transform: 'translate(0, -100%)',
+                cursor: sectionDiagramId ? 'pointer' : 'default',
+              }}
+              onClick={() => { if (sectionDiagramId) setSelectedNoteTargetId(sectionDiagramId); }}
+              title={sectionDiagramId ? 'Click to select this diagram (for adding sticky notes)' : undefined}
+            >
+              <div
+                className="bg-white/90 backdrop-blur-sm border rounded-md px-5 py-2"
+                style={{
+                  position: 'relative',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'flex-start',
+                  borderColor: isNoteTarget ? '#1677ff' : '#e5e7eb',
+                  borderWidth: isNoteTarget ? 2 : 1,
+                  boxShadow: isNoteTarget ? '0 0 0 3px rgba(22,119,255,0.18)' : '0 1px 2px rgba(0,0,0,0.08)',
+                }}
+              >
+                <span className="text-xl font-bold" style={{ color: '#000000', textAlign: 'left' }}>{pos.name}</span>
+                {pos.breadcrumb && (
+                  <div style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 400, letterSpacing: '0.02em', marginTop: 2, textAlign: 'left', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 480 }}>
+                    {pos.breadcrumb}
+                  </div>
+                )}
+                {renderDiagramImpactBadge(sectionDiagramId, pos.name)}
+              </div>
             </div>
-          </div>
-        )) : null}
+          );
+        }) : null}
         <div ref={canvasRef} className="bpmn-canvas absolute inset-0" />
         {/* New Diagram button on canvas */}
         {!readOnly && onNewDiagram && (
@@ -2040,6 +2638,69 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
             New Diagram
           </button>
         )}
+        {/* Sticky notes toolbar: "add a note" button, plus a minimize/maximize
+            toggle for all notes currently on screen (shown only once at
+            least one exists — see visibleNotes below). */}
+        {(canAddNote || visibleNotes.length > 0) && (
+          <div className="absolute z-30 flex items-center gap-2" style={{ top: 8, right: notesRightOffset }}>
+            {canAddNote && (
+              <button
+                type="button"
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white border border-gray-300 text-gray-700 text-xs font-medium shadow-sm hover:bg-amber-50 hover:border-amber-300"
+                onClick={handleAddNoteButtonClick}
+                title="Add a sticky note to this diagram"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16v12H9l-5 5V4z"/></svg>
+                Add Note
+              </button>
+            )}
+            {visibleNotes.length > 0 && (
+              <button
+                type="button"
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white border border-gray-300 text-gray-700 text-xs font-medium shadow-sm hover:bg-gray-50"
+                onClick={() => setNotesCollapsed((current) => !current)}
+                title={notesCollapsed ? 'Show sticky notes' : 'Minimize sticky notes'}
+              >
+                {notesCollapsed ? '▢' : '—'} Notes ({visibleNotes.length})
+              </button>
+            )}
+          </div>
+        )}
+        {visibleNotes.map(({ note, ownerId }) => {
+          const pos = noteScreenPositions[note.id];
+          if (!pos) return null;
+          if (notesCollapsed) {
+            return (
+              <div
+                key={note.id}
+                className="absolute z-[25] flex items-center justify-center rounded-full shadow-md cursor-pointer"
+                style={{ left: pos.left, top: pos.top, width: 22, height: 22, background: note.color, border: '1px solid rgba(0,0,0,0.25)', fontSize: 11 }}
+                title={note.text || 'Sticky note'}
+                onClick={() => setNotesCollapsed(false)}
+              >
+                📌
+              </div>
+            );
+          }
+          return (
+            <StickyNoteCard
+              key={note.id}
+              note={note}
+              left={pos.left}
+              top={pos.top}
+              readOnly={readOnly}
+              dragging={draggingNoteId === note.id}
+              onDragPointerDown={handleNoteDragPointerDown(ownerId, note)}
+              onDragPointerMove={handleNoteDragPointerMove}
+              onDragPointerUp={handleNoteDragPointerUp}
+              onTextChange={(value) => handleNoteTextChange(ownerId, note.id, value)}
+              onTextFocus={() => handleNoteTextFocus(ownerId, note.id)}
+              onTextBlur={() => handleNoteTextBlur(ownerId, note.id)}
+              onColorChange={(color) => handleNoteColorChange(ownerId, note.id, color)}
+              onDelete={() => handleNoteDelete(ownerId, note.id)}
+            />
+          );
+        })}
         {/* Collapse toggle when properties hidden */}
         {showProperties && propsCollapsed && (
           <button
@@ -2337,3 +2998,171 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
 
 BpmnEditor.displayName = 'BpmnEditor';
 export default BpmnEditor;
+
+interface StickyNoteCardProps {
+  note: DiagramNote;
+  left: number;
+  top: number;
+  readOnly?: boolean;
+  dragging: boolean;
+  onDragPointerDown: (e: React.PointerEvent<HTMLDivElement>) => void;
+  onDragPointerMove: (e: React.PointerEvent<HTMLDivElement>) => void;
+  onDragPointerUp: (e: React.PointerEvent<HTMLDivElement>) => void;
+  onTextChange: (value: string) => void;
+  onTextFocus: () => void;
+  onTextBlur: () => void;
+  onColorChange: (color: string) => void;
+  onDelete: () => void;
+}
+
+/** A draggable, editable Post-it-style note pinned onto the BPMN canvas — see
+ * the "Sticky notes" section of BpmnEditor above for how position/persistence
+ * work. Kept as its own component purely to keep BpmnEditor's render method
+ * readable; all state lives in the parent, except whether the history log
+ * below is expanded (purely local display state, nothing to persist). */
+function StickyNoteCard({ note, left, top, readOnly, dragging, onDragPointerDown, onDragPointerMove, onDragPointerUp, onTextChange, onTextFocus, onTextBlur, onColorChange, onDelete }: StickyNoteCardProps) {
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const history = note.history || [];
+  // Whether anything has happened since creation — the creation entry itself
+  // doesn't count as an "edit" for the footer's second line.
+  const hasEdits = history.length > 1 || (note.updatedBy && note.updatedAt !== note.createdAt);
+
+  return (
+    <div
+      className="absolute z-[25] rounded-sm flex flex-col"
+      style={{
+        left,
+        top,
+        width: 210,
+        background: note.color,
+        border: '1px solid rgba(0,0,0,0.15)',
+        boxShadow: dragging ? '0 10px 24px rgba(0,0,0,0.28)' : '0 2px 8px rgba(0,0,0,0.18)',
+        touchAction: 'none',
+      }}
+    >
+      <div
+        className="flex items-center justify-between px-1.5 py-1"
+        style={{ cursor: readOnly ? 'default' : 'grab', borderBottom: '1px solid rgba(0,0,0,0.08)' }}
+        onPointerDown={onDragPointerDown}
+        onPointerMove={onDragPointerMove}
+        onPointerUp={onDragPointerUp}
+        onPointerCancel={onDragPointerUp}
+      >
+        <div className="flex items-center gap-1">
+          {STICKY_NOTE_COLORS.map((color) => (
+            <button
+              key={color}
+              type="button"
+              disabled={readOnly}
+              onClick={() => onColorChange(color)}
+              onPointerDown={(e) => e.stopPropagation()}
+              title="Note color"
+              style={{
+                width: 12,
+                height: 12,
+                borderRadius: '50%',
+                background: color,
+                border: color === note.color ? '2px solid #333' : '1px solid rgba(0,0,0,0.25)',
+                cursor: readOnly ? 'default' : 'pointer',
+                padding: 0,
+              }}
+            />
+          ))}
+        </div>
+        {!readOnly && (
+          <button
+            type="button"
+            onClick={onDelete}
+            onPointerDown={(e) => e.stopPropagation()}
+            title="Delete note"
+            style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'rgba(0,0,0,0.45)', fontSize: 14, lineHeight: 1, padding: '0 2px' }}
+          >
+            ×
+          </button>
+        )}
+      </div>
+      <textarea
+        value={note.text}
+        readOnly={readOnly}
+        placeholder="Type a note…"
+        onChange={(e) => onTextChange(e.target.value)}
+        onFocus={onTextFocus}
+        onBlur={onTextBlur}
+        onPointerDown={(e) => e.stopPropagation()}
+        style={{
+          width: '100%',
+          minHeight: 72,
+          resize: 'vertical',
+          border: 'none',
+          background: 'transparent',
+          padding: '6px 8px',
+          font: '12px/1.4 "IBM Plex Sans", Arial, sans-serif',
+          color: '#3a3a2c',
+          outline: 'none',
+          boxSizing: 'border-box',
+        }}
+      />
+      {/* Who/when footer — creator always shown; a second line appears once
+          the note has been edited by anyone. Crisp on purpose: two short
+          lines, no wrapping, full detail one click away via History. */}
+      <div
+        onPointerDown={(e) => e.stopPropagation()}
+        style={{
+          borderTop: '1px solid rgba(0,0,0,0.1)',
+          padding: '4px 8px 5px',
+          font: '10px/1.4 "IBM Plex Sans", Arial, sans-serif',
+          color: 'rgba(0,0,0,0.55)',
+        }}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`Created by ${note.createdBy || 'Unknown'} on ${formatNoteTimestamp(note.createdAt)}`}>
+            👤 {note.createdBy || 'Unknown'} · {formatNoteTimestamp(note.createdAt)}
+          </span>
+          {history.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setHistoryOpen((v) => !v)}
+              title={historyOpen ? 'Hide history' : 'Show full history'}
+              style={{
+                flex: '0 0 auto',
+                border: 'none',
+                background: 'rgba(0,0,0,0.06)',
+                borderRadius: 3,
+                cursor: 'pointer',
+                color: 'inherit',
+                font: 'inherit',
+                padding: '1px 5px',
+              }}
+            >
+              🕘 {history.length} {historyOpen ? '▲' : '▼'}
+            </button>
+          )}
+        </div>
+        {hasEdits && (
+          <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1 }} title={`Last edited by ${note.updatedBy || 'Unknown'} on ${formatNoteTimestamp(note.updatedAt)}`}>
+            ✎ {note.updatedBy || 'Unknown'} · {formatNoteTimestamp(note.updatedAt)}
+          </div>
+        )}
+        {historyOpen && (
+          <div
+            style={{
+              marginTop: 4,
+              maxHeight: 110,
+              overflowY: 'auto',
+              background: 'rgba(255,255,255,0.55)',
+              borderRadius: 4,
+              padding: '4px 6px',
+            }}
+          >
+            {[...history].reverse().map((entry, index) => (
+              <div key={`${entry.date}_${index}`} style={{ padding: '2px 0', borderTop: index === 0 ? undefined : '1px solid rgba(0,0,0,0.08)' }}>
+                <div style={{ fontWeight: 600, color: 'rgba(0,0,0,0.7)' }}>{entry.change}</div>
+                <div>{entry.userId} · {formatNoteTimestamp(entry.date)}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

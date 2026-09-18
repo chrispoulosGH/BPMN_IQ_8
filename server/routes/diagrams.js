@@ -1513,6 +1513,44 @@ router.get('/:id', async (req, res) => {
   }
 });
 
+// GET /api/diagrams/:id/notes — sticky notes pinned to this diagram
+router.get('/:id/notes', async (req, res) => {
+  try {
+    const diagram = await Diagram.findOne(
+      { $and: [buildNeighborhoodFilter(getNeighborhoodName(req)), { _id: req.params.id }] },
+      { notes: 1 }
+    ).lean();
+    if (!diagram) return res.status(404).json({ error: 'Diagram not found.' });
+    res.json(diagram.notes || []);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/diagrams/:id/notes — replace this diagram's sticky notes wholesale
+// (the client always sends its full current set — additions, edits, moves,
+// and deletes all land here). Kept separate from PUT /:id so a note drag or
+// keystroke never has to round-trip (or risk clobbering) the full diagram
+// document/XML.
+router.put('/:id/notes', async (req, res) => {
+  const notes = Array.isArray(req.body?.notes) ? req.body.notes : null;
+  if (!notes) return res.status(400).json({ error: 'Field "notes" (array) is required.' });
+  try {
+    const diagram = await Diagram.findOneAndUpdate(
+      { $and: [buildNeighborhoodFilter(getNeighborhoodName(req)), { _id: req.params.id }] },
+      { $set: { notes } },
+      { new: true, runValidators: true, fields: { notes: 1 } }
+    ).lean();
+    if (!diagram) return res.status(404).json({ error: 'Diagram not found.' });
+    res.json(diagram.notes || []);
+  } catch (err) {
+    if (err?.name === 'ValidationError') {
+      return res.status(400).json({ error: err.message });
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /api/diagrams — create new diagram
 router.post('/', async (req, res) => {
   const {
