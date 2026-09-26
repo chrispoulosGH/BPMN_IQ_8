@@ -5,6 +5,7 @@ import BpmnEditor, { EMPTY_DIAGRAM } from './BpmnEditor';
 import type { ImpactIssueLike } from './BpmnEditor';
 import ApplicationImpact3DChart from './ApplicationImpact3DChart';
 import { getApplicationReferenceForNeighborhood, getDiagram, getProcessChangeRadar } from '../api';
+import { normalizeDomainLabel } from '../utils/domainExposure';
 import type { ApplicationItem, JiraApplicationImpact, JiraImpactIssue, ProcessChangeRadarDiagramSummary } from '../types';
 
 // Same reference-data scope App.tsx uses for the Diagrams tab (see
@@ -15,13 +16,19 @@ const REFERENCE_DATA_NEIGHBORHOOD_NAME = 'System Components';
 
 const { Title, Text } = Typography;
 
-// Diagram.domain values in the data include both a clean "Warranty &
-// Protection Services" and an HTML-escaped "Warranty &amp; Protection
-// Services" spelling of the same domain (an upstream import artifact) — fold
-// them together so they don't split into two sidebar groups.
-function normalizeDomainLabel(domain?: string | null): string {
-  const trimmed = (domain || '').replace(/&amp;/gi, '&').trim();
-  return trimmed || 'Uncategorized';
+interface ProcessChangeRadarProps {
+  /** Seeds the sidebar search box with a domain name — used when the Change
+   * Exposure Board's "go to flows" link on a domain sends the user here
+   * pre-filtered. Only read once, on mount: this component is destroyed and
+   * remounted fresh every time its tab becomes active (see the tab's
+   * destroyInactiveTabPane in App.tsx), so there's no stale-value problem to
+   * guard against with an effect. */
+  initialDomainFilter?: string | null;
+  /** Selects one exact flow on load — used by the Process Change Heat Map's
+   * tile clicks, which already know precisely which diagram was clicked
+   * (unlike a domain click, which only narrows to a group). Takes priority
+   * over initialDomainFilter when both are set; also read once, on mount. */
+  initialDiagramId?: string | null;
 }
 
 /**
@@ -36,14 +43,14 @@ function normalizeDomainLabel(domain?: string | null): string {
  * (unlike an earlier version that stacked up to 25 onto one composite
  * canvas, which got unwieldy well before real Jira data produced 70+ hits).
  */
-export default function ProcessChangeRadar() {
+export default function ProcessChangeRadar({ initialDomainFilter, initialDiagramId }: ProcessChangeRadarProps = {}) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notConfigured, setNotConfigured] = useState(false);
   const [summaries, setSummaries] = useState<ProcessChangeRadarDiagramSummary[]>([]);
   const [issuesByApplicationName, setIssuesByApplicationName] = useState<Record<string, JiraImpactIssue[]>>({});
   const [allApplications, setAllApplications] = useState<ApplicationItem[]>([]);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchQuery, setSearchQuery] = useState(initialDomainFilter || '');
   const [selectedDiagramId, setSelectedDiagramId] = useState<string | null>(null);
   const [selectedDiagramXml, setSelectedDiagramXml] = useState<string>(EMPTY_DIAGRAM);
   const [diagramLoading, setDiagramLoading] = useState(false);
@@ -69,10 +76,20 @@ export default function ProcessChangeRadar() {
       setIssuesByApplicationName(data.issuesByApplicationName || {});
       const diagrams = data.diagrams || [];
       setSummaries(diagrams);
-      // Keep the current selection if it's still impacted; otherwise default
-      // to the top-ranked (most impacted) flow.
+      // Keep the current selection if it's still impacted; otherwise prefer
+      // an exact flow (Heat Map tile click), then the top-ranked flow within
+      // the initial domain filter (Change Exposure Board domain click), then
+      // the top-ranked flow overall.
       setSelectedDiagramId((current) => {
         if (current && diagrams.some((d) => d.diagramId === current)) return current;
+        if (!current && initialDiagramId && diagrams.some((d) => d.diagramId === initialDiagramId)) {
+          return initialDiagramId;
+        }
+        if (!current && initialDomainFilter) {
+          const normalizedFocus = normalizeDomainLabel(initialDomainFilter);
+          const focused = diagrams.find((d) => normalizeDomainLabel(d.domain) === normalizedFocus);
+          if (focused) return focused.diagramId;
+        }
         return diagrams[0]?.diagramId || null;
       });
     } catch (err: any) {
@@ -84,7 +101,7 @@ export default function ProcessChangeRadar() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [initialDomainFilter, initialDiagramId]);
 
   useEffect(() => { void load(); }, [load]);
 

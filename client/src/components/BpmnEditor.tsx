@@ -47,6 +47,11 @@ export interface BpmnEditorHandle {
   validateTasks: () => Promise<void>;
   replaceAppNames: (replacements: Map<string, string>) => Promise<void>;
   replaceTaskNames: (replacements: Map<string, string>) => Promise<void>;
+  // Live read straight from the bpmn-js elementRegistry — reflects
+  // in-progress, unsaved edits (used by the Quantitative Modeling "what-if"
+  // screen to recompute its gauges as the user edits, without a save/XML
+  // round-trip).
+  getTaskApplications: () => { taskId: string; taskName: string; apps: string[] }[];
 }
 
 interface BpmnEditorProps {
@@ -545,6 +550,17 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
       getXml: async () => {
         const { xml: out } = await modelerRef.current.saveXML({ format: true });
         return out;
+      },
+      getTaskApplications: () => {
+        const m = modelerRef.current;
+        if (!m) return [];
+        const elementRegistry = m.get('elementRegistry');
+        const tasks = elementRegistry.filter((el: any) => isActivityType(el.businessObject?.$type));
+        return tasks.map((el: any) => ({
+          taskId: el.id,
+          taskName: el.businessObject?.name || el.id,
+          apps: getTaskAppsRef.current(el.businessObject),
+        }));
       },
       fitViewport: () => {
         if (modelerRef.current) fitViewportWithTitleRoom(modelerRef.current);

@@ -2071,4 +2071,78 @@ router.get('/business-flow-defect-risk/apps', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/dashboard/application-risk
+ * Per-application inputs to the security/defect risk formulas above (asset
+ * counts, at-risk counts, severity/criticality rank, internet-facing flag)
+ * for every application in the System Components neighborhood — keyed by
+ * `acronym`, which is exactly what a Diagram's tasks[].applications[].name
+ * already stores (confirmed: CanonicalData Applications rows' own
+ * `primaryKey` *is* that acronym).
+ *
+ * Unlike the business-flow-* routes above, this doesn't roll anything up to
+ * a flow — it hands back the raw per-application ingredients so a caller can
+ * aggregate them over *any* set of application names, including a live,
+ * unsaved, in-progress diagram edit that has no lineage data of its own yet.
+ * See client/src/utils/riskModel.ts for the aggregation this feeds — it
+ * re-implements the exact same probability/severity math as
+ * business-flow-security-risk and business-flow-defect-risk above, just
+ * driven by a client-supplied app-name set instead of the baked-in
+ * `__lineageVariants` those routes read. Keep the two formulas in sync if
+ * either changes.
+ */
+router.get('/application-risk', async (req, res) => {
+  try {
+    const [canonicalApps, canonicalServers, canonicalSoftware] = await Promise.all([
+      CanonicalData.find({ neighborhoodName: SYSTEM_COMPONENTS_NEIGHBORHOOD, componentType: 'Applications' }, { values: 1, primaryKey: 1 }).lean(),
+      CanonicalData.find({ neighborhoodName: SYSTEM_COMPONENTS_NEIGHBORHOOD, componentType: 'Servers' }, { values: 1 }).lean(),
+      CanonicalData.find({ neighborhoodName: SYSTEM_COMPONENTS_NEIGHBORHOOD, componentType: 'Software' }, { values: 1 }).lean(),
+    ]);
+
+    function groupByApplicationId(docs) {
+      const byApp = new Map();
+      for (const doc of docs) {
+        const appId = getFkApplicationId(doc.values);
+        if (!appId) continue;
+        if (!byApp.has(appId)) byApp.set(appId, []);
+        byApp.get(appId).push(doc.values || {});
+      }
+      return byApp;
+    }
+    const serversByApp = groupByApplicationId(canonicalServers);
+    const softwareByApp = groupByApplicationId(canonicalSoftware);
+
+    const applications = canonicalApps.map((doc) => {
+      const v = doc.values || {};
+      const appId = String(v['APP_ID Qualifier'] || '').trim();
+      const acronym = String(v['APP_ACRONYM Component'] || doc.primaryKey || '').trim();
+      const name = String(v['APP_NAME Qualifier'] || acronym || appId).trim();
+      const servers = serversByApp.get(appId) || [];
+      const software = softwareByApp.get(appId) || [];
+      const profile = {
+        securityClassification: String(v['SECURITY_CLASSIFICATION Aggregator'] || '').trim(),
+        dataClassification: String(v['DATA_CLASSIFICATION Aggregator'] || '').trim(),
+        complianceRequirements: String(v['COMPLIANCE_REQUIREMENTS Qualifier'] || '').trim(),
+        businessCriticality: String(v['BUSINESS_CRITICALITY Aggregator'] || '').trim(),
+      };
+
+      return {
+        appId,
+        acronym,
+        name,
+        assetCount: servers.length + software.length,
+        atRiskCountSecurity: servers.filter(isServerAtRisk).length + software.filter(isSoftwareAtRisk).length,
+        atRiskCountDefect: servers.filter(isServerDefectRisk).length + software.filter(isSoftwareDefectRisk).length,
+        internetFacing: String(v['INTERNET_FACING Qualifier'] || '').trim() === 'Yes',
+        securitySeverityRank: applicationSeverityRank(profile),
+        defectCriticalityRank: applicationCriticalityRank(profile),
+      };
+    });
+
+    res.json({ applications });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;

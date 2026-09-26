@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Diagram = require('../models/Diagram');
+const ProcessChangeSnapshot = require('../models/ProcessChangeSnapshot');
 const { isJiraConfigured, getProcessChangeIssues } = require('../services/jiraClient');
 const { listApplicationReferences } = require('../utils/applicationReferenceLookup');
 
@@ -196,6 +197,66 @@ router.get('/', async (req, res) => {
     console.error('[PROCESS CHANGE RADAR] failed:', err);
     const knownConfigError = err.code === 'JIRA_NOT_CONFIGURED' || err.code === 'JIRA_FIELDS_NOT_FOUND';
     res.status(knownConfigError ? 400 : 500).json({ error: err.message, configured: !knownConfigError });
+  }
+});
+
+// POST /api/process-change-radar/snapshot — upserts today's (UTC) Process
+// Change Heat Map rollup for the trend chart. The rag classification is
+// computed client-side (client/src/utils/domainExposure.ts, the same logic
+// the heat map itself renders from) and posted as-is; this route is
+// deliberately a dumb store rather than a second implementation of the
+// jeopardy math, so the trend can never disagree with what the heat map
+// showed the moment it was recorded. Re-posting the same date overwrites
+// that day's row — a second visit updates "today," it doesn't duplicate it.
+router.post('/snapshot', async (req, res) => {
+  try {
+    const {
+      date, generatedAt, totalFlows, redCount, amberCount, greenCount,
+      totalIssues, totalPoints, overduePoints, dueSoon7Points,
+    } = req.body || {};
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) {
+      return res.status(400).json({ error: 'date must be an ISO YYYY-MM-DD string.' });
+    }
+    const generatedAtDate = new Date(generatedAt);
+    if (Number.isNaN(generatedAtDate.getTime())) {
+      return res.status(400).json({ error: 'generatedAt must be a valid date.' });
+    }
+
+    const snapshot = await ProcessChangeSnapshot.findOneAndUpdate(
+      { date },
+      {
+        date,
+        generatedAt: generatedAtDate,
+        totalFlows: Number(totalFlows) || 0,
+        redCount: Number(redCount) || 0,
+        amberCount: Number(amberCount) || 0,
+        greenCount: Number(greenCount) || 0,
+        totalIssues: Number(totalIssues) || 0,
+        totalPoints: Number(totalPoints) || 0,
+        overduePoints: Number(overduePoints) || 0,
+        dueSoon7Points: Number(dueSoon7Points) || 0,
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    res.json(snapshot);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/process-change-radar/history — the Process Change Heat Map's
+// trend chart data, oldest first. Capped at the most recent 180 days so this
+// stays cheap indefinitely without needing a separate retention job.
+router.get('/history', async (req, res) => {
+  try {
+    const snapshots = await ProcessChangeSnapshot.find({})
+      .sort({ date: -1 })
+      .limit(180)
+      .lean();
+    res.json(snapshots.reverse());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

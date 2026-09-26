@@ -603,6 +603,23 @@ export interface ProcessChangeRadarResponse {
   issuesByApplicationName: Record<string, JiraImpactIssue[]>;
 }
 
+// One day's Process Change Heat Map rollup, for the trend chart above it —
+// see server/models/ProcessChangeSnapshot.js. Posted by the heat map itself
+// every time it loads (upserted by `date`, so same-day re-visits update
+// rather than duplicate) and read back for the history line.
+export interface ProcessChangeSnapshot {
+  date: string; // YYYY-MM-DD (UTC)
+  generatedAt: string;
+  totalFlows: number;
+  redCount: number;
+  amberCount: number;
+  greenCount: number;
+  totalIssues: number;
+  totalPoints: number;
+  overduePoints: number;
+  dueSoon7Points: number;
+}
+
 export interface ActorItem {
   _id: string;
   name: string;

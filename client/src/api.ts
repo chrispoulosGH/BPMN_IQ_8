@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Diagram, DiagramMeta, DiagramNote, DiagramCreatePayload, DiagramUpdatePayload, DiagramValidationRequest, DiagramValidationReport, FileSaveResult, CapabilityMatchResult, TaskRecord, TaskCreatePayload, ReferenceData, RefItem, CapabilityItem, ActorItem, ServerItem, DatabaseItem, FactoryNeighborhoodSummary, CustomFactory, CustomFactoryRow, ModelCatalog, ModelCatalogRow, CatalogTreeResponse, CatalogTreeChildrenResponse, CatalogTreeSearchResponse, ProcessChangeRadarResponse } from './types';
+import type { Diagram, DiagramMeta, DiagramNote, DiagramCreatePayload, DiagramUpdatePayload, DiagramValidationRequest, DiagramValidationReport, FileSaveResult, CapabilityMatchResult, TaskRecord, TaskCreatePayload, ReferenceData, RefItem, CapabilityItem, ActorItem, ServerItem, DatabaseItem, FactoryNeighborhoodSummary, CustomFactory, CustomFactoryRow, ModelCatalog, ModelCatalogRow, CatalogTreeResponse, CatalogTreeChildrenResponse, CatalogTreeSearchResponse, ProcessChangeRadarResponse, ProcessChangeSnapshot } from './types';
 export type { RefItem, CapabilityItem, ActorItem, ServerItem, DatabaseItem, FactoryNeighborhoodSummary, CustomFactory, CustomFactoryRow, ModelCatalog, ModelCatalogRow, CatalogTreeResponse, CatalogTreeChildrenResponse, CatalogTreeSearchResponse };
 
 const api = axios.create({ baseURL: '/api', withCredentials: true });
@@ -709,6 +709,28 @@ export interface BusinessFlowDefectRiskApp {
 export const getDashboardBusinessFlowDefectRiskApps = (flow: string): Promise<{ businessFlow: string; applications: BusinessFlowDefectRiskApp[] }> =>
   api.get('/dashboard/business-flow-defect-risk/apps', { params: { flow } }).then((r) => r.data);
 
+// Per-application inputs to the two risk formulas above (asset counts,
+// at-risk counts, severity/criticality rank, internet-facing) for every
+// application in the System Components neighborhood — keyed by `acronym`,
+// which is exactly what a Diagram's tasks[].applications[].name stores.
+// Unlike the business-flow-* routes, this doesn't roll up to any one flow —
+// see client/src/utils/quantitativeModel.ts, which aggregates this over an
+// arbitrary (including live, unsaved) set of application names for the
+// Quantitative Modeling "what-if" screen.
+export interface ApplicationRiskProfile {
+  appId: string;
+  acronym: string;
+  name: string;
+  assetCount: number;
+  atRiskCountSecurity: number;
+  atRiskCountDefect: number;
+  internetFacing: boolean;
+  securitySeverityRank: number;
+  defectCriticalityRank: number;
+}
+export const getApplicationRiskReference = (): Promise<{ applications: ApplicationRiskProfile[] }> =>
+  api.get('/dashboard/application-risk').then((r) => r.data);
+
 export interface CostByYearItem { name: string; opCost: number; devCost: number; totalCost: number; }
 export interface TaskCostByYearItem extends CostByYearItem { businessFlow: string; }
 export const getDashboardCostByYear = (year: number): Promise<{ flows: CostByYearItem[]; tasks: TaskCostByYearItem[]; year: number }> =>
@@ -745,5 +767,14 @@ export const getDashboardServerLocationPoints = (): Promise<{
 // err.response.data — read `.error` there for the message to show the user.
 export const getProcessChangeRadar = (): Promise<ProcessChangeRadarResponse> =>
   api.get('/process-change-radar').then((r) => r.data);
+
+// Upserted by ProcessChangeHeatMap.tsx every time it loads — see
+// server/models/ProcessChangeSnapshot.js for why this posts the already-
+// computed rollup rather than asking the server to re-derive it.
+export const saveProcessChangeSnapshot = (snapshot: ProcessChangeSnapshot): Promise<ProcessChangeSnapshot> =>
+  api.post('/process-change-radar/snapshot', snapshot).then((r) => r.data);
+
+export const getProcessChangeHistory = (): Promise<ProcessChangeSnapshot[]> =>
+  api.get('/process-change-radar/history').then((r) => r.data);
 
 export default api;

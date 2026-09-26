@@ -18,6 +18,12 @@
 //   JIRA_BUSINESS_FLOW_FIELD_NAME default "Business Process Flow"
 //   JIRA_APPLICATION_FIELD_NAME default "Application"
 //   JIRA_API_FIELD_NAME        default "API"
+//   JIRA_BUSINESS_FLOW_FIELD_ID / JIRA_APPLICATION_FIELD_ID / JIRA_API_FIELD_ID
+//                              optional "customfield_NNNNN" override — skips the by-name lookup
+//                              for that field entirely. Use when a field is known to exist and
+//                              work (e.g. resolvable via JQL/search) but doesn't appear in
+//                              GET /rest/api/3/field for some site-specific reason, so by-name
+//                              resolution can never find it no matter how the name is spelled.
 //   JIRA_DUE_DATE_FIELD_NAME   optional — leave unset to use Jira's standard Due Date field
 //   JIRA_STORY_POINTS_FIELD_NAME optional comma-separated field-name candidates to try, in order
 //   JIRA_STORY_POINTS_TO_DAYS  conversion ratio, e.g. "1" = 1 story point = 1 dev day
@@ -31,6 +37,9 @@ const JIRA_BOARD_ID = String(process.env.JIRA_BOARD_ID || '').trim();
 const JIRA_BUSINESS_FLOW_FIELD_NAME = String(process.env.JIRA_BUSINESS_FLOW_FIELD_NAME || 'Business Process Flow').trim();
 const JIRA_APPLICATION_FIELD_NAME = String(process.env.JIRA_APPLICATION_FIELD_NAME || 'Application').trim();
 const JIRA_API_FIELD_NAME = String(process.env.JIRA_API_FIELD_NAME || 'API').trim();
+const JIRA_BUSINESS_FLOW_FIELD_ID = String(process.env.JIRA_BUSINESS_FLOW_FIELD_ID || '').trim();
+const JIRA_APPLICATION_FIELD_ID = String(process.env.JIRA_APPLICATION_FIELD_ID || '').trim();
+const JIRA_API_FIELD_ID = String(process.env.JIRA_API_FIELD_ID || '').trim();
 const JIRA_DUE_DATE_FIELD_NAME = String(process.env.JIRA_DUE_DATE_FIELD_NAME || '').trim();
 const JIRA_STORY_POINTS_FIELD_NAMES = String(process.env.JIRA_STORY_POINTS_FIELD_NAME || 'Story Points,Story point estimate')
   .split(',').map((s) => s.trim()).filter(Boolean);
@@ -63,17 +72,25 @@ async function jiraFetch(path, options = {}) {
 }
 
 // Field ids (e.g. "customfield_10045") are per-site, so fields are resolved
-// by display name at runtime instead of being hardcoded — cached for this
-// process's lifetime since field definitions essentially never change while
-// the server is running.
+// by display name at runtime instead of being hardcoded. Cached, but with a
+// TTL rather than for the process's whole lifetime — a permanent cache once
+// masked a real Jira-side field-visibility problem for days (the long-lived
+// dev server kept serving an early, correct lookup while Jira had quietly
+// stopped returning those fields), which nobody noticed until an unrelated
+// restart finally forced a fresh call. A short TTL means a live Jira-side
+// change — in either direction — surfaces within minutes, not only on the
+// next process restart.
+const FIELD_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 let fieldNameCache = null;
+let fieldNameCacheAt = 0;
 async function loadJiraFieldsByName() {
-  if (fieldNameCache) return fieldNameCache;
+  if (fieldNameCache && Date.now() - fieldNameCacheAt < FIELD_CACHE_TTL_MS) return fieldNameCache;
   const fields = await jiraFetch('/rest/api/3/field');
   fieldNameCache = new Map();
   for (const field of fields || []) {
     if (field?.name && field?.id) fieldNameCache.set(String(field.name).trim().toLowerCase(), field.id);
   }
+  fieldNameCacheAt = Date.now();
   return fieldNameCache;
 }
 
@@ -176,9 +193,9 @@ async function getProcessChangeIssues() {
   }
 
   const byName = await loadJiraFieldsByName();
-  const businessFlowFieldId = resolveFieldId(byName, [JIRA_BUSINESS_FLOW_FIELD_NAME]);
-  const applicationFieldId = resolveFieldId(byName, [JIRA_APPLICATION_FIELD_NAME]);
-  const apiFieldId = resolveFieldId(byName, [JIRA_API_FIELD_NAME]);
+  const businessFlowFieldId = JIRA_BUSINESS_FLOW_FIELD_ID || resolveFieldId(byName, [JIRA_BUSINESS_FLOW_FIELD_NAME]);
+  const applicationFieldId = JIRA_APPLICATION_FIELD_ID || resolveFieldId(byName, [JIRA_APPLICATION_FIELD_NAME]);
+  const apiFieldId = JIRA_API_FIELD_ID || resolveFieldId(byName, [JIRA_API_FIELD_NAME]);
   const storyPointsFieldId = resolveFieldId(byName, JIRA_STORY_POINTS_FIELD_NAMES);
   const dueDateFieldId = JIRA_DUE_DATE_FIELD_NAME ? resolveFieldId(byName, [JIRA_DUE_DATE_FIELD_NAME]) : 'duedate';
 

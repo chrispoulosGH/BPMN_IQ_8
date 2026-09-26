@@ -50,10 +50,16 @@ import {
   LogoutOutlined,
   SettingOutlined,
   RadarChartOutlined,
+  FundOutlined,
+  FireOutlined,
+  ExperimentOutlined,
 } from '@ant-design/icons';
 import BpmnEditor, { EMPTY_DIAGRAM, type BpmnEditorHandle } from './components/BpmnEditor';
 import { composeStackedDiagramXml, type CompositeDiagramItem, type CompositeSectionTitle } from './utils/diagramComposite';
 import ProcessChangeRadar from './components/ProcessChangeRadar';
+import ProcessChangeHeatMap from './components/ProcessChangeHeatMap';
+import ExecutiveDashboard from './components/ExecutiveDashboard';
+import QuantitativeModeling from './components/QuantitativeModeling';
 import DiagramBrowser from './components/DiagramBrowser';
 import NewDiagramDialog from './components/NewDiagramDialog';
 import SystemComponentsImportButton from './components/SystemComponentsImportButton';
@@ -494,6 +500,14 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
 
   // Tab state — outer app tabs, analytics/data subtabs, and factory tabs scoped per neighborhood
   const [activeOuterTab, setActiveOuterTab] = useState<string>('analytics');   // outer: analytics | valueStreams | bpmn | data | neighborhoods
+  // Set when the Dashboard tab's Change Exposure Board sends the user to
+  // Process Change Radar pre-filtered to one domain (see
+  // handleDashboardDomainSelect) — read once by ProcessChangeRadar on mount.
+  const [radarDomainFocus, setRadarDomainFocus] = useState<string | null>(null);
+  // Same idea, but for an exact flow — set when a Process Change Heat Map
+  // tile is clicked (see handleHeatMapFlowSelect). Takes priority over
+  // radarDomainFocus in ProcessChangeRadar when both are set.
+  const [radarDiagramFocus, setRadarDiagramFocus] = useState<string | null>(null);
   const [activeAnalyticsTab, setActiveAnalyticsTab] = useState<string>('dashboard'); // inner Analytics sub-tabs
   const [activeAnalyticsModel, setActiveAnalyticsModel] = useState<string>('');
   const [activeAnalyticsTabsByModel, setActiveAnalyticsTabsByModel] = useState<Record<string, string>>({});
@@ -1927,6 +1941,34 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
     setActiveOuterTab(nextTab);
   }, [rebuildCompositeCanvas, selectedValueStreamEntity]);
 
+  // Change Exposure Board (Dashboard tab) → clicking a domain's bar jumps to
+  // Process Change Radar with its sidebar pre-filtered to that domain.
+  const handleDashboardDomainSelect = useCallback((domain: string) => {
+    setRadarDomainFocus(domain);
+    handleOuterTabChange('processChangeRadar');
+  }, [handleOuterTabChange]);
+
+  // Process Change Heat Map → clicking a flow tile jumps to Process Change
+  // Radar with that exact flow selected (and its domain group expanded,
+  // since initialDiagramId's match already lives inside a domain group that
+  // renders open by default).
+  const handleHeatMapFlowSelect = useCallback((flow: { diagramId: string; domain: string }) => {
+    setRadarDiagramFocus(flow.diagramId);
+    setRadarDomainFocus(flow.domain);
+    handleOuterTabChange('processChangeRadar');
+  }, [handleOuterTabChange]);
+
+  // Both focus values are only valid for the visit they were set for — clear
+  // them as soon as the user leaves Process Change Radar, so a later direct
+  // click on that tab (not via the dashboard or heat map) doesn't inherit a
+  // stale filter/selection.
+  useEffect(() => {
+    if (activeOuterTab !== 'processChangeRadar') {
+      setRadarDomainFocus(null);
+      setRadarDiagramFocus(null);
+    }
+  }, [activeOuterTab]);
+
   const handleViewCapabilityInCatalog = useCallback((capability: CapabilityMatch) => {
     const clickedName = getCapabilityFocusName(capability.capabilityName);
     const targetModel = activeDiagram?.neighborhoodName || activeNeighborhoodTab || DEFAULT_NEIGHBORHOOD_NAME;
@@ -3213,6 +3255,13 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
             )}
             items={[
               {
+                key: 'execDashboard',
+                label: outerTabLabel('execDashboard', <span><FundOutlined /> Dashboard</span>),
+                // destroyInactiveTabPane means mounting here is a fresh fetch
+                // every visit, same as Process Change Radar below.
+                children: <ExecutiveDashboard onSelectDomain={handleDashboardDomainSelect} />,
+              },
+              {
                 key: 'analytics',
                 label: outerTabLabel('analytics', <span><DashboardOutlined /> Analytics</span>),
                 children: (
@@ -3420,7 +3469,23 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                 // "the button was pressed" — ProcessChangeRadar fires its
                 // Jira fetch fresh from its own mount effect, never on app
                 // startup and never cached across visits.
-                children: <ProcessChangeRadar />,
+                children: <ProcessChangeRadar initialDomainFilter={radarDomainFocus} initialDiagramId={radarDiagramFocus} />,
+              },
+              {
+                key: 'processChangeHeatMap',
+                label: outerTabLabel('processChangeHeatMap', <span><FireOutlined /> Process Change Heat Map</span>),
+                // Same destroyInactiveTabPane behavior as Process Change
+                // Radar above — a fresh Jira fetch every time this tab opens.
+                children: <ProcessChangeHeatMap onSelectFlow={handleHeatMapFlowSelect} />,
+              },
+              {
+                key: 'quantitativeModeling',
+                label: outerTabLabel('quantitativeModeling', <span><ExperimentOutlined /> Quantitative Modeling</span>),
+                // Same destroyInactiveTabPane behavior as the tabs above — a
+                // fresh reference-data fetch (risk/cost/Jira) every visit;
+                // nothing here is ever saved, so there's no state worth
+                // keeping across a tab switch anyway.
+                children: <QuantitativeModeling />,
               },
               {
                 key: 'data',
