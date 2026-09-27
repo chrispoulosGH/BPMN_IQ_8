@@ -118,6 +118,8 @@ const materializeRouter = require('./routes/materialize');
 app.use('/api/materialize', materializeRouter);
 const processChangeRadarRouter = require('./routes/processChangeRadar');
 app.use('/api/process-change-radar', processChangeRadarRouter);
+const processOptimizerRouter = require('./routes/processOptimizer');
+app.use('/api/process-optimizer', processOptimizerRouter);
 
 // Connect to MongoDB then start server
 async function backfillNeighborhoods() {

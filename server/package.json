@@ -9,17 +9,22 @@
     "enrich:server-notes": "node scripts/enrich-server-notes.js",
     "reseed:databases": "node scripts/reseed-databases.js",
     "enrich:database-notes": "node scripts/enrich-database-notes.js",
+    "mcp": "node mcp/server.js",
+    "mcp:smoke-test": "node mcp/smoke_test.js",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.128.0",
+    "@modelcontextprotocol/sdk": "^1.30.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "mongoose": "^8.4.1",
     "multer": "^1.4.5-lts.1",
     "openai": "^6.37.0",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@xmldom/xmldom": "^0.9.10",
