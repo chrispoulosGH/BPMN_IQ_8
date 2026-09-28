@@ -117,6 +117,24 @@ interface BpmnEditorProps {
   impactByDiagramId?: Record<string, ImpactIssueLike[]>;
   impactByApplicationName?: Record<string, ImpactIssueLike[]>;
   onImpactIndicatorClick?: (issues: ImpactIssueLike[], context: { elementType: 'task' | 'diagram'; elementName: string; diagramId?: string }) => void;
+  // Process Optimizer: a proposed change to highlight directly on this task.
+  // Keyed by normalizeImpactName(task name) — the only reliable link back to
+  // a canvas element, since Diagram.tasks[]._id (what the optimizer agent's
+  // tools call taskId) is a Mongo-assigned id with no relationship to the
+  // bpmn:task element's own `id` attribute (extractTasks() in diagrams.js
+  // never preserves it). Omit for the normal Diagrams tab and the Baseline
+  // panel — only the What-If canvas in Quantitative Modeling passes this.
+  optimizerFindingByTaskName?: Record<string, OptimizerFindingLike>;
+  onOptimizerFindingClick?: (finding: OptimizerFindingLike, taskName: string) => void;
+}
+
+// Minimal shape BpmnEditor needs from a ProcessOptimizerTaskDiffEntry (see
+// types.ts) — kept local rather than importing the full type, same reasoning
+// as ImpactIssueLike above.
+export interface OptimizerFindingLike {
+  op: 'add' | 'remove' | 'retarget_application' | 'rename';
+  reason: string;
+  detail?: Record<string, unknown>;
 }
 
 // Minimal shape BpmnEditor itself needs from a Jira impact issue — kept
@@ -192,7 +210,7 @@ function splitStoredApplicationNames(value: string): string[] {
 }
 
 const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
-  ({ xml, importTrigger, onXmlChange, onDirty, showProperties = true, allApplicationNames = [], allApplications = [], allBusinessFlowNames = [], allTaskNames = [], allActorNames = [], diagramName, diagramStatus, canEditDiagramName = false, isInFactory, isAlreadyLoaded, readOnly, onNavigateToFactory, onApplicationLinkClick, onTaskSelect, selectedCapability, isCapabilityAssigned = false, onCapabilityAssignToggle, onCapabilityViewInCatalog, onCapabilityBack, onAddToFactory, onDeleteAndReload, onSaveAsNew, onDiagramNameClick, onViewBusinessFlowComponent, onNewDiagram, onDiagramNameChange, diagramBreadcrumb, diagramId, currentUserId, sectionTitles, impactByDiagramId, impactByApplicationName, onImpactIndicatorClick }, ref) => {
+  ({ xml, importTrigger, onXmlChange, onDirty, showProperties = true, allApplicationNames = [], allApplications = [], allBusinessFlowNames = [], allTaskNames = [], allActorNames = [], diagramName, diagramStatus, canEditDiagramName = false, isInFactory, isAlreadyLoaded, readOnly, onNavigateToFactory, onApplicationLinkClick, onTaskSelect, selectedCapability, isCapabilityAssigned = false, onCapabilityAssignToggle, onCapabilityViewInCatalog, onCapabilityBack, onAddToFactory, onDeleteAndReload, onSaveAsNew, onDiagramNameClick, onViewBusinessFlowComponent, onNewDiagram, onDiagramNameChange, diagramBreadcrumb, diagramId, currentUserId, sectionTitles, impactByDiagramId, impactByApplicationName, onImpactIndicatorClick, optimizerFindingByTaskName, onOptimizerFindingClick }, ref) => {
     const canvasRef = useRef<HTMLDivElement>(null);
     const propertiesRef = useRef<HTMLDivElement>(null);
     const modelerRef = useRef<any>(null);
@@ -222,10 +240,15 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
     const applicationCatalogLoadingRef = useRef<Promise<ApplicationItem[]> | null>(null);
     const renderAppOverlaysRef = useRef<(m?: any) => void>(() => {});
     const renderImpactOverlaysRef = useRef<(m?: any) => void>(() => {});
+    const renderOptimizerOverlaysRef = useRef<(m?: any) => void>(() => {});
     const impactByApplicationNameRef = useRef(impactByApplicationName);
     impactByApplicationNameRef.current = impactByApplicationName;
     const onImpactIndicatorClickRef = useRef(onImpactIndicatorClick);
     onImpactIndicatorClickRef.current = onImpactIndicatorClick;
+    const optimizerFindingByTaskNameRef = useRef(optimizerFindingByTaskName);
+    optimizerFindingByTaskNameRef.current = optimizerFindingByTaskName;
+    const onOptimizerFindingClickRef = useRef(onOptimizerFindingClick);
+    onOptimizerFindingClickRef.current = onOptimizerFindingClick;
     const getTaskAppsRef = useRef<(bo: any) => string[]>(() => []);
     const [selectedApp, setSelectedApp] = useState<{ name: string; taskName: string; taskId: string } | null>(null);
     const [selectedTask, setSelectedTask] = useState<{ name: string; id: string } | null>(null);
@@ -714,6 +737,7 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
         // zero applications had no visible way to get its first one.
         renderAppOverlaysRef.current();
         renderImpactOverlaysRef.current();
+        renderOptimizerOverlaysRef.current();
       });
 
       // Keep the title banner(s) pinned to their diagram-space anchor as the
@@ -1438,6 +1462,58 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
       }
       renderImpactOverlaysRef.current = () => renderImpactOverlays(modeler);
 
+      const OPTIMIZER_OVERLAY_TYPE = 'optimizer-finding';
+      const OPTIMIZER_OP_STYLE: Record<string, { color: string; label: string }> = {
+        remove: { color: '#f5222d', label: '✕ Remove' },
+        retarget_application: { color: '#1677ff', label: '⇄ Retarget' },
+        add: { color: '#52c41a', label: '+ Add' },
+        rename: { color: '#8c8c8c', label: '✎ Rename' },
+      };
+      // Process Optimizer: highlights the task(s) named in a proposal's
+      // taskDiff directly on the canvas (see optimizerFindingByTaskName prop
+      // doc comment for why this matches by name, not id). Only ever passed
+      // on the What-If panel in Quantitative Modeling — the badge is
+      // deliberately louder (labeled, not just a count) than the Jira impact
+      // one above, since "highlight the proposed change" is the whole point
+      // rather than a secondary signal.
+      function renderOptimizerOverlays(m: any) {
+        try {
+          const overlays = m.get('overlays');
+          const elementRegistry = m.get('elementRegistry');
+          const tasks = elementRegistry.filter((el: any) => isActivityType(el.businessObject?.$type));
+          tasks.forEach((el: any) => overlays.remove({ element: el.id, type: OPTIMIZER_OVERLAY_TYPE }));
+
+          const byTaskName = optimizerFindingByTaskNameRef.current;
+          if (!byTaskName || !Object.keys(byTaskName).length) return;
+
+          for (const el of tasks) {
+            const bo = el.businessObject;
+            const finding = byTaskName[normalizeImpactName(bo.name)];
+            if (!finding) continue;
+
+            const style = OPTIMIZER_OP_STYLE[finding.op] || OPTIMIZER_OP_STYLE.rename;
+            const badge = document.createElement('div');
+            badge.title = `Process Optimizer — ${finding.reason}`;
+            badge.textContent = style.label;
+            badge.style.cssText = `
+              display:flex;align-items:center;justify-content:center;
+              padding:2px 8px;border-radius:10px;white-space:nowrap;
+              background:${style.color};color:#fff;
+              font-size:11px;font-weight:700;font-family:"IBM Plex Sans",Arial,sans-serif;
+              border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.4);cursor:pointer;
+            `;
+            badge.addEventListener('click', (e) => {
+              e.stopPropagation();
+              onOptimizerFindingClickRef.current?.(finding, bo.name || el.id);
+            });
+            overlays.add(el.id, OPTIMIZER_OVERLAY_TYPE, { position: { top: -12, left: -6 }, html: badge });
+          }
+        } catch {
+          // best-effort
+        }
+      }
+      renderOptimizerOverlaysRef.current = () => renderOptimizerOverlays(modeler);
+
       // Store reference so XML-import effect can call it
       renderAppOverlaysRef.current = () => renderAppOverlays(modeler);
 
@@ -1689,6 +1765,7 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
         // Render application overlays
         renderAppOverlaysRef.current();
         renderImpactOverlaysRef.current();
+        renderOptimizerOverlaysRef.current();
         // Position the canvas-anchored title banner(s) for the freshly imported diagram
         computeTitleAnchor();
         updateTitleScreenPosition();
@@ -1739,6 +1816,15 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
       renderImpactOverlaysRef.current();
       renderAppOverlaysRef.current();
     }, [impactByApplicationName]);
+
+    // Process Optimizer proposals load asynchronously (either right after a
+    // fresh analysis run, or from a background fetch of a prior result) —
+    // re-render the moment one arrives or changes, same reasoning as the
+    // Jira impact effect above.
+    useEffect(() => {
+      if (!modelerRef.current) return;
+      renderOptimizerOverlaysRef.current();
+    }, [optimizerFindingByTaskName]);
 
     // Re-validate task colors when task reference data changes
     useEffect(() => {

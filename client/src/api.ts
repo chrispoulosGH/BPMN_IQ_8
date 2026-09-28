@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Diagram, DiagramMeta, DiagramNote, DiagramCreatePayload, DiagramUpdatePayload, DiagramValidationRequest, DiagramValidationReport, FileSaveResult, CapabilityMatchResult, TaskRecord, TaskCreatePayload, ReferenceData, RefItem, CapabilityItem, ActorItem, ServerItem, DatabaseItem, FactoryNeighborhoodSummary, CustomFactory, CustomFactoryRow, ModelCatalog, ModelCatalogRow, CatalogTreeResponse, CatalogTreeChildrenResponse, CatalogTreeSearchResponse, ProcessChangeRadarResponse, ProcessChangeSnapshot } from './types';
+import type { Diagram, DiagramMeta, DiagramNote, DiagramCreatePayload, DiagramUpdatePayload, DiagramValidationRequest, DiagramValidationReport, FileSaveResult, CapabilityMatchResult, TaskRecord, TaskCreatePayload, ReferenceData, RefItem, CapabilityItem, ActorItem, ServerItem, DatabaseItem, FactoryNeighborhoodSummary, CustomFactory, CustomFactoryRow, ModelCatalog, ModelCatalogRow, CatalogTreeResponse, CatalogTreeChildrenResponse, CatalogTreeSearchResponse, ProcessChangeRadarResponse, ProcessChangeSnapshot, ProcessOptimizationProposal } from './types';
 export type { RefItem, CapabilityItem, ActorItem, ServerItem, DatabaseItem, FactoryNeighborhoodSummary, CustomFactory, CustomFactoryRow, ModelCatalog, ModelCatalogRow, CatalogTreeResponse, CatalogTreeChildrenResponse, CatalogTreeSearchResponse };
 
 const api = axios.create({ baseURL: '/api', withCredentials: true });
@@ -588,7 +588,7 @@ export const getDashboardFlowCost3D = (): Promise<{ businessFlows: string[]; poi
   api.get('/dashboard/flow-cost-3d').then((r) => r.data);
 
 export interface FeatureCostFeature { jiraFeatureKey: string; featureName: string; featureDescription: string; devCost: number; }
-export interface FeatureCostPoint { businessFlow: string; application: string; year: number; quarter: string; cost: number; features: FeatureCostFeature[]; }
+export interface FeatureCostPoint { businessFlow: string; task: string; application: string; year: number; quarter: string; cost: number; features: FeatureCostFeature[]; }
 export const getDashboardFeatureCost3D = (): Promise<{ businessFlows: string[]; applications: string[]; points: FeatureCostPoint[] }> =>
   api.get('/dashboard/feature-cost-3d').then((r) => r.data);
 
@@ -776,5 +776,16 @@ export const saveProcessChangeSnapshot = (snapshot: ProcessChangeSnapshot): Prom
 
 export const getProcessChangeHistory = (): Promise<ProcessChangeSnapshot[]> =>
   api.get('/process-change-radar/history').then((r) => r.data);
+
+// Runs server/services/processOptimizerAgent.js against one flow — a real
+// multi-turn Claude tool-use loop, so this can take 1-3 minutes. No custom
+// timeout override: the shared `api` instance has none set, so axios waits
+// as long as the server takes. A non-2xx response (Anthropic not
+// configured) comes back as JSON on err.response.data — read `.error` there.
+export const runProcessOptimizerAnalysis = (diagramId: string): Promise<ProcessOptimizationProposal> =>
+  api.post(`/process-optimizer/analyze/${diagramId}`).then((r) => r.data);
+
+export const getProcessOptimizerProposals = (diagramId: string): Promise<ProcessOptimizationProposal[]> =>
+  api.get(`/process-optimizer/proposals?diagramId=${diagramId}`).then((r) => r.data);
 
 export default api;

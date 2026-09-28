@@ -1364,18 +1364,22 @@ router.get('/feature-cost-3d', async (req, res) => {
     const neighborhoodName = getNeighborhoodName(req);
     const docs = await ApplicationFeatureDevCost.find(
       neighborhoodName && neighborhoodName !== '__all__' ? { neighborhoodName } : {},
-      { businessFlow: 1, application: 1, features: 1 }
+      { businessFlow: 1, task: 1, application: 1, features: 1 }
     ).lean();
 
     const businessFlowSet = new Set();
     const applicationSet = new Set();
-    // Group by businessFlow|application|year|quarter — the same app can
-    // appear in several combined-key documents (used by multiple tasks
-    // within the same flow), so their costs/features get merged here.
+    // Group by businessFlow|task|application|year|quarter (task included
+    // so a caller can tell which specific task's dev spend a cell
+    // represents, not just which application's — Quantitative Modeling's
+    // what-if uses this to reflect "this task was removed" as an actual
+    // cost drop, not just "this application is still used somewhere in the
+    // flow" — see computeAggregateCost in utils/quantitativeModel.ts).
     const cellMap = new Map();
 
     for (const doc of docs) {
       const businessFlow = String(doc.businessFlow || '').trim();
+      const task = String(doc.task || '').trim();
       const application = String(doc.application || '').trim();
       if (!businessFlow || !application) continue;
       businessFlowSet.add(businessFlow);
@@ -1385,9 +1389,9 @@ router.get('/feature-cost-3d', async (req, res) => {
         const year = feature.year;
         const quarter = feature.quarter;
         if (!year || !quarter) continue;
-        const key = `${businessFlow}${application}${year}${quarter}`;
+        const key = `${businessFlow}${task}${application}${year}${quarter}`;
         if (!cellMap.has(key)) {
-          cellMap.set(key, { businessFlow, application, year, quarter, cost: 0, features: [] });
+          cellMap.set(key, { businessFlow, task, application, year, quarter, cost: 0, features: [] });
         }
         const cell = cellMap.get(key);
         cell.cost += Number(feature.devCost) || 0;
@@ -1585,6 +1589,170 @@ function getFkApplicationId(values) {
   return '';
 }
 
+// ─── Fleet-wide risk aggregates, computed server-side ──────────────────────
+// The Servers/Software CanonicalData collections are large (3.6k / 17k rows)
+// and every one of {business-flow-security-risk, business-flow-defect-risk,
+// application-risk} used to independently `.find()` the FULL fleet (every
+// field in `values`, not just the handful each risk check reads) just to
+// evaluate a handful of booleans per row and throw the rest away — on this
+// deployment's DB connection that's minutes of pure data-transfer time
+// (measured: ~3.6k servers ~55s, ~17k software ~2m30s), three times over.
+// These aggregation pipelines push the exact same boolean logic as
+// isServerAtRisk/isServerDefectRisk/isSoftwareAtRisk/isSoftwareDefectRisk
+// below into MongoDB's own aggregation engine, grouped straight to a
+// per-application {count, atRiskSecurityCount, atRiskDefectCount} — the
+// server sends back ~95 tiny rows instead of ~20,600 full documents. Kept as
+// a literal re-encoding of those same four functions (not a rewrite) to
+// avoid any behavioral drift; if those functions' conditions ever change,
+// update the mirrored $addFields below to match.
+
+// FK_System Component[s][Applications].APP_ID contains a literal "." in the
+// key itself, so it can't be addressed with normal dot-path projection/query
+// syntax (Mongo would parse the dot as nested traversal into a key that
+// doesn't exist) — $getField sidesteps that by taking the field name as one
+// literal string. Servers/Software use the plural "Components" spelling,
+// APIs use singular; try both regardless of which collection, same as the
+// getFkApplicationId() regex above.
+function fkAppIdFieldExpr() {
+  return {
+    $ifNull: [
+      { $getField: { field: 'FK_System Component[Applications].APP_ID', input: '$values' } },
+      { $getField: { field: 'FK_System Components[Applications].APP_ID', input: '$values' } },
+    ],
+  };
+}
+
+// Mirrors excelSerialToDate() above as a Mongo expression: a non-numeric or
+// zero serial (missing field) becomes null, same as the JS version returning
+// null for `!Number.isFinite(numeric) || !numeric`.
+function excelDateAggExpr(fieldExpr) {
+  return {
+    $cond: [
+      { $and: [{ $ne: [fieldExpr, null] }, { $isNumber: fieldExpr }, { $ne: [fieldExpr, 0] }] },
+      { $toDate: { $multiply: [{ $floor: { $subtract: [fieldExpr, 25569] } }, 86400000] } },
+      null,
+    ],
+  };
+}
+function dateBeforeNowExpr(dateExpr) {
+  return { $and: [{ $ne: [dateExpr, null] }, { $lt: [dateExpr, '$$NOW'] }] };
+}
+
+const RISK_AGGREGATES_CACHE_TTL_MS = 5 * 60 * 1000;
+let riskAggregatesCache = null;
+let riskAggregatesCacheAt = 0;
+
+// Returns { serverRiskByApp, softwareRiskByApp, apiCountByApp } — each a
+// Map<appId, {...}> — computed via 3 aggregation pipelines instead of 3
+// separate full-collection JS scans, cached briefly since business-flow-
+// security-risk and business-flow-defect-risk (and application-risk) all
+// want the same numbers within moments of each other on a single dashboard
+// load.
+async function loadAssetRiskAggregatesByApp() {
+  if (riskAggregatesCache && Date.now() - riskAggregatesCacheAt < RISK_AGGREGATES_CACHE_TTL_MS) {
+    return riskAggregatesCache;
+  }
+
+  const [serverRows, softwareRows, apiRows] = await Promise.all([
+    CanonicalData.aggregate([
+      { $match: { neighborhoodName: SYSTEM_COMPONENTS_NEIGHBORHOOD, componentType: 'Servers' } },
+      { $project: {
+        appId: fkAppIdFieldExpr(),
+        criticalVulns: { $toDouble: { $ifNull: [{ $getField: { field: 'CRITICAL_VULNS Qualifier', input: '$values' } }, 0] } },
+        osEol: { $getField: { field: 'OS_EOL_DATE Qualifier', input: '$values' } },
+        patchingStatus: { $getField: { field: 'PATCHING_STATUS Qualifier', input: '$values' } },
+        complianceStatus: { $getField: { field: 'COMPLIANCE_STATUS Aggregate', input: '$values' } },
+        warrantyExpiry: { $getField: { field: 'WARRANTY_EXPIRY Qualifier', input: '$values' } },
+        lastFirmwareUpdate: { $getField: { field: 'LAST_FIRMWARE_UPDATE Qualifier', input: '$values' } },
+        cpuUtil: { $toDouble: { $ifNull: [{ $getField: { field: 'CPU_UTIL_AVG_PCT Qualifier', input: '$values' } }, 0] } },
+        memUtil: { $toDouble: { $ifNull: [{ $getField: { field: 'MEMORY_UTIL_AVG_PCT Qualifier', input: '$values' } }, 0] } },
+        backupStatus: { $getField: { field: 'BACKUP_STATUS Qualifier', input: '$values' } },
+      } },
+      { $addFields: {
+        osEolDate: excelDateAggExpr('$osEol'),
+        warrantyExpiryDate: excelDateAggExpr('$warrantyExpiry'),
+        lastFirmwareDate: excelDateAggExpr('$lastFirmwareUpdate'),
+      } },
+      { $addFields: {
+        // Mirrors isServerAtRisk() exactly.
+        atRiskSecurity: {
+          $or: [
+            { $gt: ['$criticalVulns', 0] },
+            dateBeforeNowExpr('$osEolDate'),
+            { $eq: ['$patchingStatus', 'Critical'] },
+            { $eq: ['$complianceStatus', 'Non-Compliant'] },
+          ],
+        },
+        warrantyExpired: dateBeforeNowExpr('$warrantyExpiryDate'),
+        firmwareStale: { $and: [{ $ne: ['$lastFirmwareDate', null] }, { $gt: [{ $subtract: ['$$NOW', '$lastFirmwareDate'] }, 2 * 365 * 86400 * 1000] }] },
+        overutilized: { $or: [{ $gt: ['$cpuUtil', 85] }, { $gt: ['$memUtil', 85] }] },
+        backupWeak: { $eq: ['$backupStatus', 'Weekly'] },
+      } },
+      { $addFields: {
+        // Mirrors isServerDefectRisk() exactly.
+        atRiskDefect: {
+          $or: [
+            { $and: ['$warrantyExpired', '$firmwareStale'] },
+            '$overutilized',
+            { $and: ['$warrantyExpired', '$backupWeak'] },
+          ],
+        },
+      } },
+      { $match: { appId: { $ne: null } } },
+      { $group: {
+        _id: '$appId',
+        count: { $sum: 1 },
+        atRiskSecurityCount: { $sum: { $cond: ['$atRiskSecurity', 1, 0] } },
+        atRiskDefectCount: { $sum: { $cond: ['$atRiskDefect', 1, 0] } },
+      } },
+    ]),
+    CanonicalData.aggregate([
+      { $match: { neighborhoodName: SYSTEM_COMPONENTS_NEIGHBORHOOD, componentType: 'Software' } },
+      { $project: {
+        appId: fkAppIdFieldExpr(),
+        knownIssues: { $ifNull: [{ $getField: { field: 'KNOWN_SECURITY_ISSUES Qualifier', input: '$values' } }, ''] },
+        endOfSupport: { $getField: { field: 'END_OF_SUPPORT_DATE Qualifier', input: '$values' } },
+      } },
+      { $addFields: { endOfSupportDate: excelDateAggExpr('$endOfSupport') } },
+      { $addFields: {
+        // Mirrors isSoftwareAtRisk() exactly.
+        atRiskSecurity: {
+          $or: [
+            { $regexMatch: { input: '$knownIssues', regex: '\\(critical\\)', options: 'i' } },
+            { $regexMatch: { input: '$knownIssues', regex: '\\(high\\)', options: 'i' } },
+            { $regexMatch: { input: '$knownIssues', regex: 'end of support', options: 'i' } },
+            dateBeforeNowExpr('$endOfSupportDate'),
+          ],
+        },
+        // Mirrors isSoftwareDefectRisk() exactly.
+        atRiskDefect: dateBeforeNowExpr('$endOfSupportDate'),
+      } },
+      { $match: { appId: { $ne: null } } },
+      { $group: {
+        _id: '$appId',
+        count: { $sum: 1 },
+        atRiskSecurityCount: { $sum: { $cond: ['$atRiskSecurity', 1, 0] } },
+        atRiskDefectCount: { $sum: { $cond: ['$atRiskDefect', 1, 0] } },
+      } },
+    ]),
+    CanonicalData.aggregate([
+      { $match: { neighborhoodName: SYSTEM_COMPONENTS_NEIGHBORHOOD, componentType: 'APIs' } },
+      { $project: { appId: fkAppIdFieldExpr() } },
+      { $match: { appId: { $ne: null } } },
+      { $group: { _id: '$appId', count: { $sum: 1 } } },
+    ]),
+  ]);
+
+  const toMap = (rows) => new Map(rows.map((r) => [r._id, r]));
+  riskAggregatesCache = {
+    serverRiskByApp: toMap(serverRows),
+    softwareRiskByApp: toMap(softwareRows),
+    apiCountByApp: new Map(apiRows.map((r) => [r._id, r.count])),
+  };
+  riskAggregatesCacheAt = Date.now();
+  return riskAggregatesCache;
+}
+
 // A server/software asset counts as having an externally established
 // security issue if it trips any of these — real signals already present in
 // the imported data (a known critical/high CVE, an OS or software version
@@ -1639,18 +1807,25 @@ function applicationSeverityRank(profile) {
 }
 const SEVERITY_RANK_LABELS = { 1: 'Low', 2: 'Med', 3: 'High' };
 
-// Shared by both routes below: Business Flow -> Set<app_id> (straight from
+// Shared by all 4 routes below: Business Flow -> Set<app_id> (straight from
 // the Application component's own rows — each carries every (domain,
 // subdomain, businessFlow) combination it's used in via __lineageVariants,
-// so this needs no per-Task resolution at all), the Application
-// security/data-classification profiles, and the Servers/Software/APIs
-// behind each one — a handful of queries total, not one per flow or per
-// application, regardless of which route needs it.
-async function loadSecurityRiskContext(req) {
-  const appComponent = await Component.findOne(
-    withNeighborhood(req, { name: { $regex: /^application$/i } }),
-    { rows: 1 }
-  ).lean();
+// so this needs no per-Task resolution at all) and the Application
+// security/data-classification profiles. Deliberately does NOT touch
+// Servers/Software/APIs (that used to happen here too, fetching the entire
+// fleet on every call) — see loadAssetRiskAggregatesByApp() (counts, cached)
+// and loadAssetDetailsForApps() (per-flow detail) below for those.
+async function loadFlowAppMap(req) {
+  const [appComponent, canonicalApps] = await Promise.all([
+    Component.findOne(
+      withNeighborhood(req, { name: { $regex: /^application$/i } }),
+      { rows: 1 }
+    ).lean(),
+    CanonicalData.find(
+      { neighborhoodName: SYSTEM_COMPONENTS_NEIGHBORHOOD, componentType: 'Applications' },
+      { values: 1 }
+    ).lean(),
+  ]);
 
   const flowToAppIds = new Map();
   for (const row of Array.isArray(appComponent?.rows) ? appComponent.rows : []) {
@@ -1668,13 +1843,6 @@ async function loadSecurityRiskContext(req) {
     }
   }
 
-  const [canonicalApps, canonicalServers, canonicalSoftware, canonicalApis] = await Promise.all([
-    CanonicalData.find({ neighborhoodName: SYSTEM_COMPONENTS_NEIGHBORHOOD, componentType: 'Applications' }, { values: 1 }).lean(),
-    CanonicalData.find({ neighborhoodName: SYSTEM_COMPONENTS_NEIGHBORHOOD, componentType: 'Servers' }, { values: 1 }).lean(),
-    CanonicalData.find({ neighborhoodName: SYSTEM_COMPONENTS_NEIGHBORHOOD, componentType: 'Software' }, { values: 1 }).lean(),
-    CanonicalData.find({ neighborhoodName: SYSTEM_COMPONENTS_NEIGHBORHOOD, componentType: 'APIs' }, { values: 1 }).lean(),
-  ]);
-
   const appProfileById = new Map();
   for (const doc of canonicalApps) {
     const v = doc.values || {};
@@ -1691,6 +1859,27 @@ async function loadSecurityRiskContext(req) {
     });
   }
 
+  return { flowToAppIds, appProfileById };
+}
+
+// Per-application server/software/API detail for ONE flow's own app set
+// (typically a handful of apps, not the whole fleet) — used only by the two
+// /apps detail routes, which need actual per-record fields (server name,
+// patching status, etc.) for display, not just counts. $expr + $getField is
+// required (not a plain query filter) for the same reason the aggregations
+// above need $getField: the FK field's name contains a literal ".".
+async function loadAssetDetailsForApps(appIds) {
+  const appIdList = [...appIds];
+  if (!appIdList.length) return { serversByApp: new Map(), softwareByApp: new Map(), apisByApp: new Map() };
+
+  const matchStage = (componentType) => ({
+    $match: {
+      neighborhoodName: SYSTEM_COMPONENTS_NEIGHBORHOOD,
+      componentType,
+      $expr: { $in: [fkAppIdFieldExpr(), appIdList] },
+    },
+  });
+
   function groupByApplicationId(docs) {
     const byApp = new Map();
     for (const doc of docs) {
@@ -1702,12 +1891,16 @@ async function loadSecurityRiskContext(req) {
     return byApp;
   }
 
+  const [servers, software, apis] = await Promise.all([
+    CanonicalData.aggregate([matchStage('Servers'), { $project: { values: 1 } }]),
+    CanonicalData.aggregate([matchStage('Software'), { $project: { values: 1 } }]),
+    CanonicalData.aggregate([matchStage('APIs'), { $project: { values: 1 } }]),
+  ]);
+
   return {
-    flowToAppIds,
-    appProfileById,
-    serversByApp: groupByApplicationId(canonicalServers),
-    softwareByApp: groupByApplicationId(canonicalSoftware),
-    apisByApp: groupByApplicationId(canonicalApis),
+    serversByApp: groupByApplicationId(servers),
+    softwareByApp: groupByApplicationId(software),
+    apisByApp: groupByApplicationId(apis),
   };
 }
 
@@ -1719,7 +1912,10 @@ async function loadSecurityRiskContext(req) {
  */
 router.get('/business-flow-security-risk', async (req, res) => {
   try {
-    const { flowToAppIds, appProfileById, serversByApp, softwareByApp, apisByApp } = await loadSecurityRiskContext(req);
+    const [{ flowToAppIds, appProfileById }, { serverRiskByApp, softwareRiskByApp, apiCountByApp }] = await Promise.all([
+      loadFlowAppMap(req),
+      loadAssetRiskAggregatesByApp(),
+    ]);
 
     const flows = [];
     for (const [businessFlow, appIdSet] of flowToAppIds.entries()) {
@@ -1735,16 +1931,18 @@ router.get('/business-flow-security-risk', async (req, res) => {
       const appNames = [];
 
       for (const appId of appIdSet) {
-        const servers = serversByApp.get(appId) || [];
-        const software = softwareByApp.get(appId) || [];
-        const apis = apisByApp.get(appId) || [];
-        serverCount += servers.length;
-        softwareCount += software.length;
-        apiCount += apis.length;
-        assetCount += servers.length + software.length;
+        const serverAgg = serverRiskByApp.get(appId);
+        const softwareAgg = softwareRiskByApp.get(appId);
+        const servers = serverAgg?.count || 0;
+        const software = softwareAgg?.count || 0;
+        serverCount += servers;
+        softwareCount += software;
+        apiCount += apiCountByApp.get(appId) || 0;
+        assetCount += servers + software;
 
-        for (const v of servers) if (isServerAtRisk(v)) { atRiskCount += 1; criticalServerCount += 1; }
-        for (const v of software) if (isSoftwareAtRisk(v)) { atRiskCount += 1; criticalSoftwareCount += 1; }
+        atRiskCount += (serverAgg?.atRiskSecurityCount || 0) + (softwareAgg?.atRiskSecurityCount || 0);
+        criticalServerCount += serverAgg?.atRiskSecurityCount || 0;
+        criticalSoftwareCount += softwareAgg?.atRiskSecurityCount || 0;
 
         const profile = appProfileById.get(appId);
         if (profile?.name) appNames.push(profile.name);
@@ -1829,9 +2027,10 @@ router.get('/business-flow-security-risk/apps', async (req, res) => {
     const flowName = String(req.query.flow || '').trim();
     if (!flowName) return res.status(400).json({ error: 'flow query parameter is required' });
 
-    const { flowToAppIds, appProfileById, serversByApp, softwareByApp, apisByApp } = await loadSecurityRiskContext(req);
+    const { flowToAppIds, appProfileById } = await loadFlowAppMap(req);
     const appIdSet = flowToAppIds.get(flowName);
     if (!appIdSet || !appIdSet.size) return res.json({ businessFlow: flowName, applications: [] });
+    const { serversByApp, softwareByApp, apisByApp } = await loadAssetDetailsForApps(appIdSet);
 
     const applications = [];
     for (const appId of appIdSet) {
@@ -1939,7 +2138,10 @@ function applicationCriticalityRank(profile) {
  */
 router.get('/business-flow-defect-risk', async (req, res) => {
   try {
-    const { flowToAppIds, appProfileById, serversByApp, softwareByApp, apisByApp } = await loadSecurityRiskContext(req);
+    const [{ flowToAppIds, appProfileById }, { serverRiskByApp, softwareRiskByApp, apiCountByApp }] = await Promise.all([
+      loadFlowAppMap(req),
+      loadAssetRiskAggregatesByApp(),
+    ]);
 
     const flows = [];
     for (const [businessFlow, appIdSet] of flowToAppIds.entries()) {
@@ -1954,16 +2156,18 @@ router.get('/business-flow-defect-risk', async (req, res) => {
       const appNames = [];
 
       for (const appId of appIdSet) {
-        const servers = serversByApp.get(appId) || [];
-        const software = softwareByApp.get(appId) || [];
-        const apis = apisByApp.get(appId) || [];
-        serverCount += servers.length;
-        softwareCount += software.length;
-        apiCount += apis.length;
-        assetCount += servers.length + software.length;
+        const serverAgg = serverRiskByApp.get(appId);
+        const softwareAgg = softwareRiskByApp.get(appId);
+        const servers = serverAgg?.count || 0;
+        const software = softwareAgg?.count || 0;
+        serverCount += servers;
+        softwareCount += software;
+        apiCount += apiCountByApp.get(appId) || 0;
+        assetCount += servers + software;
 
-        for (const v of servers) if (isServerDefectRisk(v)) { atRiskCount += 1; criticalServerCount += 1; }
-        for (const v of software) if (isSoftwareDefectRisk(v)) { atRiskCount += 1; criticalSoftwareCount += 1; }
+        atRiskCount += (serverAgg?.atRiskDefectCount || 0) + (softwareAgg?.atRiskDefectCount || 0);
+        criticalServerCount += serverAgg?.atRiskDefectCount || 0;
+        criticalSoftwareCount += softwareAgg?.atRiskDefectCount || 0;
 
         const profile = appProfileById.get(appId);
         if (profile?.name) appNames.push(profile.name);
@@ -2028,9 +2232,10 @@ router.get('/business-flow-defect-risk/apps', async (req, res) => {
     const flowName = String(req.query.flow || '').trim();
     if (!flowName) return res.status(400).json({ error: 'flow query parameter is required' });
 
-    const { flowToAppIds, appProfileById, serversByApp, softwareByApp, apisByApp } = await loadSecurityRiskContext(req);
+    const { flowToAppIds, appProfileById } = await loadFlowAppMap(req);
     const appIdSet = flowToAppIds.get(flowName);
     if (!appIdSet || !appIdSet.size) return res.json({ businessFlow: flowName, applications: [] });
+    const { serversByApp, softwareByApp, apisByApp } = await loadAssetDetailsForApps(appIdSet);
 
     const applications = [];
     for (const appId of appIdSet) {
@@ -2093,32 +2298,19 @@ router.get('/business-flow-defect-risk/apps', async (req, res) => {
  */
 router.get('/application-risk', async (req, res) => {
   try {
-    const [canonicalApps, canonicalServers, canonicalSoftware] = await Promise.all([
+    const [canonicalApps, { serverRiskByApp, softwareRiskByApp }] = await Promise.all([
       CanonicalData.find({ neighborhoodName: SYSTEM_COMPONENTS_NEIGHBORHOOD, componentType: 'Applications' }, { values: 1, primaryKey: 1 }).lean(),
-      CanonicalData.find({ neighborhoodName: SYSTEM_COMPONENTS_NEIGHBORHOOD, componentType: 'Servers' }, { values: 1 }).lean(),
-      CanonicalData.find({ neighborhoodName: SYSTEM_COMPONENTS_NEIGHBORHOOD, componentType: 'Software' }, { values: 1 }).lean(),
+      loadAssetRiskAggregatesByApp(),
     ]);
-
-    function groupByApplicationId(docs) {
-      const byApp = new Map();
-      for (const doc of docs) {
-        const appId = getFkApplicationId(doc.values);
-        if (!appId) continue;
-        if (!byApp.has(appId)) byApp.set(appId, []);
-        byApp.get(appId).push(doc.values || {});
-      }
-      return byApp;
-    }
-    const serversByApp = groupByApplicationId(canonicalServers);
-    const softwareByApp = groupByApplicationId(canonicalSoftware);
 
     const applications = canonicalApps.map((doc) => {
       const v = doc.values || {};
       const appId = String(v['APP_ID Qualifier'] || '').trim();
       const acronym = String(v['APP_ACRONYM Component'] || doc.primaryKey || '').trim();
       const name = String(v['APP_NAME Qualifier'] || acronym || appId).trim();
-      const servers = serversByApp.get(appId) || [];
-      const software = softwareByApp.get(appId) || [];
+      const serverAgg = serverRiskByApp.get(appId);
+      const softwareAgg = softwareRiskByApp.get(appId);
+      const assetCount = (serverAgg?.count || 0) + (softwareAgg?.count || 0);
       const profile = {
         securityClassification: String(v['SECURITY_CLASSIFICATION Aggregator'] || '').trim(),
         dataClassification: String(v['DATA_CLASSIFICATION Aggregator'] || '').trim(),
@@ -2130,9 +2322,9 @@ router.get('/application-risk', async (req, res) => {
         appId,
         acronym,
         name,
-        assetCount: servers.length + software.length,
-        atRiskCountSecurity: servers.filter(isServerAtRisk).length + software.filter(isSoftwareAtRisk).length,
-        atRiskCountDefect: servers.filter(isServerDefectRisk).length + software.filter(isSoftwareDefectRisk).length,
+        assetCount,
+        atRiskCountSecurity: (serverAgg?.atRiskSecurityCount || 0) + (softwareAgg?.atRiskSecurityCount || 0),
+        atRiskCountDefect: (serverAgg?.atRiskDefectCount || 0) + (softwareAgg?.atRiskDefectCount || 0),
         internetFacing: String(v['INTERNET_FACING Qualifier'] || '').trim() === 'Yes',
         securitySeverityRank: applicationSeverityRank(profile),
         defectCriticalityRank: applicationCriticalityRank(profile),

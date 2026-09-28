@@ -64,6 +64,20 @@ export default function ProcessChangeHeatMap({ onSelectFlow }: ProcessChangeHeat
       // domain rollup's already-deduped totals rather than summing per-flow
       // numbers, since the same issue can touch more than one flow.
       const { totals } = computeDomainExposure(data, referenceDate);
+
+      // Per-domain rag breakdown for the per-domain trend charts — computed
+      // inline from computedFlows rather than the `groups` memo below, since
+      // that memo won't have re-derived from the flows we just set yet.
+      const byDomainMap = new Map<string, { totalFlows: number; redCount: number; amberCount: number; greenCount: number }>();
+      for (const f of computedFlows) {
+        if (!byDomainMap.has(f.domain)) byDomainMap.set(f.domain, { totalFlows: 0, redCount: 0, amberCount: 0, greenCount: 0 });
+        const d = byDomainMap.get(f.domain)!;
+        d.totalFlows += 1;
+        if (f.rag === 'red') d.redCount += 1;
+        else if (f.rag === 'amber') d.amberCount += 1;
+        else d.greenCount += 1;
+      }
+
       const snapshot: ProcessChangeSnapshot = {
         date: data.generatedAt.slice(0, 10),
         generatedAt: data.generatedAt,
@@ -75,6 +89,7 @@ export default function ProcessChangeHeatMap({ onSelectFlow }: ProcessChangeHeat
         totalPoints: totals.totalPoints,
         overduePoints: totals.overduePoints,
         dueSoon7Points: totals.dueSoon7Points,
+        byDomain: [...byDomainMap.entries()].map(([domain, counts]) => ({ domain, ...counts })),
       };
       // Best-effort — a failed snapshot write shouldn't block the heat map
       // itself from showing today's data, so this is deliberately not
@@ -184,6 +199,14 @@ export default function ProcessChangeHeatMap({ onSelectFlow }: ProcessChangeHeat
                 <div className="mb-2 flex items-baseline gap-2">
                   <span className="text-[13px] font-semibold text-slate-700">{group.domain}</span>
                   <span className="text-[11px] text-slate-400">{group.flows.length} flow{group.flows.length === 1 ? '' : 's'}</span>
+                  <span
+                    className="inline-block h-1.5 w-1.5 rounded-full"
+                    style={{ background: RAG_COLOR[group.worstRag] }}
+                    title={`Worst status in this domain: ${RAG_LABEL[group.worstRag]}`}
+                  />
+                </div>
+                <div className="mb-2">
+                  <ProcessChangeTrendChart history={history} domain={group.domain} height={110} showLegend={false} />
                 </div>
                 <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(168px, 1fr))' }}>
                   {group.flows.map((flow) => {

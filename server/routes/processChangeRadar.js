@@ -212,7 +212,7 @@ router.post('/snapshot', async (req, res) => {
   try {
     const {
       date, generatedAt, totalFlows, redCount, amberCount, greenCount,
-      totalIssues, totalPoints, overduePoints, dueSoon7Points,
+      totalIssues, totalPoints, overduePoints, dueSoon7Points, byDomain,
     } = req.body || {};
 
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) {
@@ -222,6 +222,18 @@ router.post('/snapshot', async (req, res) => {
     if (Number.isNaN(generatedAtDate.getTime())) {
       return res.status(400).json({ error: 'generatedAt must be a valid date.' });
     }
+
+    const cleanByDomain = Array.isArray(byDomain)
+      ? byDomain
+          .filter((d) => d && typeof d.domain === 'string' && d.domain.trim())
+          .map((d) => ({
+            domain: d.domain.trim(),
+            totalFlows: Number(d.totalFlows) || 0,
+            redCount: Number(d.redCount) || 0,
+            amberCount: Number(d.amberCount) || 0,
+            greenCount: Number(d.greenCount) || 0,
+          }))
+      : [];
 
     const snapshot = await ProcessChangeSnapshot.findOneAndUpdate(
       { date },
@@ -236,6 +248,7 @@ router.post('/snapshot', async (req, res) => {
         totalPoints: Number(totalPoints) || 0,
         overduePoints: Number(overduePoints) || 0,
         dueSoon7Points: Number(dueSoon7Points) || 0,
+        byDomain: cleanByDomain,
       },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );

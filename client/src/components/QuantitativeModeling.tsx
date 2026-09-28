@@ -1,16 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { Alert, Button, Collapse, Empty, Input, Spin, Tag, Typography } from 'antd';
-import { SearchOutlined, UndoOutlined } from '@ant-design/icons';
-import BpmnEditor, { EMPTY_DIAGRAM, type BpmnEditorHandle } from './BpmnEditor';
+import { RobotOutlined, SearchOutlined, UndoOutlined } from '@ant-design/icons';
+import BpmnEditor, { EMPTY_DIAGRAM, type BpmnEditorHandle, type OptimizerFindingLike } from './BpmnEditor';
 import SpeedometerGauge from './SpeedometerGauge';
-import { getApplicationRiskReference, getDashboardFeatureCost3D, getDiagram, getDiagramsForNeighborhood, getProcessChangeRadar } from '../api';
+import ProcessOptimizerDrawer from './ProcessOptimizerDrawer';
+import {
+  getApplicationRiskReference, getDashboardFeatureCost3D, getDiagram, getDiagramsForNeighborhood,
+  getProcessChangeRadar, getProcessOptimizerProposals, runProcessOptimizerAnalysis, setApiNeighborhoodScope,
+} from '../api';
 import type { ApplicationRiskProfile, FeatureCostPoint } from '../api';
 import { normalizeDomainLabel } from '../utils/domainExposure';
 import {
   buildRiskLookup, computeAggregateCost, computeAggregateDefectRisk,
-  computeAggregateSecurityRisk, computeLiveJiraActivity,
+  computeAggregateSecurityRisk, computeLiveJiraActivity, type CostTaskEntry,
 } from '../utils/quantitativeModel';
-import type { DiagramMeta, JiraImpactIssue, ProcessChangeRadarResponse } from '../types';
+import type { DiagramMeta, JiraImpactIssue, ProcessChangeRadarResponse, ProcessOptimizationProposal } from '../types';
 
 const { Title, Text } = Typography;
 
@@ -77,9 +81,39 @@ export default function QuantitativeModeling() {
   const [diagramError, setDiagramError] = useState<string | null>(null);
   const [baselineAppNames, setBaselineAppNames] = useState<string[]>([]);
   const [liveAppNames, setLiveAppNames] = useState<string[]>([]);
+  // Per-task app assignments — cost needs this (not just the flattened app-
+  // name set above) so removing one task among several sharing an app drops
+  // that task's own recorded spend instead of the app's flow-wide total
+  // staying put. Security/defect risk and Jira activity stay app-set-based
+  // (see computeReadings) — they're properties of the application's own
+  // infrastructure/backlog, not of any one task referencing it.
+  const [baselineTaskApps, setBaselineTaskApps] = useState<CostTaskEntry[]>([]);
+  const [liveTaskApps, setLiveTaskApps] = useState<CostTaskEntry[]>([]);
 
   const editEditorRef = useRef<BpmnEditorHandle>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ---- Process Optimizer: run the selected (saved) flow through the agent ----
+  const [proposal, setProposal] = useState<ProcessOptimizationProposal | null>(null);
+  const [proposalLoading, setProposalLoading] = useState(false);
+  const [proposalError, setProposalError] = useState<string | null>(null);
+  const [proposalDrawerOpen, setProposalDrawerOpen] = useState(false);
+
+  // Highlights each taskDiff entry directly on the What-If canvas — keyed by
+  // normalized task name (see BpmnEditor's optimizerFindingByTaskName prop
+  // doc comment for why name, not id, is the only reliable match). Clicking
+  // a highlighted task opens the same drawer the header button does, so the
+  // full rationale is one click away from what's drawn on the diagram.
+  const optimizerFindingByTaskName = useMemo(() => {
+    if (!proposal?.taskDiff?.length) return undefined;
+    const map: Record<string, OptimizerFindingLike> = {};
+    for (const entry of proposal.taskDiff) {
+      if (!entry.taskName) continue;
+      map[entry.taskName.trim().toLowerCase()] = { op: entry.op, reason: entry.reason, detail: entry.detail };
+    }
+    return map;
+  }, [proposal]);
+  const handleOptimizerFindingClick = useCallback(() => setProposalDrawerOpen(true), []);
 
   // ---- load the pickable diagram list (all neighborhoods) ----
   useEffect(() => {
@@ -108,8 +142,19 @@ export default function QuantitativeModeling() {
     setSelectedDiagramId(diagram._id);
     setDiagramLoading(true);
     setDiagramError(null);
+    setProposal(null);
+    setProposalError(null);
+    // getDiagram() has no per-request scoping of its own — it relies on the
+    // shared axios instance's global x-neighborhood-name default (see
+    // api.ts's setApiNeighborhoodScope). This sidebar lists flows from every
+    // neighborhood at once (getDiagramsForNeighborhood('__all__')), so the
+    // global default won't necessarily match whichever one this diagram
+    // actually belongs to — set it explicitly first, same as App.tsx's own
+    // onToggleDiagram does for the Diagrams tab, or GET /:id 404s.
+    if (diagram.neighborhoodName) setApiNeighborhoodScope(diagram.neighborhoodName);
     try {
       const full = await getDiagram(diagram._id);
+      if (full.neighborhoodName) setApiNeighborhoodScope(full.neighborhoodName);
       const businessFlow = full.businessFlow || full.name;
       setSelectedMeta({ name: full.name, businessFlow });
       setBaselineXml(full.xml);
@@ -117,12 +162,36 @@ export default function QuantitativeModeling() {
       const appNames = (full.tasks || []).flatMap((t) => (t.applications || []).map((a) => a.name)).filter(Boolean);
       setBaselineAppNames(appNames);
       setLiveAppNames(appNames);
+      const taskApps = (full.tasks || []).map((t) => ({ taskName: t.name, apps: (t.applications || []).map((a) => a.name).filter(Boolean) }));
+      setBaselineTaskApps(taskApps);
+      setLiveTaskApps(taskApps);
     } catch (err: any) {
       setDiagramError(err?.response?.data?.error || err?.message || 'Failed to load this diagram.');
     } finally {
       setDiagramLoading(false);
     }
+    // Best-effort — a flow that was already analyzed before shows its most
+    // recent result immediately, without re-running the agent. Independent
+    // of the diagram fetch above so a failure here never blocks the canvas.
+    getProcessOptimizerProposals(diagram._id)
+      .then((proposals) => setProposal(proposals[0] || null))
+      .catch(() => {});
   }, []);
+
+  const handleRunOptimizer = useCallback(async () => {
+    if (!selectedDiagramId) return;
+    setProposalLoading(true);
+    setProposalError(null);
+    try {
+      const result = await runProcessOptimizerAnalysis(selectedDiagramId);
+      setProposal(result);
+      setProposalDrawerOpen(true);
+    } catch (err: any) {
+      setProposalError(err?.response?.data?.error || err?.message || 'Process Optimizer analysis failed.');
+    } finally {
+      setProposalLoading(false);
+    }
+  }, [selectedDiagramId]);
 
   // ---- live recompute as the right-hand editor is edited ----
   const handleEditDirty = useCallback(() => {
@@ -130,6 +199,7 @@ export default function QuantitativeModeling() {
     debounceRef.current = setTimeout(() => {
       const tasks = editEditorRef.current?.getTaskApplications() || [];
       setLiveAppNames(tasks.flatMap((t) => t.apps));
+      setLiveTaskApps(tasks.map((t) => ({ taskName: t.taskName, apps: t.apps })));
     }, EDIT_DEBOUNCE_MS);
   }, []);
   useEffect(() => () => { if (debounceRef.current) clearTimeout(debounceRef.current); }, []);
@@ -137,7 +207,8 @@ export default function QuantitativeModeling() {
   const handleResetWhatIf = useCallback(() => {
     setImportTrigger((t) => t + 1); // re-imports baselineXml into both panels
     setLiveAppNames(baselineAppNames);
-  }, [baselineAppNames]);
+    setLiveTaskApps(baselineTaskApps);
+  }, [baselineAppNames, baselineTaskApps]);
 
   // ---- gauge math ----
   const referenceDate = useMemo(() => (radarData ? new Date(radarData.generatedAt) : new Date()), [radarData]);
@@ -148,17 +219,17 @@ export default function QuantitativeModeling() {
     return (summary?.issues || []).filter((i) => i.source === 'businessFlow');
   }, [radarData, selectedDiagramId]);
 
-  const computeReadings = useCallback((appNames: string[]): GaugeReadings => {
+  const computeReadings = useCallback((appNames: string[], taskApps: CostTaskEntry[]): GaugeReadings => {
     if (!selectedMeta) return EMPTY_READINGS;
-    const cost = computeAggregateCost(appNames, selectedMeta.businessFlow, costPoints, COST_YEAR);
+    const cost = computeAggregateCost(taskApps, selectedMeta.businessFlow, costPoints, COST_YEAR);
     const security = computeAggregateSecurityRisk(appNames, riskLookup);
     const defect = computeAggregateDefectRisk(appNames, riskLookup);
     const jira = radarData ? computeLiveJiraActivity(appNames, flowSourcedIssues, radarData.issuesByApplicationName, referenceDate) : null;
     return { cost, securityProbability: security.probability, defectProbability: defect.probability, jiraCount: jira?.issueCount || 0 };
   }, [selectedMeta, costPoints, riskLookup, radarData, flowSourcedIssues, referenceDate]);
 
-  const baselineReadings = useMemo(() => computeReadings(baselineAppNames), [computeReadings, baselineAppNames]);
-  const liveReadings = useMemo(() => computeReadings(liveAppNames), [computeReadings, liveAppNames]);
+  const baselineReadings = useMemo(() => computeReadings(baselineAppNames, baselineTaskApps), [computeReadings, baselineAppNames, baselineTaskApps]);
+  const liveReadings = useMemo(() => computeReadings(liveAppNames, liveTaskApps), [computeReadings, liveAppNames, liveTaskApps]);
 
   // Fixed per selection, shared by both panels' matching gauge so the two
   // stay visually comparable even as the live needle moves.
@@ -201,12 +272,35 @@ export default function QuantitativeModeling() {
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {selectedMeta && (
-            <Button size="small" icon={<UndoOutlined />} onClick={handleResetWhatIf}>Reset what-if</Button>
+            <>
+              {proposal && !proposalLoading && (
+                <Button size="small" icon={<RobotOutlined />} onClick={() => setProposalDrawerOpen(true)}>
+                  Optimizer result
+                  {proposal.taskDiff.length > 0 && <Tag color="purple" className="!ml-1.5 !mr-0">{proposal.taskDiff.length}</Tag>}
+                </Button>
+              )}
+              <Button
+                size="small"
+                type={proposal ? 'default' : 'primary'}
+                icon={<RobotOutlined />}
+                loading={proposalLoading}
+                onClick={() => void handleRunOptimizer()}
+              >
+                {proposalLoading ? 'Analyzing…' : proposal ? 'Re-run optimizer' : 'Run Process Optimizer'}
+              </Button>
+              <Button size="small" icon={<UndoOutlined />} onClick={handleResetWhatIf}>Reset what-if</Button>
+            </>
           )}
         </div>
       </div>
 
       {refError && <div className="p-3"><Alert type="warning" showIcon closable message="Some reference data failed to load" description={refError} /></div>}
+      {proposalError && <div className="p-3"><Alert type="error" showIcon closable message="Process Optimizer failed" description={proposalError} onClose={() => setProposalError(null)} /></div>}
+      {proposalLoading && (
+        <div className="px-3 pt-2">
+          <Alert type="info" showIcon message="Analyzing this flow for inefficiencies…" description="The agent is inspecting tasks, APIs, and applications — this typically takes 1-3 minutes." />
+        </div>
+      )}
 
       <div className="flex min-h-0 flex-1">
         {/* ---- sidebar ---- */}
@@ -292,11 +386,15 @@ export default function QuantitativeModeling() {
                 loading={diagramLoading}
                 editorRef={editEditorRef}
                 onDirty={handleEditDirty}
+                optimizerFindingByTaskName={optimizerFindingByTaskName}
+                onOptimizerFindingClick={handleOptimizerFindingClick}
               />
             </div>
           )}
         </div>
       </div>
+
+      <ProcessOptimizerDrawer open={proposalDrawerOpen} onClose={() => setProposalDrawerOpen(false)} proposal={proposal} />
     </div>
   );
 }
@@ -314,9 +412,11 @@ interface ComparisonPanelProps {
   readOnly?: boolean;
   editorRef?: RefObject<BpmnEditorHandle>;
   onDirty?: () => void;
+  optimizerFindingByTaskName?: Record<string, OptimizerFindingLike>;
+  onOptimizerFindingClick?: () => void;
 }
 
-function ComparisonPanel({ title, subtitle, readings, baselineForDelta, gaugeMax, xml, importTrigger, diagramName, loading, readOnly, editorRef, onDirty }: ComparisonPanelProps) {
+function ComparisonPanel({ title, subtitle, readings, baselineForDelta, gaugeMax, xml, importTrigger, diagramName, loading, readOnly, editorRef, onDirty, optimizerFindingByTaskName, onOptimizerFindingClick }: ComparisonPanelProps) {
   return (
     <div className="flex min-h-0 flex-col">
       <div className="border-b border-slate-100 bg-slate-50 px-3 py-2">
@@ -375,6 +475,8 @@ function ComparisonPanel({ title, subtitle, readings, baselineForDelta, gaugeMax
           readOnly={readOnly}
           diagramName={diagramName}
           onDirty={onDirty}
+          optimizerFindingByTaskName={optimizerFindingByTaskName}
+          onOptimizerFindingClick={onOptimizerFindingClick}
         />
       </div>
     </div>

@@ -82,22 +82,41 @@ export function computeAggregateDefectRisk(appNames: string[], lookup: Map<strin
 
 // ─── Cost ───────────────────────────────────────────────────────────────
 // Feature Dev Cost only (see session discussion) — per (business flow,
-// application, year) dev cost of the discrete features built for that
-// combination. Deliberately flow-scoped: an application newly added to the
-// what-if edit that has never had feature-cost data recorded *for this
-// flow* contributes $0, not some other flow's cost for that app — adding
-// scope should never silently import unrelated spend.
+// task, application, year) dev cost of the discrete features built for that
+// combination. Deliberately (flow, TASK, application)-scoped, not just
+// (flow, application) — an application newly added to the what-if edit that
+// has never had feature-cost data recorded *for this flow* contributes $0,
+// not some other flow's cost for that app (adding scope should never
+// silently import unrelated spend); and critically, deleting one task that
+// uses an application still used by *other* tasks in the same flow now
+// correctly drops just that task's own recorded spend, rather than the
+// application's full flow-wide cost staying put because it's "still used
+// somewhere in the flow." Takes the live task list (task name + its
+// applications), not a flattened app-name array, for exactly this reason.
+
+export interface CostTaskEntry {
+  taskName: string;
+  apps: string[];
+}
 
 export function computeAggregateCost(
-  appNames: string[],
+  tasks: CostTaskEntry[],
   businessFlowName: string,
   points: FeatureCostPoint[],
   year: number
 ): number {
-  const nameSet = new Set(appNames.map(normalizeAppKey));
   const flowKey = normalizeAppKey(businessFlowName);
+  const pairKeys = new Set<string>();
+  for (const task of tasks) {
+    const taskKey = normalizeAppKey(task.taskName);
+    for (const app of task.apps) {
+      pairKeys.add(`${taskKey}|${normalizeAppKey(app)}`);
+    }
+  }
   return points
-    .filter((p) => p.year === year && normalizeAppKey(p.businessFlow) === flowKey && nameSet.has(normalizeAppKey(p.application)))
+    .filter((p) => p.year === year
+      && normalizeAppKey(p.businessFlow) === flowKey
+      && pairKeys.has(`${normalizeAppKey(p.task)}|${normalizeAppKey(p.application)}`))
     .reduce((sum, p) => sum + (p.cost || 0), 0);
 }
 

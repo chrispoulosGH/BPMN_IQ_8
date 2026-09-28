@@ -8,6 +8,14 @@ const mongoose = require('mongoose');
 // are computed client-side (client/src/utils/domainExposure.ts) and posted
 // as-is — this model is deliberately a dumb store, not a second place that
 // re-derives the red/amber/green judgment.
+const domainSnapshotSchema = new mongoose.Schema({
+  domain: { type: String, required: true, trim: true },
+  totalFlows: { type: Number, default: 0 },
+  redCount: { type: Number, default: 0 },
+  amberCount: { type: Number, default: 0 },
+  greenCount: { type: Number, default: 0 },
+}, { _id: false });
+
 const processChangeSnapshotSchema = new mongoose.Schema({
   date: { type: String, required: true, trim: true }, // YYYY-MM-DD (UTC)
   generatedAt: { type: Date, required: true },
@@ -19,6 +27,11 @@ const processChangeSnapshotSchema = new mongoose.Schema({
   totalPoints: { type: Number, default: 0 },
   overduePoints: { type: Number, default: 0 },
   dueSoon7Points: { type: Number, default: 0 },
+  // Per-domain breakdown of the same rag counts above, added after the
+  // aggregate-only version shipped — older rows simply have no byDomain
+  // (defaults to []), which the per-domain trend charts treat as "no data
+  // yet for that day" rather than zero.
+  byDomain: { type: [domainSnapshotSchema], default: [] },
 }, {
   collection: 'process_change_snapshots',
   timestamps: true,

@@ -603,10 +603,61 @@ export interface ProcessChangeRadarResponse {
   issuesByApplicationName: Record<string, JiraImpactIssue[]>;
 }
 
+// Result of running server/services/processOptimizerAgent.js against one
+// business flow — see server/models/ProcessOptimizationProposal.js. Never a
+// direct diagram edit; a proposal is advisory until a human accepts it.
+export interface ProcessOptimizerTaskDiffEntry {
+  op: 'add' | 'remove' | 'retarget_application' | 'rename';
+  taskId?: string;
+  taskName?: string;
+  actor?: string;
+  detail?: Record<string, unknown>;
+  reason: string;
+}
+
+export interface ProcessOptimizerProjectedImpact {
+  costDeltaUsd?: number;
+  securityRiskDelta?: number;
+  defectRiskDelta?: number;
+  jiraActivityDelta?: number;
+}
+
+export interface ProcessOptimizerToolCall {
+  tool: string;
+  args: Record<string, unknown>;
+  resultSummary: string;
+}
+
+export interface ProcessOptimizationProposal {
+  _id: string;
+  diagramId: string;
+  diagramName?: string;
+  businessFlow?: string;
+  summary: string;
+  rationale: string[];
+  taskDiff: ProcessOptimizerTaskDiffEntry[];
+  projectedImpact: ProcessOptimizerProjectedImpact;
+  confidence?: number;
+  status: 'proposed' | 'accepted' | 'rejected';
+  generatedBy: string;
+  model?: string;
+  toolCallLog?: ProcessOptimizerToolCall[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 // One day's Process Change Heat Map rollup, for the trend chart above it —
 // see server/models/ProcessChangeSnapshot.js. Posted by the heat map itself
 // every time it loads (upserted by `date`, so same-day re-visits update
 // rather than duplicate) and read back for the history line.
+export interface ProcessChangeDomainSnapshot {
+  domain: string;
+  totalFlows: number;
+  redCount: number;
+  amberCount: number;
+  greenCount: number;
+}
+
 export interface ProcessChangeSnapshot {
   date: string; // YYYY-MM-DD (UTC)
   generatedAt: string;
@@ -618,6 +669,9 @@ export interface ProcessChangeSnapshot {
   totalPoints: number;
   overduePoints: number;
   dueSoon7Points: number;
+  // Added after the aggregate-only version shipped — a history row from
+  // before this existed simply has no byDomain (undefined), not [].
+  byDomain?: ProcessChangeDomainSnapshot[];
 }
 
 export interface ActorItem {
