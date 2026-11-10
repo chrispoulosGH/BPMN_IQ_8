@@ -10,6 +10,122 @@
 ## Session log
 Newest entry first. Each entry: date, what was in flight, what's uncommitted/unresolved.
 
+### 2026-11-10 (2) — Capability grouping, Step 1 (additive, read-time only)
+- Step 1 of the capability consolidation, as recommended in the impact inventory in the entry below. It adds an L2 group and L1 area for each existing capability **without renaming, moving or copying any capability name**, and touches no existing collection.
+  - New [server/models/CapabilityGrouping.js](server/models/CapabilityGrouping.js) (`capabilitygroupings`): `{neighborhoodName, capabilityName, qualifierSubdomain, capabilityGroup, capabilityArea}`, unique on the first three.
+  - It's a separate collection on purpose: component rows are rebuilt from `dataComponentBatches` on rematerialize, so fields added there would be lost.
+  - `qualifierSubdomain` exists only for the 2 names that mean two things (Inventory Management, Performance Management).
+- New [server/scripts/seed_capability_grouping.js](server/scripts/seed_capability_grouping.js) reads [docs/capability-map-proposal.json](docs/capability-map-proposal.json). It has `--dry-run`, `--neighborhood=` and `--file=`; it upserts and removes stale rows, so it's safe to re-run after editing the JSON. **Ran for real: 99 rows (97 capabilities + 2 split rows) → 35 groups → 10 areas, neighborhood "LLM AMI".**
+- `/api/dashboard/value-stream-relationships` links gained additive `capabilityGroup`, `capabilityArea` and `isGrouped`, matched on name + subdomain, then on name. An unmapped capability (e.g. TMF-only) becomes its own group under area "Ungrouped". Verified: 102/102 links grouped, 35 groups.
+- [ValueStreamsMatrix.tsx](client/src/components/ValueStreamsMatrix.tsx) has a new **Capabilities: Grouped | Detailed** toggle, defaulting to Grouped.
+  - Grouped shows one "Capability Group" tile per L2: as wide as its flows, with the area and member capabilities in small text, and the union of member flows beneath it.
+  - Group tiles aren't clickable, since a group isn't a catalog row. Detailed keeps the old click-through.
+  - Verified in the browser: Finance & Insurance › Vehicle Financing shows 3 capabilities rolled into "Retail Credit & Loan Origination" with 3 flows.
+- Limitation: value streams are keyed per domain|subdomain, so a group only merges capabilities within the same subdomain's value stream. Cross-subdomain fan-in isn't visible in this view.
+- `tsc`: 3 baseline errors. Not committed. Step 2 (renames/splits/merges across the ~7 denormalized copies) is not started.
+
+### 2026-11-10 — Diagrams tab: search criteria and results in two columns
+- [DiagramBrowser.tsx](client/src/components/DiagramBrowser.tsx) is now a row. The criteria card sits in a fixed 260px left column that scrolls on its own, and the results list sits in the right column as one column of tiles (it was two).
+- The host wrapper in App.tsx went from `min-w-[360px] max-w-[620px]` to `min-w-[560px] max-w-[640px]` so the results column keeps its room.
+- Result tiles restyled in [index.css](client/src/index.css): light blue by default, darker blue (`#a9cdfb→#8ab9f7`, `#1d4ed8` border) when selected.
+- New type-ahead "Search" box, first in the criteria column (antd `AutoComplete`). It does a case-insensitive substring match across every hierarchy level, the flow, task names and application names (no APIs). Tiles narrow on every keystroke, and suggestions are grouped by object type with a count of matching flows, prefix matches first. It applies on top of the facet filters, and on purpose doesn't fire `onSearchChanged`, so typing doesn't clear the canvas.
+- The type-ahead text is also highlighted on the open diagram. DiagramBrowser's new `onQuickSearchChange` sends it to App's `diagramSearchTerm`, which feeds BpmnEditor's new `searchHighlightTerm` prop. Three places light up:
+  - Matching tasks get a `search-hit` canvas marker (amber fill and border, CSS in index.css).
+  - Matching text in application rows gets a yellow `<mark>` (`appendSearchHighlightedText`).
+  - Matching text in the title and breadcrumb, single or composite, gets the same mark via `highlightSearchText`, which covers flow-name and hierarchy hits.
+- Clicking an application row on any canvas now opens a full details card in the right column via BpmnEditor's `selectApplication`. It expands the column if collapsed, widens it to at least 340px, and closes any open SOX panel. The card was only Status/Task/Task ID before. It now shows:
+  - Catalog name, description and the `APPLICATION_DETAIL_FIELDS` (App ID, type, criticality, lifecycle, owner…).
+  - Chips for any "Yes" risk flags (`APPLICATION_FLAG_FIELDS`).
+  - Every task on the canvas that uses the app.
+  - A SOX ITGC button that opens the SOX panel.
+  - One button per linked system-component type, opening the existing linked-records modal.
+- Radar impact rows still open the Jira drawer instead.
+- Restyled the main tab ribbon (`.factory-tabs`) in index.css: a flat white bar with weight-500 slate text and a 2px blue underline on the active tab. It used to be dark pills in weight-800 bright cyan. Nested tab rows get a `#f8fafc` bar.
+  - Deleted the duplicate "BASE/group stripe" `.factory-tabs` block and the `.model-factory-tabs .ant-tabs-tab*` rules. The old block had been silently overriding the model-tab rules, so removing it without them would have brought them back.
+- Sub-menus restyled to match the ribbon:
+  - `.neighborhood-tabs` (Frameworks), which also cascades into the nested Model Components/Model tabs, now uses the same flat underline style.
+  - Every antd `Segmented` toggle (Dashboard/Table, List/Tree…) now has a grey track with a white selected segment. Its two old blocks became one.
+- Value Streams/Journeys ([ValueStreamsMatrix.tsx](client/src/components/ValueStreamsMatrix.tsx)): the dark navy `attTheme` became a light `lightTheme` (white/slate surfaces, slate text, blue only for selection and counts).
+  - Font weights dropped from 800–900 to 500–600. Domain/subdomain headings shrank from 43/32px to 24/18px, and the "DOMAIN"/"SUBDOMAIN" labels to 11px.
+  - Follow-up: each nesting level is now one **tan** step darker. Domain is white, subdomain `#faf6ef`, value-stream area `#f3eadb` (new `flowContainer*` theme keys, split from the bar's `flow*`), value-stream bar `#e8dac2`, and capability tiles `#dcc7a3`, all with dark brown text. Selection is still blue. The user tried slate greys first and rejected them ("not working").
+  - Each value stream now has 3 layers: value stream → (enables) capabilities → (supports) business flows. Capability tiles show only the name. Beneath each capability is one tile per business flow, named and side by side, each joined to the capability by a curved "supports" connector. A first pass that showed a single count box was replaced at the user's request.
+    - Each capability is a column `capabilityColumnWidth(n)` wide, so it fits its n flow tiles (140px + 8px gaps, never narrower than a capability tile).
+    - The "enables" SVG is now drawn to those real column centres: `columnCenters`, with the viewBox and wrapper width set to `connectorRowWidth`. It used to assume a fixed 150px per tile.
+    - The tile row is `nowrap`. A wide value stream scrolls inside its subdomain card (`overflowX: auto`, `alignItems: 'safe center'`).
+    - "ENABLES"/"SUPPORTS" labels get a background-coloured stroke halo (`paintOrder="stroke"`) so lines don't cut through them.
+    - Flow tiles have a name tooltip but no click action. There's no flow-level select callback yet.
+    - New `businessFlow*` theme keys, one tan step darker than the capability.
+    - Each value-stream bar, capability tile and business-flow tile has a small uppercase caption at top centre: `tileCaptionStyle`, 9px, `tileCaption` `#7d6a4c`. The text is "Value Stream" (or "Journey" in journey mode), "Business Capability" and "Business Flow". `flowBarHeight` went 56→64 to fit it.
+    - The bottom "Business Capabilities · supported by Business Flows" caption was removed. So was the top-left "Value Stream Flow"/"Journey Experience" heading (the `flowLabel` const); the bar's own caption replaces it. The business-flow count under each subdomain's "SUBDOMAIN" label was also removed.
+    - Server: `/api/dashboard/value-stream-relationships` links gained an additive `businessFlows: string[]` (sorted names from the existing `businessFlowsByCapabilityFlow`). `ValueStreamRelationshipLink.businessFlows?` was added in api.ts.
+    - Verified live: the API returns the names and the layer renders. The hover tooltip itself wasn't exercised.
+  - Pills became 6–8px radius chips with flat shadows. The gold glowing "Value Stream Flow" label became plain blue.
+  - Adding the missing `toggleBorderActive` to the theme type cleared 2 of the baseline `tsc` errors. **Baseline is now 3 errors, not 5.**
+- **Capability consolidation proposal, draft only, no data changed.** The user asked whether a near 1:1 flow-to-capability ratio is normal (it isn't: 92 of 97 capabilities have exactly 1 flow) and then asked for a consolidated L2 map.
+  - [docs/capability-map-proposal.md](docs/capability-map-proposal.md) is the review document. [docs/capability-map-proposal.json](docs/capability-map-proposal.json) is a machine-readable l1/l2/l3 mapping, to apply later if approved.
+  - Shape: 10 L1 areas → 35 L2 capabilities, with today's 97 kept as L3. Flows per grouping capability go from 1.03 to 2.86, and every L2 has at least 2 flows. 100 distinct flows are linked (111 diagrams; some have no capability or share a name).
+  - Lists 15 "decisions needed": two names that mean two things (Inventory Management, Performance Management), merge candidates sharing a single flow, and domain moves (Payables, Contract Management, GAP).
+  - Generated by a scratchpad script from the live `/value-stream-relationships` data. The script checks that every capability is placed exactly once.
+  - **Impact inventory (Explore agent; key items spot-checked).** The proposal covers taxonomy only. Applying it is not just a data edit:
+    - There are **two capability concepts**. (A) The lineage-level "Business Capability" lives in `Diagram.businessCapability`, CanonicalComponent rows, the model catalog and the factory chain. (B) TMF GB1029C lives in the `Capability` collection plus `Diagram.capabilities[]` (`{capabilityId, capabilityName}`). `/value-stream-relationships` merges both name lists (dashboard.js ~737). The 97 are concept A.
+    - Capability names are copied in about **7 places with no rename cascade**:
+      1. Diagram `businessCapability`, `tags` and generated `"Flow (Cap)"` names.
+      2. `Diagram.capabilities[].capabilityName`.
+      3. CanonicalComponent `primaryKey`, flow `business_capability_qualifier` and `__lineage*`.
+      4. Older-style Component `parentName`.
+      5. `dataComponentBatches`. This is the rematerialize source of truth and overwrites canonical edits.
+      6. `Model.modelCatalogRows` plus `modelCatalogHash` (upload validation).
+      7. ComponentSearchIndex.
+      A factory-row rename PUT (customFactories.js ~3187) updates only that row.
+    - Inserting new lineage levels is risky. `getNeighborhoodMetadataMappings` maps fields **by position** against the fixed 9-field `fieldOrder` (diagrams.js:820). "L0/L1" already mean domain/subdomain, and `lineageFields.js` would need new entries.
+    - Found along the way, not fixed:
+      - `PUT /diagrams/:id` recomputes `businessCapability` from body/XML on every XML save (diagrams.js:1708) and can null it.
+      - `routes/referenceData.js` imports a `BusinessCapability` model that doesn't exist (dead `/businessCapabilities`). `scripts/seed-capabilities-full.js` is broken for the same reason.
+      - TMF-only names in the DiagramBrowser capability facet and the matrix click-through never match `diagram.businessCapability`, so they return 0 diagrams.
+- Verified via `browser-automation` (had to `npx patchright install chromium`): the ribbon, two-column search, light-blue tiles and type-ahead box all render. A pre-existing 404 on `/api/canonical//types` (empty framework name) shows on login; it isn't from this session.
+- `tsc`: same 5 baseline errors. Not checked in the browser. Not committed.
+
+### 2026-10-04 (2) — Dashboard: one multi-measure tile per process flow
+- User asked for the Dashboard tab to have a dedicated tile per process flow, each showing several measurements (change exposure, SOX compliance, security risk, defect risk, TCO…).
+- New `GET /api/dashboard/flow-scorecards` in [dashboard.js](server/routes/dashboard.js) returns one scorecard per diagram (111) in about 0.3s.
+  - **Security and defect:** the per-flow loops of `/business-flow-security-risk` and `/business-flow-defect-risk` were moved verbatim into `computeFlowSecurityRows`/`computeFlowDefectRows`. Those routes still sort and return their top 20; the new route uses every row.
+  - **SOX:** a flow's controls are its flow, task and interface controls plus its applications' ITGCs. Reports open deviations by severity, overdue count and compliance % (share of controls with no open deviation).
+  - **TCO:** for the latest feature-cost year (2025), each application's run cost (catalog `ANNUAL_COST` + server `MONTHLY_COST_USD`×12 + software `ANNUAL_MAINTENANCE_USD`) is allocated to flows by share of task→app usage. The flow's own feature dev spend is added, with the prior year shown for YoY. The legacy annual op/dev cost fields behind `/cost-by-year` are all zero for these flows, which is why they weren't used.
+- Change exposure is not part of the endpoint. The client merges it from `/api/process-change-radar` via `computeFlowExposure`, so a slow or unconfigured Jira can't block the tiles.
+- New [FlowScorecardBoard.tsx](client/src/components/FlowScorecardBoard.tsx), now the first section of [ExecutiveDashboard.tsx](client/src/components/ExecutiveDashboard.tsx); the Change Exposure Board stays below it.
+  - KPI strip, plus search, domain filter, sort (health/TCO/security/defect/SOX/change/name) and All / Needs attention / Critical filter.
+  - Tiles are grouped by domain (worst domain first). Each tile has five rows with a status dot, mini bar, value and a hover breakdown.
+  - A tile click runs the new `handleDashboardFlowOpen` in App.tsx, which opens that flow alone on the Diagrams tab where its SOX shields render. Clicking the change row reuses `handleHeatMapFlowSelect` to jump to Process Change Radar.
+- **Rating calibration:** the first pass ("overall = worst measure", red on any High SOX deviation) made 82 of 111 flows Critical. It was recalibrated against the real distributions:
+  - Security red ≥25%, amber ≥15%.
+  - Defect red ≥15%, amber ≥10%.
+  - SOX red when compliance <75% or 3+ High deviations; amber for any open deviation.
+  - Overall is a composite: Critical = 2+ red measures; Needs attention = 1 red or 2+ amber. Result: 16 Critical, 61 Needs attention.
+  - All of this is documented in the "How are tiles rated?" tooltip.
+- Verified in-browser: 111 tiles with live Jira exposure merged in, and a tile click opens the flow on the Diagrams tab with its SOX shields. **Ops note:** port 3001 was being served by a child of a nodemon left over from a 2026-09-15 session, and several stale node `index.js` processes from 09-15/09-17 are still running. This session's `yarn dev` nodemon crashed with EADDRINUSE. `tsc`: same 5 baseline errors. Not committed.
+
+### 2026-10-04 — SOX control deviations (10% of controls)
+- New [server/models/SoxDeviation.js](server/models/SoxDeviation.js) (`soxdeviations`) + [server/scripts/seed_sox_deviations.js](server/scripts/seed_sox_deviations.js). The script is deterministic from `--seed`, takes `--fraction` (default 0.1) and `--dry-run`, and clears and regenerates on every run. **55 deviations on 55 of 547 controls.** Controls are sampled weighted by audit risk.
+  - Categories, near-even: Control Not Sufficient / Issue Found During Audit / Missing Control / Insufficient Evidence.
+  - Severity: 15 High, 25 Medium, 15 Low.
+  - Classification: Control Deficiency, Significant Deficiency, or Potential Material Weakness (capped at 2).
+- Each deviation records the source and auditor: 7 sources, all fictional orgs and people. They are the FY2025 year-end and FY2026 interim external audits ("Calder Whitmore LLP", year-end findings marked as repeats), two internal audits, the Q2 management self-assessment, continuous controls monitoring and an incident post-mortem.
+- Each also records the affected process, flow, task, applications, databases, servers and APIs, taken from the control's real scope. Process-level controls get infrastructure from their app's AC03 ITGC scope; app-level ITGCs list the flows/tasks that rely on them. Also stored: condition, criteria, cause, effect, recommendation, management response, testing sample/exceptions, and remediation owner/target/status/repeat.
+- Writes `deviationIds`/`openDeviationCount` onto SoxControl. **Re-run this after `seed_sox_controls.js`**, which recreates the controls.
+- Routes: every SOX control response now includes `deviations`; new `GET /api/sox-controls/deviations` (filters: severity, category, status, controlId, auditId).
+- Canvas: a severity-colored "!"/count dot on task and app shields, "⚠ n" on the title badge. Clicking the title badge lists the flow-level controls plus every control on the diagram with open deviations. In the panel, controls with deviations sort first, the top one auto-expands, and deviation cards show audit/auditor/date, affected objects, an overdue target date and expandable criteria/cause/effect.
+- Verified in-browser on "Warehouse Inventory Management" (4 High deviations). Fixed three formatting bugs found that way: "$2000,000", UTC-midnight audit dates showing a day early, and a duplicated DB version. `tsc`: same 5 baseline errors. Not committed.
+
+### 2026-10-03 — SOX controls collection + shield icons on the diagram canvas
+- User asked for a new collection of SOX controls over the IT apps, business flows and system components an auditor would realistically target, each with a unique control ID, attached to components and shown on the diagram with a new icon whose click shows details in the right column.
+- New [server/models/SoxControl.js](server/models/SoxControl.js) (`soxcontrols` collection) + generator [server/scripts/seed_sox_controls.js](server/scripts/seed_sox_controls.js) (clears and regenerates, `--dry-run` supported). **547 controls**: 287 ITGCs, 104 business-process, 70 IT-application, 86 interface. Covers 50 in-scope flows across 9 cycles (P2P/O2C/R2R/FIN/WAR/INV/H2R/INC/ITG) and 40 in-scope apps. Scoping is a curated, tiered list (Tier 1 key financial systems such as FINANCE-HUB, ORDER-MGMT and WARRANTY-360 … Tier 3 ITGC-supporting such as IT-SERVICE), anchored by the 8 apps whose own `COMPLIANCE_REQUIREMENTS` already say SOX.
+- **Control ID formats:** `SOX-ITGC-<AC01..PD01>-<APP>` (application ITGC), `SOX-<cycle>-<nnn>` (process control, numbered by flow name then task order) and `SOX-ITAC-IF-<APIID>` (interface control on a cross-application API that supports a controlled task).
+- **Observations come from real data, not invented test results:** server patching/compliance/critical-vuln counts, weekly backups on DB servers, DB software known issues, upgrade windows (`NEXT_MAJOR_UPGRADE`), SaaS hosting (→ SOC 1 / CUEC carve-out), and APIs flagged "mapping required". Segregation-of-duties conflicts are detected from real task→actor assignments (e.g. AP Clerk enters invoices *and* verifies goods receipt; Warranty Salesman generates contracts *and* takes payment). **Scoping gap worth knowing:** several apps used by in-scope flows aren't in the application catalog (PARTS-INVENTORY, SUPPLIER-MGT, HR-CENTRAL, PARTS-ORDER, PRICE-MASTER, PARTS-CATALOG, RECALL-COMMAND). They're kept in scope with a reduced ITGC set and flagged as gaps.
+- Control IDs are also stamped as `soxControlIds` on the components: 50 Diagrams and CanonicalData (56 Applications, 86 APIs, 1,026 Servers, 123 Software). This is a new optional schema field on both models. Task-level linkage stays in `SoxControl.anchors.taskKeys` (`diagramId|normalized task name`), *not* on `Diagram.tasks[]`, because `PUT /diagrams/:id` rebuilds tasks from XML and would wipe it.
+- New route [server/routes/soxControls.js](server/routes/soxControls.js) at `/api/sox-controls`: list with filters, `/:controlId`, and `/for-diagram/:id` (returns `diagramControls` / `byTaskName` / `byApplicationName`).
+- `BpmnEditor.tsx` fetches controls itself per diagramId (composite sections too, mapping `stack_N_` element-id prefixes to their section's diagram) behind a new `showSoxControls` prop that defaults to `showProperties`. It shows a purple shield with a count on tasks (red ring if any control is high audit risk), on application rows (ITGCs) and on the title banner ("SOX n", flow-level review control). Clicking any of them opens a SOX details column that sits over the properties panel, expands it if collapsed and widens it to at least 400px. Cards expand to show activity, objective, risk, assertions, accounts, owner, observations, test procedure, sample size, scope (apps/APIs/servers/DBs) and clickable related-control chips (fetched by id if not on screen). No App.tsx change was needed.
+- Verified live via `browser-automation` on "Warranty Contract Execution": the title badge, 4 task shields and 11 app shields render, and all three open the panel with real data. One fix came out of a screenshot: the panel was semi-transparent over the properties panel. `tsc --noEmit`: same 5 pre-existing baseline errors. Not committed.
+
 ### 2026-09-27 (5) — Optimizer proposals highlighted directly on the What-If canvas
 - User asked for the What-If (bottom) canvas to redraw with the Process Optimizer's proposed changes highlighted on the diagram itself, not just described in the drawer.
 - Had to establish a real link back to canvas elements first: confirmed `Diagram.tasks[]._id` (what `get_business_flow`'s tool output calls `taskId`, and what the agent echoes back in `taskDiff` entries) has **no relationship** to the actual `bpmn:task` XML element's own `id` attribute — `extractTasks()` in [diagrams.js](server/routes/diagrams.js) builds task subdocuments from parsed XML without ever preserving the element id, so Mongoose just assigns each one a fresh ObjectId. Task **name** is the only reliable link, same reason the existing Jira-impact overlays (`impactByApplicationName`) already match by name, not id.

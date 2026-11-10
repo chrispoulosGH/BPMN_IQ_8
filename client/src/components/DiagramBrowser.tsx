@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { App as AntApp, Alert, Empty, Popconfirm, Spin, Select, Tag, Tooltip, Typography } from 'antd';
-import { CloseOutlined, FolderOpenOutlined, PartitionOutlined } from '@ant-design/icons';
+import { App as AntApp, Alert, AutoComplete, Empty, Input, Popconfirm, Spin, Select, Tag, Tooltip, Typography } from 'antd';
+import { CloseOutlined, FolderOpenOutlined, PartitionOutlined, SearchOutlined } from '@ant-design/icons';
 import type { DiagramMeta, FactoryNeighborhoodSummary } from '../types';
 import { deleteDiagramWithComponent, getCanonicalTypes, getDashboardValueStreamRelationships, getDiagramsForNeighborhood } from '../api';
 import { stateTagColor } from '../stateUtils';
@@ -76,6 +76,12 @@ const COMPONENT_FILTERS: FilterDefinition[] = [
 
 const SUPPORTED_COMPONENT_FILTERS = [...COMPONENT_FILTERS, ...HIERARCHY_FILTERS];
 
+// What the type-ahead box searches: every hierarchy level, the flow itself,
+// its tasks and their applications (API-level objects are deliberately left out).
+const QUICK_SEARCH_FIELDS: FilterDefinition[] = [...HIERARCHY_FILTERS, ...COMPONENT_FILTERS];
+
+const QUICK_SEARCH_SUGGESTIONS_PER_FIELD = 6;
+
 const MODEL_HIERARCHY_FILTER_ORDER = [
   'lineOfBusiness',
   'channel',
@@ -145,14 +151,24 @@ interface DiagramBrowserProps {
   // if that diagram was open, drop it from any selection, and refresh
   // Model Components data for the affected framework.
   onDiagramDeleted?: (id: string, neighborhoodName?: string) => void;
+  // Fired on every keystroke in the type-ahead box, so the parent can
+  // highlight the same text on the open diagram.
+  onQuickSearchChange?: (term: string) => void;
 }
 
-export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggleDiagram, externalFilterRequest = null, onSearchChanged, onDiagramDeleted }: DiagramBrowserProps) {
+export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggleDiagram, externalFilterRequest = null, onSearchChanged, onDiagramDeleted, onQuickSearchChange }: DiagramBrowserProps) {
   const { message } = AntApp.useApp();
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
   const [selectedFrameworks, setSelectedFrameworks] = useState<string[]>([]);
   const [filters, setFilters] = useState<Record<string, string[]>>({});
+  // Live type-ahead text. Not part of the onSearchChanged effect below, so
+  // typing narrows the tiles without clearing the canvas on every keystroke.
+  const [quickSearch, setQuickSearch] = useState('');
   const [diagrams, setDiagrams] = useState<DiagramMeta[]>([]);
+  useEffect(() => {
+    onQuickSearchChange?.(quickSearch);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quickSearch]);
   const isInitialSearchRef = useRef(true);
   // Set by the externalFilterRequest effect below right before it updates
   // selectedFrameworks/filters itself, so the effect watching those same two
@@ -358,6 +374,48 @@ export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggl
     return diagrams.filter((diagram) => activeFilters.every(({ filter, values }) => matchesFilter(diagram, filter, values)));
   }, [diagrams, filters, facetDefinitions]);
 
+  const quickSearchTerm = quickSearch.trim().toLowerCase();
+
+  const searchedDiagrams = useMemo(() => {
+    if (!quickSearchTerm) return filteredDiagrams;
+    return filteredDiagrams.filter((diagram) => QUICK_SEARCH_FIELDS.some((field) => (
+      field.getValues(diagram).some((value) => value.toLowerCase().includes(quickSearchTerm))
+    )));
+  }, [filteredDiagrams, quickSearchTerm]);
+
+  // Suggestions are drawn from the facet-filtered set, grouped by object type.
+  const quickSearchOptions = useMemo(() => {
+    if (!quickSearchTerm) return [];
+    return QUICK_SEARCH_FIELDS.map((field) => {
+      const matches = new Map<string, number>();
+      filteredDiagrams.forEach((diagram) => {
+        new Set(field.getValues(diagram)).forEach((value) => {
+          if (value.toLowerCase().includes(quickSearchTerm)) matches.set(value, (matches.get(value) || 0) + 1);
+        });
+      });
+      const values = [...matches.entries()]
+        .sort(([left], [right]) => {
+          const leftPrefix = left.toLowerCase().startsWith(quickSearchTerm) ? 0 : 1;
+          const rightPrefix = right.toLowerCase().startsWith(quickSearchTerm) ? 0 : 1;
+          return leftPrefix - rightPrefix || left.localeCompare(right);
+        })
+        .slice(0, QUICK_SEARCH_SUGGESTIONS_PER_FIELD);
+      return {
+        label: field.label,
+        options: values.map(([value, count]) => ({
+          value,
+          key: `${field.key}:${value}`,
+          label: (
+            <div className="flex items-center justify-between gap-2">
+              <span className="truncate">{value}</span>
+              <span className="shrink-0 text-xs text-slate-400">{count}</span>
+            </div>
+          ),
+        })),
+      };
+    }).filter((group) => group.options.length > 0);
+  }, [filteredDiagrams, quickSearchTerm]);
+
   const updateFilter = (key: string, values: string[]) => {
     setFilters((current) => ({ ...current, [key]: values }));
   };
@@ -383,13 +441,33 @@ export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggl
   };
 
   return (
-    <div className="diagram-search-panel flex h-full min-h-0 flex-col border-r border-slate-300">
-      <div className="diagram-search-card m-3 mb-2 px-4 py-3">
+    <div className="diagram-search-panel flex h-full min-h-0 flex-row border-r border-slate-300">
+      {/* Left column: search criteria. Scrolls on its own so a long facet list
+          never pushes the results column down. */}
+      <div className="w-[260px] shrink-0 min-h-0 overflow-y-auto border-r border-slate-300">
+      <div className="diagram-search-card m-3 px-4 py-3">
         <div className="mb-3 flex items-center gap-2">
           <FolderOpenOutlined className="text-blue-700" />
           <Text strong className="font-semibold text-slate-700">Diagram Search</Text>
         </div>
         <div className="grid gap-2">
+          <div>
+            <Text className="mb-1 block text-xs font-medium text-slate-600">Search</Text>
+            <AutoComplete
+              className="w-full"
+              value={quickSearch}
+              options={quickSearchOptions}
+              onChange={(value) => setQuickSearch(String(value ?? ''))}
+              onSelect={(value) => setQuickSearch(String(value ?? ''))}
+              popupMatchSelectWidth={320}
+            >
+              <Input
+                allowClear
+                prefix={<SearchOutlined className="text-slate-400" />}
+                placeholder="Flow, task, application, domain…"
+              />
+            </AutoComplete>
+          </div>
           <div>
             <Text className="mb-1 block text-xs font-medium text-slate-600">Frameworks</Text>
             <Select
@@ -420,18 +498,24 @@ export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggl
           ))}
         </div>
       </div>
+      </div>
 
-      <div className="flex min-h-0 flex-1 flex-col p-3">
+      {/* Right column: search results. */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col p-3">
         <div className="mb-2 flex items-center justify-between">
-          <Text className="text-xs text-slate-600">{filteredDiagrams.length} business process flows</Text>
+          <Text className="text-xs text-slate-600">
+            {quickSearchTerm
+              ? `${searchedDiagrams.length} of ${filteredDiagrams.length} business process flows`
+              : `${filteredDiagrams.length} business process flows`}
+          </Text>
           {loading ? <Spin size="small" /> : null}
         </div>
         {error ? <Alert type="error" message={error} showIcon /> : null}
-        {!loading && !error && !filteredDiagrams.length ? (
+        {!loading && !error && !searchedDiagrams.length ? (
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No business process flows match these filters" className="mt-10" />
         ) : null}
-        <div className="grid min-h-0 grid-cols-1 gap-2 overflow-y-auto pr-1 sm:grid-cols-2">
-          {filteredDiagrams.map((diagram) => {
+        <div className="grid min-h-0 grid-cols-1 content-start gap-2 overflow-y-auto pr-1">
+          {searchedDiagrams.map((diagram) => {
             const selected = selectedDiagramIds.includes(diagram._id);
             const framework = diagram.neighborhoodName || 'Unassigned framework';
             const hierarchy = [

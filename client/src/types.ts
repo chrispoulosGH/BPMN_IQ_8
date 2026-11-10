@@ -52,6 +52,93 @@ export interface DiagramNote {
   history?: DiagramNoteHistoryEntry[];
 }
 
+// One SOX (ICFR) control from the soxcontrols collection — see
+// server/models/SoxControl.js for field semantics and
+// server/scripts/seed_sox_controls.js for how controls are scoped.
+export interface SoxControl {
+  _id?: string;
+  controlId: string;
+  title: string;
+  description: string;
+  controlObjective: string;
+  riskStatement: string;
+  category: 'IT General Control' | 'Business Process Control' | 'IT Application Control' | 'Interface Control';
+  itgcDomain: string | null;
+  processCycle: string | null;
+  processCycleName: string | null;
+  controlType: 'Preventive' | 'Detective';
+  controlNature: 'Manual' | 'Automated' | 'IT-Dependent Manual';
+  frequency: string;
+  keyControl: boolean;
+  assertions: string[];
+  financialStatementAccounts: string[];
+  controlOwner: string;
+  performedBy: string;
+  evidence: string;
+  testingProcedure: string;
+  sampleSize: string;
+  auditRisk: 'High' | 'Medium' | 'Low';
+  auditRiskRationale: string;
+  observations: string[];
+  frameworkRefs: string[];
+  relatedControlIds: string[];
+  status: string;
+  // Attached by the server routes (soxdeviations), newest first.
+  deviations?: SoxDeviation[];
+  scope: {
+    level: 'application' | 'businessFlow' | 'task' | 'api';
+    applications: Array<{ name: string; appId: string | null; appName: string; businessCriticality: string | null; dataClassification: string | null }>;
+    businessFlows: Array<{ diagramId: string; name: string; domain: string; subdomain: string }>;
+    tasks: Array<{ diagramId: string; flowName: string; taskName: string; actor: string; applications: string[] }>;
+    apis: Array<{ apiId: string; name: string; endpoint: string; method: string; apiType: string; interactionScope: string }>;
+    servers: Array<{ serverId: string; name: string; role: string; networkZone: string; patchingStatus: string; complianceStatus: string; backupStatus: string; encryptionStatus: string; criticalVulns: number }>;
+    databases: Array<{ softwareId: string; name: string; version: string; serverId: string | null; function: string }>;
+  };
+}
+
+// A deviation (deficiency) raised against a SOX control — see
+// server/models/SoxDeviation.js and scripts/seed_sox_deviations.js.
+export interface SoxDeviation {
+  deviationId: string;
+  controlId: string;
+  controlTitle: string;
+  controlCategory: string;
+  category: 'Control Not Sufficient' | 'Issue Found During Audit' | 'Missing Control' | 'Insufficient Evidence';
+  severity: 'Low' | 'Medium' | 'High';
+  deficiencyClassification: 'Control Deficiency' | 'Significant Deficiency' | 'Potential Material Weakness';
+  deficiencyType: string;
+  title: string;
+  condition: string;
+  criteria: string;
+  cause: string;
+  effect: string;
+  recommendation: string;
+  managementResponse: string;
+  testing: { population: string; sampleSize: number | null; exceptions: number | null };
+  source: string;
+  audit: { auditId: string; auditName: string; auditorOrganization: string; auditor: string; auditDate: string; periodStart: string; periodEnd: string };
+  affected: {
+    process: string;
+    businessFlows: Array<{ diagramId: string; name: string; domain: string }>;
+    tasks: Array<{ diagramId: string; flowName: string; taskName: string; actor: string }>;
+    applications: Array<{ name: string; appId: string | null; appName: string }>;
+    databases: Array<{ softwareId: string; name: string; version: string; serverId: string | null }>;
+    servers: Array<{ serverId: string; name: string; role: string; patchingStatus: string; backupStatus: string }>;
+    apis: Array<{ apiId: string; name: string; endpoint: string; method: string }>;
+  };
+  remediation: { owner: string; targetDate: string; status: 'Open' | 'In Remediation' | 'Remediated — Pending Validation' | 'Closed'; repeatFinding: boolean };
+}
+
+// GET /api/sox-controls/for-diagram/:id — controls grouped by where their
+// icon goes on the canvas. Task/application keys are lower-cased, trimmed
+// names (same normalization as BpmnEditor's normalizeImpactName).
+export interface DiagramSoxControls {
+  diagramId: string;
+  diagramControls: SoxControl[];
+  byTaskName: Record<string, SoxControl[]>;
+  byApplicationName: Record<string, SoxControl[]>;
+}
+
 export interface DiagramTaskApplication {
   name: string;
   correlationId?: string | null;
@@ -683,4 +770,50 @@ export interface ActorItem {
   createdAt?: string;
   updatedAt?: string;
   state?: string;
+}
+
+// GET /api/dashboard/flow-scorecards — one per business process flow
+// diagram, for the Dashboard tab's per-flow tiles (see
+// server/routes/dashboard.js). Change exposure is merged in client-side from
+// the Process Change Radar response.
+export interface FlowScorecard {
+  diagramId: string;
+  name: string;
+  businessFlow: string | null;
+  domain: string;
+  subdomain: string | null;
+  status: string | null;
+  neighborhoodName: string | null;
+  applications: string[];
+  security: { probability: number; severity: string; atRiskAssets: number; assets: number } | null;
+  defect: { probability: number; criticality: string; atRiskAssets: number; assets: number } | null;
+  sox: {
+    inScope: boolean;
+    flowInScope: boolean;
+    controlCount: number;
+    keyControlCount: number;
+    controlsWithDeviations: number;
+    compliancePct: number | null;
+    openDeviations: number;
+    bySeverity: { High: number; Medium: number; Low: number };
+    overdueDeviations: number;
+  };
+  tco: {
+    year: number | null;
+    total: number;
+    run: number;
+    application: number;
+    infrastructure: number;
+    software: number;
+    development: number;
+    developmentPriorYear: number;
+    priorYearTotal: number;
+    uncostedApplications: number;
+  };
+}
+
+export interface FlowScorecardsResponse {
+  generatedAt: string;
+  tcoYear: number | null;
+  scorecards: FlowScorecard[];
 }

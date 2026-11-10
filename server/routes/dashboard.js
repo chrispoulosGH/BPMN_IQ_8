@@ -9,6 +9,7 @@ const DatabaseInstance = require('../models/DatabaseInstance');
 const Model = require('../models/Model');
 const ApplicationFeatureDevCost = require('../models/ApplicationFeatureDevCost');
 const CanonicalData = require('../models/CanonicalData');
+const CapabilityGrouping = require('../models/CapabilityGrouping');
 const { getNeighborhoodName, withNeighborhood } = require('../utils/neighborhoodScope');
 const { loadScopedFlowCostDocumentsFromComponentsAndDiagrams } = require('../utils/flowCostSource');
 const { listApplicationReferences } = require('../utils/applicationReferenceLookup');
@@ -783,16 +784,33 @@ router.get('/value-stream-relationships', async (req, res) => {
       .map(([name, count]) => ({ name, count }))
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
 
+    // Capability group (L2) / area (L1) for each capability, from the
+    // capabilitygroupings collection. Matched on name + subdomain first (for
+    // names that mean different things in different subdomains), then name.
+    const groupingRows = neighborhoodName && neighborhoodName !== '__all__'
+      ? await CapabilityGrouping.find({ neighborhoodName }, { capabilityName: 1, qualifierSubdomain: 1, capabilityGroup: 1, capabilityArea: 1 }).lean()
+      : [];
+    const groupingByKey = new Map(groupingRows.map((row) => [`${row.capabilityName}|${row.qualifierSubdomain || ''}`, row]));
+    const groupingFor = (capability, subdomain) => groupingByKey.get(`${capability}|${subdomain}`) || groupingByKey.get(`${capability}|`) || null;
+
     const links = [...linkCounts.entries()]
       .map(([key, count]) => {
         const [capability, valueStreamKey] = JSON.parse(key);
         const row = valueStreamRows.get(valueStreamKey);
+        const grouping = groupingFor(capability, row?.subdomain || '');
         return {
           capability,
           valueStream: row?.name || '',
           valueStreamKey,
           rollupLabel: row?.rollupLabel || '',
           count,
+          // The business flows behind `count`, for the matrix's bottom layer.
+          businessFlows: Array.from(businessFlowsByCapabilityFlow.get(key) || []).sort((a, b) => a.localeCompare(b)),
+          // Ungrouped capabilities (none in the collection, e.g. TMF-only
+          // names) stand as their own group.
+          capabilityGroup: grouping?.capabilityGroup || capability,
+          capabilityArea: grouping?.capabilityArea || 'Ungrouped',
+          isGrouped: Boolean(grouping),
         };
       })
       .sort((a, b) => b.count - a.count || a.capability.localeCompare(b.capability) || a.valueStream.localeCompare(b.valueStream) || a.rollupLabel.localeCompare(b.rollupLabel));
@@ -1904,6 +1922,74 @@ async function loadAssetDetailsForApps(appIds) {
   };
 }
 
+// One security-risk row per business flow (unsorted, uncapped) — shared by
+// /business-flow-security-risk (top 20) and /flow-scorecards (every flow).
+function computeFlowSecurityRows({ flowToAppIds, appProfileById }, { serverRiskByApp, softwareRiskByApp, apiCountByApp }) {
+  const flows = [];
+  for (const [businessFlow, appIdSet] of flowToAppIds.entries()) {
+    let atRiskCount = 0;
+    let assetCount = 0;
+    let serverCount = 0;
+    let softwareCount = 0;
+    let apiCount = 0;
+    let criticalServerCount = 0;
+    let criticalSoftwareCount = 0;
+    let severityRankSum = 0;
+    let anyInternetFacing = false;
+    const appNames = [];
+
+    for (const appId of appIdSet) {
+      const serverAgg = serverRiskByApp.get(appId);
+      const softwareAgg = softwareRiskByApp.get(appId);
+      const servers = serverAgg?.count || 0;
+      const software = softwareAgg?.count || 0;
+      serverCount += servers;
+      softwareCount += software;
+      apiCount += apiCountByApp.get(appId) || 0;
+      assetCount += servers + software;
+
+      atRiskCount += (serverAgg?.atRiskSecurityCount || 0) + (softwareAgg?.atRiskSecurityCount || 0);
+      criticalServerCount += serverAgg?.atRiskSecurityCount || 0;
+      criticalSoftwareCount += softwareAgg?.atRiskSecurityCount || 0;
+
+      const profile = appProfileById.get(appId);
+      if (profile?.name) appNames.push(profile.name);
+      if (profile?.internetFacing === 'Yes') anyInternetFacing = true;
+      severityRankSum += applicationSeverityRank(profile);
+    }
+
+    // Probability = the literal fraction of this flow's examined
+    // infrastructure (servers + software) carrying a real, externally
+    // established issue — internet-facing exposure adds a modest flat
+    // bump on top, since a publicly reachable app is more reachable by an
+    // attacker in the first place, independent of its own patch/CVE state.
+    let probability = assetCount ? Math.round(100 * (atRiskCount / assetCount)) : 0;
+    if (anyInternetFacing) probability = Math.min(100, probability + 5);
+
+    // Severity uses the AVERAGE classification rank across the flow's
+    // applications, not the single worst one — a flow touching one
+    // Critical-classified app alongside several Low ones lands at Medium,
+    // not automatically High just because one component happens to be
+    // sensitive.
+    const avgSeverityRank = appIdSet.size ? Math.round(severityRankSum / appIdSet.size) : 1;
+
+    flows.push({
+      businessFlow,
+      probability,
+      severity: SEVERITY_RANK_LABELS[avgSeverityRank] || 'Low',
+      applicationCount: appIdSet.size,
+      applicationNames: appNames,
+      serverCount,
+      softwareCount,
+      apiCount,
+      criticalServerCount,
+      criticalSoftwareCount,
+    });
+  }
+
+  return flows;
+}
+
 /**
  * GET /api/dashboard/business-flow-security-risk
  * Top business flows ranked by an estimated probability of a security
@@ -1917,67 +2003,7 @@ router.get('/business-flow-security-risk', async (req, res) => {
       loadAssetRiskAggregatesByApp(),
     ]);
 
-    const flows = [];
-    for (const [businessFlow, appIdSet] of flowToAppIds.entries()) {
-      let atRiskCount = 0;
-      let assetCount = 0;
-      let serverCount = 0;
-      let softwareCount = 0;
-      let apiCount = 0;
-      let criticalServerCount = 0;
-      let criticalSoftwareCount = 0;
-      let severityRankSum = 0;
-      let anyInternetFacing = false;
-      const appNames = [];
-
-      for (const appId of appIdSet) {
-        const serverAgg = serverRiskByApp.get(appId);
-        const softwareAgg = softwareRiskByApp.get(appId);
-        const servers = serverAgg?.count || 0;
-        const software = softwareAgg?.count || 0;
-        serverCount += servers;
-        softwareCount += software;
-        apiCount += apiCountByApp.get(appId) || 0;
-        assetCount += servers + software;
-
-        atRiskCount += (serverAgg?.atRiskSecurityCount || 0) + (softwareAgg?.atRiskSecurityCount || 0);
-        criticalServerCount += serverAgg?.atRiskSecurityCount || 0;
-        criticalSoftwareCount += softwareAgg?.atRiskSecurityCount || 0;
-
-        const profile = appProfileById.get(appId);
-        if (profile?.name) appNames.push(profile.name);
-        if (profile?.internetFacing === 'Yes') anyInternetFacing = true;
-        severityRankSum += applicationSeverityRank(profile);
-      }
-
-      // Probability = the literal fraction of this flow's examined
-      // infrastructure (servers + software) carrying a real, externally
-      // established issue — internet-facing exposure adds a modest flat
-      // bump on top, since a publicly reachable app is more reachable by an
-      // attacker in the first place, independent of its own patch/CVE state.
-      let probability = assetCount ? Math.round(100 * (atRiskCount / assetCount)) : 0;
-      if (anyInternetFacing) probability = Math.min(100, probability + 5);
-
-      // Severity uses the AVERAGE classification rank across the flow's
-      // applications, not the single worst one — a flow touching one
-      // Critical-classified app alongside several Low ones lands at Medium,
-      // not automatically High just because one component happens to be
-      // sensitive.
-      const avgSeverityRank = appIdSet.size ? Math.round(severityRankSum / appIdSet.size) : 1;
-
-      flows.push({
-        businessFlow,
-        probability,
-        severity: SEVERITY_RANK_LABELS[avgSeverityRank] || 'Low',
-        applicationCount: appIdSet.size,
-        applicationNames: appNames,
-        serverCount,
-        softwareCount,
-        apiCount,
-        criticalServerCount,
-        criticalSoftwareCount,
-      });
-    }
+    const flows = computeFlowSecurityRows({ flowToAppIds, appProfileById }, { serverRiskByApp, softwareRiskByApp, apiCountByApp });
 
     flows.sort((a, b) => b.probability - a.probability || a.businessFlow.localeCompare(b.businessFlow));
 
@@ -2130,6 +2156,60 @@ function applicationCriticalityRank(profile) {
   return 1; // Low ("High" tier, or unset)
 }
 
+// One defect-risk row per business flow (unsorted, uncapped) — shared by
+// /business-flow-defect-risk (top 20) and /flow-scorecards (every flow).
+function computeFlowDefectRows({ flowToAppIds, appProfileById }, { serverRiskByApp, softwareRiskByApp, apiCountByApp }) {
+  const flows = [];
+  for (const [businessFlow, appIdSet] of flowToAppIds.entries()) {
+    let atRiskCount = 0;
+    let assetCount = 0;
+    let serverCount = 0;
+    let softwareCount = 0;
+    let apiCount = 0;
+    let criticalServerCount = 0;
+    let criticalSoftwareCount = 0;
+    let criticalityRankSum = 0;
+    const appNames = [];
+
+    for (const appId of appIdSet) {
+      const serverAgg = serverRiskByApp.get(appId);
+      const softwareAgg = softwareRiskByApp.get(appId);
+      const servers = serverAgg?.count || 0;
+      const software = softwareAgg?.count || 0;
+      serverCount += servers;
+      softwareCount += software;
+      apiCount += apiCountByApp.get(appId) || 0;
+      assetCount += servers + software;
+
+      atRiskCount += (serverAgg?.atRiskDefectCount || 0) + (softwareAgg?.atRiskDefectCount || 0);
+      criticalServerCount += serverAgg?.atRiskDefectCount || 0;
+      criticalSoftwareCount += softwareAgg?.atRiskDefectCount || 0;
+
+      const profile = appProfileById.get(appId);
+      if (profile?.name) appNames.push(profile.name);
+      criticalityRankSum += applicationCriticalityRank(profile);
+    }
+
+    const probability = assetCount ? Math.round(100 * (atRiskCount / assetCount)) : 0;
+    const avgCriticalityRank = appIdSet.size ? Math.round(criticalityRankSum / appIdSet.size) : 1;
+
+    flows.push({
+      businessFlow,
+      probability,
+      criticality: SEVERITY_RANK_LABELS[avgCriticalityRank] || 'Low',
+      applicationCount: appIdSet.size,
+      applicationNames: appNames,
+      serverCount,
+      softwareCount,
+      apiCount,
+      criticalServerCount,
+      criticalSoftwareCount,
+    });
+  }
+
+  return flows;
+}
+
 /**
  * GET /api/dashboard/business-flow-defect-risk
  * Top business flows ranked by an estimated probability of an operational
@@ -2143,53 +2223,7 @@ router.get('/business-flow-defect-risk', async (req, res) => {
       loadAssetRiskAggregatesByApp(),
     ]);
 
-    const flows = [];
-    for (const [businessFlow, appIdSet] of flowToAppIds.entries()) {
-      let atRiskCount = 0;
-      let assetCount = 0;
-      let serverCount = 0;
-      let softwareCount = 0;
-      let apiCount = 0;
-      let criticalServerCount = 0;
-      let criticalSoftwareCount = 0;
-      let criticalityRankSum = 0;
-      const appNames = [];
-
-      for (const appId of appIdSet) {
-        const serverAgg = serverRiskByApp.get(appId);
-        const softwareAgg = softwareRiskByApp.get(appId);
-        const servers = serverAgg?.count || 0;
-        const software = softwareAgg?.count || 0;
-        serverCount += servers;
-        softwareCount += software;
-        apiCount += apiCountByApp.get(appId) || 0;
-        assetCount += servers + software;
-
-        atRiskCount += (serverAgg?.atRiskDefectCount || 0) + (softwareAgg?.atRiskDefectCount || 0);
-        criticalServerCount += serverAgg?.atRiskDefectCount || 0;
-        criticalSoftwareCount += softwareAgg?.atRiskDefectCount || 0;
-
-        const profile = appProfileById.get(appId);
-        if (profile?.name) appNames.push(profile.name);
-        criticalityRankSum += applicationCriticalityRank(profile);
-      }
-
-      const probability = assetCount ? Math.round(100 * (atRiskCount / assetCount)) : 0;
-      const avgCriticalityRank = appIdSet.size ? Math.round(criticalityRankSum / appIdSet.size) : 1;
-
-      flows.push({
-        businessFlow,
-        probability,
-        criticality: SEVERITY_RANK_LABELS[avgCriticalityRank] || 'Low',
-        applicationCount: appIdSet.size,
-        applicationNames: appNames,
-        serverCount,
-        softwareCount,
-        apiCount,
-        criticalServerCount,
-        criticalSoftwareCount,
-      });
-    }
+    const flows = computeFlowDefectRows({ flowToAppIds, appProfileById }, { serverRiskByApp, softwareRiskByApp, apiCountByApp });
 
     flows.sort((a, b) => b.probability - a.probability || a.businessFlow.localeCompare(b.businessFlow));
 
@@ -2332,6 +2366,187 @@ router.get('/application-risk', async (req, res) => {
     });
 
     res.json({ applications });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Process flow scorecards (Executive Dashboard tiles) ──────────────────
+const scorecardNorm = (value) => String(value || '')
+  .replace(/&amp;/g, '&').replace(/&#38;/g, '&')
+  .trim().toLowerCase();
+const toNumberExpr = (field) => ({
+  $convert: { input: { $getField: { field, input: '$values' } }, to: 'double', onError: 0, onNull: 0 },
+});
+
+/**
+ * GET /api/dashboard/flow-scorecards
+ * One scorecard per business process flow diagram, for the Dashboard tab's
+ * per-flow tiles. Change exposure (live Jira) is NOT included — the client
+ * merges it from /api/process-change-radar so a slow Jira call can't hold
+ * up the rest of the tiles.
+ *   security / defect — same per-flow numbers as /business-flow-security-risk
+ *                       and /business-flow-defect-risk (computeFlow*Rows), uncapped
+ *   sox               — controls attached to the flow (flow, task, interface and
+ *                       its applications' ITGCs) and their open deviations
+ *   tco               — annual total cost of ownership: each application's run
+ *                       cost (catalog ANNUAL_COST + server hosting MONTHLY_COST×12
+ *                       + software ANNUAL_MAINTENANCE) allocated to flows by
+ *                       share of task usage, plus the flow's own feature dev
+ *                       spend for the latest year (applicationFeatureDevCosts)
+ */
+router.get('/flow-scorecards', async (req, res) => {
+  try {
+    const SoxControl = require('../models/SoxControl');
+    const SoxDeviation = require('../models/SoxDeviation');
+    const [diagrams, flowAppMap, assetAgg, appRows, infraAgg, softwareAgg, featureDocs, soxControls, soxDeviations] = await Promise.all([
+      Diagram.find({}, { name: 1, domain: 1, subdomain: 1, businessFlow: 1, status: 1, neighborhoodName: 1, 'tasks.name': 1, 'tasks.applications.name': 1 }).lean(),
+      loadFlowAppMap(req),
+      loadAssetRiskAggregatesByApp(),
+      CanonicalData.find({ neighborhoodName: SYSTEM_COMPONENTS_NEIGHBORHOOD, componentType: 'Applications' }, { primaryKey: 1, 'values.APP_ID Qualifier': 1, 'values.ANNUAL_COST Qualifier': 1 }).lean(),
+      CanonicalData.aggregate([
+        { $match: { neighborhoodName: SYSTEM_COMPONENTS_NEIGHBORHOOD, componentType: 'Servers' } },
+        { $group: { _id: fkAppIdFieldExpr(), monthly: { $sum: toNumberExpr('MONTHLY_COST_USD cost_grp_1') }, servers: { $sum: 1 } } },
+      ]),
+      CanonicalData.aggregate([
+        { $match: { neighborhoodName: SYSTEM_COMPONENTS_NEIGHBORHOOD, componentType: 'Software' } },
+        { $group: { _id: fkAppIdFieldExpr(), maintenance: { $sum: toNumberExpr('ANNUAL_MAINTENANCE_USD cost_grp_1') } } },
+      ]),
+      ApplicationFeatureDevCost.find({}, { businessFlow: 1, 'features.year': 1, 'features.devCost': 1 }).lean(),
+      SoxControl.find({}, { controlId: 1, keyControl: 1, category: 1, 'anchors.diagramIds': 1, 'anchors.applicationKeys': 1 }).lean(),
+      SoxDeviation.find({}, { deviationId: 1, controlId: 1, severity: 1, 'remediation.status': 1, 'remediation.targetDate': 1 }).lean(),
+    ]);
+
+    // Security / defect rows by flow name.
+    const securityByFlow = new Map(computeFlowSecurityRows(flowAppMap, assetAgg).map((r) => [scorecardNorm(r.businessFlow), r]));
+    const defectByFlow = new Map(computeFlowDefectRows(flowAppMap, assetAgg).map((r) => [scorecardNorm(r.businessFlow), r]));
+
+    // ── TCO inputs ──
+    const appIdByAcronym = new Map();
+    const appAnnualByAcronym = new Map();
+    for (const row of appRows) {
+      const acronym = scorecardNorm(row.primaryKey);
+      appIdByAcronym.set(acronym, String(row.values?.['APP_ID Qualifier'] || ''));
+      appAnnualByAcronym.set(acronym, Number(row.values?.['ANNUAL_COST Qualifier']) || 0);
+    }
+    const infraByAppId = new Map(infraAgg.map((r) => [r._id, (r.monthly || 0) * 12]));
+    const softwareByAppId = new Map(softwareAgg.map((r) => [r._id, r.maintenance || 0]));
+    // Task-usage share: how many task→application uses each app has across all flows.
+    const usageTotal = new Map();
+    for (const d of diagrams) {
+      for (const t of d.tasks || []) {
+        for (const a of t.applications || []) {
+          const key = scorecardNorm(a.name);
+          if (key) usageTotal.set(key, (usageTotal.get(key) || 0) + 1);
+        }
+      }
+    }
+    const devByFlowYear = new Map(); // flow -> Map(year -> cost)
+    let latestYear = 0;
+    for (const doc of featureDocs) {
+      const flow = scorecardNorm(doc.businessFlow);
+      if (!devByFlowYear.has(flow)) devByFlowYear.set(flow, new Map());
+      const years = devByFlowYear.get(flow);
+      for (const feature of doc.features || []) {
+        const year = Number(feature.year);
+        if (!year) continue;
+        latestYear = Math.max(latestYear, year);
+        years.set(year, (years.get(year) || 0) + (Number(feature.devCost) || 0));
+      }
+    }
+
+    // ── SOX inputs ──
+    const deviationsByControl = new Map();
+    for (const dev of soxDeviations) {
+      if (dev.remediation?.status === 'Closed') continue;
+      if (!deviationsByControl.has(dev.controlId)) deviationsByControl.set(dev.controlId, []);
+      deviationsByControl.get(dev.controlId).push(dev);
+    }
+    const now = new Date();
+
+    const scorecards = diagrams.map((d) => {
+      const diagramId = String(d._id);
+      const flowKeys = [scorecardNorm(d.businessFlow), scorecardNorm(d.name)].filter(Boolean);
+      const findBy = (map) => flowKeys.map((k) => map.get(k)).find(Boolean) || null;
+
+      // Applications and their usage count in this flow.
+      const usageHere = new Map();
+      for (const t of d.tasks || []) {
+        for (const a of t.applications || []) {
+          const key = scorecardNorm(a.name);
+          if (key) usageHere.set(key, (usageHere.get(key) || 0) + 1);
+        }
+      }
+      const applications = [...new Set((d.tasks || []).flatMap((t) => (t.applications || []).map((a) => String(a.name || '').trim())).filter(Boolean))];
+
+      // TCO
+      let appCost = 0; let infraCost = 0; let softwareCost = 0; let uncosted = 0;
+      for (const [key, uses] of usageHere) {
+        const share = uses / (usageTotal.get(key) || uses);
+        const appId = appIdByAcronym.get(key);
+        if (!appId) { uncosted += 1; continue; }
+        appCost += (appAnnualByAcronym.get(key) || 0) * share;
+        infraCost += (infraByAppId.get(appId) || 0) * share;
+        softwareCost += (softwareByAppId.get(appId) || 0) * share;
+      }
+      const devYears = findBy(devByFlowYear);
+      const devCost = devYears?.get(latestYear) || 0;
+      const devCostPrior = devYears?.get(latestYear - 1) || 0;
+      const runCost = appCost + infraCost + softwareCost;
+      const tco = {
+        year: latestYear || null,
+        total: Math.round(runCost + devCost),
+        run: Math.round(runCost),
+        application: Math.round(appCost),
+        infrastructure: Math.round(infraCost),
+        software: Math.round(softwareCost),
+        development: Math.round(devCost),
+        developmentPriorYear: Math.round(devCostPrior),
+        priorYearTotal: Math.round(runCost + devCostPrior),
+        uncostedApplications: uncosted,
+      };
+
+      // SOX
+      const appKeys = new Set(usageHere.keys());
+      const controls = soxControls.filter((c) => (c.anchors?.diagramIds || []).includes(diagramId)
+        || (c.anchors?.applicationKeys || []).some((k) => appKeys.has(k)));
+      const flowLevelInScope = soxControls.some((c) => (c.anchors?.diagramIds || []).includes(diagramId));
+      const openDevs = controls.flatMap((c) => deviationsByControl.get(c.controlId) || []);
+      const bySeverity = { High: 0, Medium: 0, Low: 0 };
+      openDevs.forEach((dev) => { bySeverity[dev.severity] = (bySeverity[dev.severity] || 0) + 1; });
+      const overdue = openDevs.filter((dev) => dev.remediation?.targetDate && new Date(dev.remediation.targetDate) < now).length;
+      const controlsWithDeviations = new Set(openDevs.map((dev) => dev.controlId)).size;
+      const sox = {
+        inScope: controls.length > 0,
+        flowInScope: flowLevelInScope,
+        controlCount: controls.length,
+        keyControlCount: controls.filter((c) => c.keyControl).length,
+        controlsWithDeviations,
+        compliancePct: controls.length ? Math.round(100 * (controls.length - controlsWithDeviations) / controls.length) : null,
+        openDeviations: openDevs.length,
+        bySeverity,
+        overdueDeviations: overdue,
+      };
+
+      const security = findBy(securityByFlow);
+      const defect = findBy(defectByFlow);
+      return {
+        diagramId,
+        name: String(d.name || '').replace(/&amp;/g, '&').replace(/&#38;/g, '&'),
+        businessFlow: d.businessFlow || null,
+        domain: String(d.domain || '').replace(/&amp;/g, '&').replace(/&#38;/g, '&') || 'Unassigned',
+        subdomain: String(d.subdomain || '').replace(/&amp;/g, '&').replace(/&#38;/g, '&') || null,
+        status: d.status || null,
+        neighborhoodName: d.neighborhoodName || null,
+        applications,
+        security: security ? { probability: security.probability, severity: security.severity, atRiskAssets: security.criticalServerCount + security.criticalSoftwareCount, assets: security.serverCount + security.softwareCount } : null,
+        defect: defect ? { probability: defect.probability, criticality: defect.criticality, atRiskAssets: defect.criticalServerCount + defect.criticalSoftwareCount, assets: defect.serverCount + defect.softwareCount } : null,
+        sox,
+        tco,
+      };
+    });
+
+    res.json({ generatedAt: new Date().toISOString(), tcoYear: latestYear || null, scorecards });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

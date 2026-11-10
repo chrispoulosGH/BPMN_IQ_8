@@ -127,6 +127,11 @@ const diagramSchema = new mongoose.Schema(
       default: [],
       _id: false,
     },
+    // SOX control numbers attached to this business flow (flow-level review
+    // control plus every task-level / interface control on its tasks) —
+    // written by scripts/seed_sox_controls.js; the full controls live in the
+    // soxcontrols collection (models/SoxControl.js).
+    soxControlIds: { type: [String], default: undefined },
   },
   { timestamps: true }
 );

@@ -17,6 +17,10 @@ const CanonicalDataSchema = new Schema({
   childrenRefs: [{ type: Schema.Types.ObjectId, ref: 'CanonicalData' }],
   path: { type: String },
   sourceBatches: { type: [SourceBatchSchema], default: [] },
+  // SOX control numbers attached to this component (Applications, APIs,
+  // Servers, Software) — written by scripts/seed_sox_controls.js; full
+  // control details live in the soxcontrols collection.
+  soxControlIds: { type: [String], default: undefined },
 }, { timestamps: true, collection: 'canonicaldata' });
 
 CanonicalDataSchema.index({ neighborhoodName: 1, componentType: 1, primaryKey: 1 }, { unique: true });

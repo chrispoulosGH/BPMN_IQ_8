@@ -1259,6 +1259,8 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   // searching by correlation ID so exactly one record shows.
   const [dataTabViewMode, setDataTabViewMode] = useState<Record<string, 'dashboard' | 'table'>>({});
   const [systemComponentTableSearchRequest, setSystemComponentTableSearchRequest] = useState<Record<string, { column: string; text: string; nonce: number }>>({});
+  // Diagrams tab type-ahead text, highlighted on the open diagram.
+  const [diagramSearchTerm, setDiagramSearchTerm] = useState('');
   const [diagramBrowserFilterRequest, setDiagramBrowserFilterRequest] = useState<{ frameworks?: string[]; filters?: Record<string, string[]>; nonce: number } | null>(null);
   // Selected task in diagram (for right sidebar link)
   const [selectedDiagramTask, setSelectedDiagramTask] = useState<{ name: string; id: string } | null>(null);
@@ -1957,6 +1959,20 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
     setRadarDomainFocus(flow.domain);
     handleOuterTabChange('processChangeRadar');
   }, [handleOuterTabChange]);
+
+  // Process Flow Scorecards (Dashboard tab) → clicking a flow tile opens that
+  // flow alone on the Diagrams tab (where its SOX shields render), replacing
+  // whatever was on the canvas. Scope the API to the flow's own neighborhood
+  // first — getDiagram relies on the global x-neighborhood-name header.
+  const handleDashboardFlowOpen = useCallback((flow: { diagramId: string; neighborhoodName: string | null }) => {
+    if (flow.neighborhoodName) {
+      setApiNeighborhoodScope(flow.neighborhoodName);
+      setActiveDiagramNeighborhoodName(flow.neighborhoodName);
+    }
+    setSelectedDiagramIds([flow.diagramId]);
+    void rebuildCompositeCanvas([flow.diagramId]);
+    setActiveOuterTab('bpmn');
+  }, [rebuildCompositeCanvas]);
 
   // Both focus values are only valid for the visit they were set for — clear
   // them as soon as the user leaves Process Change Radar, so a later direct
@@ -3259,7 +3275,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                 label: outerTabLabel('execDashboard', <span><FundOutlined /> Dashboard</span>),
                 // destroyInactiveTabPane means mounting here is a fresh fetch
                 // every visit, same as Process Change Radar below.
-                children: <ExecutiveDashboard onSelectDomain={handleDashboardDomainSelect} />,
+                children: <ExecutiveDashboard onSelectDomain={handleDashboardDomainSelect} onOpenFlow={handleDashboardFlowOpen} onOpenChangeRadar={handleHeatMapFlowSelect} />,
               },
               {
                 key: 'analytics',
@@ -3320,11 +3336,12 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
 
                     <div className="flex-1 min-h-0 min-w-0 relative">
                       <div className="flex h-full min-h-0">
-                        <div className="w-1/2 min-w-[360px] max-w-[620px] min-h-0">
+                        <div className="w-1/2 min-w-[560px] max-w-[640px] min-h-0">
                           <DiagramBrowser
                             frameworks={neighborhoodTabs}
                             selectedDiagramIds={selectedDiagramIds}
                             externalFilterRequest={diagramBrowserFilterRequest}
+                            onQuickSearchChange={setDiagramSearchTerm}
                             onSearchChanged={() => {
                               setSelectedDiagramIds([]);
                               void rebuildCompositeCanvas([]);
@@ -3369,6 +3386,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                         <div className="min-h-0 min-w-0 flex-1">
                           <BpmnEditor
                             ref={editorRef}
+                            searchHighlightTerm={diagramSearchTerm}
                             xml={currentXml}
                             importTrigger={importTrigger}
                             onXmlChange={handleXmlChange}

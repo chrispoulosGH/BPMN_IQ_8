@@ -1,0 +1,896 @@
+[
+  {
+    "l1": "Product Engineering & Development",
+    "l2": "Vehicle Program Development",
+    "l3": "Vehicle Development",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "New Model Development Program"
+    ]
+  },
+  {
+    "l1": "Product Engineering & Development",
+    "l2": "Vehicle Program Development",
+    "l3": "Prototyping",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Prototype Vehicle Build"
+    ]
+  },
+  {
+    "l1": "Product Engineering & Development",
+    "l2": "Vehicle Program Development",
+    "l3": "Engineering Changes",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Engineering Change Order Process"
+    ]
+  },
+  {
+    "l1": "Product Engineering & Development",
+    "l2": "Product Validation & Testing",
+    "l3": "Testing & Validation",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Product Validation Testing"
+    ]
+  },
+  {
+    "l1": "Product Engineering & Development",
+    "l2": "Product Validation & Testing",
+    "l3": "Product Validation",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Vehicle Validation Testing"
+    ]
+  },
+  {
+    "l1": "Product Engineering & Development",
+    "l2": "Vehicle Software & OTA",
+    "l3": "Vehicle Software",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Vehicle Software Development"
+    ]
+  },
+  {
+    "l1": "Product Engineering & Development",
+    "l2": "Vehicle Software & OTA",
+    "l3": "OTA Updates",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Over-the-Air Software Update"
+    ]
+  },
+  {
+    "l1": "Manufacturing & Supply Chain",
+    "l2": "Production Planning & Scheduling",
+    "l3": "Demand Forecasting",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Production Planning Cycle"
+    ]
+  },
+  {
+    "l1": "Manufacturing & Supply Chain",
+    "l2": "Production Planning & Scheduling",
+    "l3": "Production Scheduling",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Daily Production Scheduling"
+    ]
+  },
+  {
+    "l1": "Manufacturing & Supply Chain",
+    "l2": "Production Execution",
+    "l3": "Assembly Operations",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Vehicle Assembly Line Execution"
+    ]
+  },
+  {
+    "l1": "Manufacturing & Supply Chain",
+    "l2": "Production Execution",
+    "l3": "Line Management",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Production Line Changeover"
+    ]
+  },
+  {
+    "l1": "Manufacturing & Supply Chain",
+    "l2": "Production Execution",
+    "l3": "Maintenance",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Plant Equipment Maintenance"
+    ]
+  },
+  {
+    "l1": "Manufacturing & Supply Chain",
+    "l2": "Quality Management",
+    "l3": "Inspection Process",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "End-of-Line Quality Inspection"
+    ]
+  },
+  {
+    "l1": "Manufacturing & Supply Chain",
+    "l2": "Quality Management",
+    "l3": "Defect Management",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Production Defect Containment"
+    ]
+  },
+  {
+    "l1": "Manufacturing & Supply Chain",
+    "l2": "Quality Management",
+    "l3": "Safety Compliance",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Vehicle Safety Compliance Certification"
+    ]
+  },
+  {
+    "l1": "Manufacturing & Supply Chain",
+    "l2": "Procurement & Supplier Management",
+    "l3": "Procurement",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Supplier Parts Ordering"
+    ]
+  },
+  {
+    "l1": "Manufacturing & Supply Chain",
+    "l2": "Procurement & Supplier Management",
+    "l3": "Quality Assurance",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Supplier Quality Management"
+    ]
+  },
+  {
+    "l1": "Manufacturing & Supply Chain",
+    "l2": "Procurement & Supplier Management",
+    "l3": "Supplier Audits",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Supplier Quality Audit"
+    ]
+  },
+  {
+    "l1": "Manufacturing & Supply Chain",
+    "l2": "Procurement & Supplier Management",
+    "l3": "Contract Management",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Vendor Contract Management"
+    ]
+  },
+  {
+    "l1": "Manufacturing & Supply Chain",
+    "l2": "Logistics & Distribution",
+    "l3": "Warehouse Management",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Warehouse Inventory Management"
+    ]
+  },
+  {
+    "l1": "Manufacturing & Supply Chain",
+    "l2": "Logistics & Distribution",
+    "l3": "Vehicle Distribution",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Vehicle Outbound Logistics"
+    ]
+  },
+  {
+    "l1": "Vehicle Sales",
+    "l2": "Lead & Opportunity Management",
+    "l3": "Lead Management",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Digital Lead Capture & Qualification",
+      "Showroom Walk-In Engagement"
+    ]
+  },
+  {
+    "l1": "Vehicle Sales",
+    "l2": "Lead & Opportunity Management",
+    "l3": "Test Drive Management",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Test Drive Execution"
+    ]
+  },
+  {
+    "l1": "Vehicle Sales",
+    "l2": "Lead & Opportunity Management",
+    "l3": "Sales Recovery",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Lost Sales Recovery"
+    ]
+  },
+  {
+    "l1": "Vehicle Sales",
+    "l2": "Vehicle Configuration & Ordering",
+    "l3": "Vehicle Configuration",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Custom Vehicle Build Order"
+    ]
+  },
+  {
+    "l1": "Vehicle Sales",
+    "l2": "Vehicle Configuration & Ordering",
+    "l3": "Inventory Management",
+    "qualifierSubdomain": "New Vehicle Sales",
+    "businessFlows": [
+      "Inventory Search & Locate"
+    ]
+  },
+  {
+    "l1": "Vehicle Sales",
+    "l2": "Vehicle Configuration & Ordering",
+    "l3": "Online Purchase",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Digital Retailing Journey"
+    ]
+  },
+  {
+    "l1": "Vehicle Sales",
+    "l2": "Deal & Delivery Management",
+    "l3": "Pricing & Negotiation",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Deal Pricing & Structuring"
+    ]
+  },
+  {
+    "l1": "Vehicle Sales",
+    "l2": "Deal & Delivery Management",
+    "l3": "Trade-In Management",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Trade-In Appraisal Process"
+    ]
+  },
+  {
+    "l1": "Vehicle Sales",
+    "l2": "Deal & Delivery Management",
+    "l3": "Deal Closing",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Sales Contract Finalization"
+    ]
+  },
+  {
+    "l1": "Vehicle Sales",
+    "l2": "Deal & Delivery Management",
+    "l3": "Vehicle Delivery",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "New Vehicle Delivery Experience"
+    ]
+  },
+  {
+    "l1": "Vehicle Sales",
+    "l2": "Fleet Sales Management",
+    "l3": "Fleet Sales",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Fleet Customer Sales Process"
+    ]
+  },
+  {
+    "l1": "Vehicle Sales",
+    "l2": "Fleet Sales Management",
+    "l3": "Fleet Account Management",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Fleet Proposal Generation"
+    ]
+  },
+  {
+    "l1": "Vehicle Sales",
+    "l2": "Fleet Sales Management",
+    "l3": "Fleet Order Processing",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Fleet Order Fulfillment"
+    ]
+  },
+  {
+    "l1": "Vehicle Sales",
+    "l2": "Used Vehicle & Remarketing",
+    "l3": "CPO Certification",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "CPO Vehicle Certification Process"
+    ]
+  },
+  {
+    "l1": "Vehicle Sales",
+    "l2": "Used Vehicle & Remarketing",
+    "l3": "Remarketing",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Wholesale Vehicle Disposition"
+    ]
+  },
+  {
+    "l1": "Customer Finance",
+    "l2": "Retail Credit & Loan Origination",
+    "l3": "Credit Processing",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Customer Credit Application"
+    ]
+  },
+  {
+    "l1": "Customer Finance",
+    "l2": "Retail Credit & Loan Origination",
+    "l3": "Subprime Lending",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Special Finance Processing"
+    ]
+  },
+  {
+    "l1": "Customer Finance",
+    "l2": "Retail Credit & Loan Origination",
+    "l3": "Loan Funding",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Finance Contract Funding"
+    ]
+  },
+  {
+    "l1": "Customer Finance",
+    "l2": "Lease Management",
+    "l3": "Lease Origination",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Vehicle Lease Structuring"
+    ]
+  },
+  {
+    "l1": "Customer Finance",
+    "l2": "Lease Management",
+    "l3": "Lease End Management",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Lease Return & Disposition"
+    ]
+  },
+  {
+    "l1": "Customer Finance",
+    "l2": "Customer Receivables & Collections",
+    "l3": "Payment Processing",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Customer Payment Collection"
+    ]
+  },
+  {
+    "l1": "Customer Finance",
+    "l2": "Customer Receivables & Collections",
+    "l3": "Delinquency Management",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Past Due Account Management"
+    ]
+  },
+  {
+    "l1": "Customer Finance",
+    "l2": "Customer Receivables & Collections",
+    "l3": "Collections",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Accounts Receivable Collection"
+    ]
+  },
+  {
+    "l1": "Warranty & Protection Products",
+    "l2": "Protection Product Sales",
+    "l3": "GAP Coverage",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "GAP Insurance Sale"
+    ]
+  },
+  {
+    "l1": "Warranty & Protection Products",
+    "l2": "Protection Product Sales",
+    "l3": "Customer Engagement & Qualification",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Customer Warranty Interest Qualification"
+    ]
+  },
+  {
+    "l1": "Warranty & Protection Products",
+    "l2": "Protection Product Sales",
+    "l3": "Product Presentation & Education",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Warranty Product Presentation & Recommendation"
+    ]
+  },
+  {
+    "l1": "Warranty & Protection Products",
+    "l2": "Protection Product Sales",
+    "l3": "Pricing & Quote Management",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Warranty Pricing & Quote Generation"
+    ]
+  },
+  {
+    "l1": "Warranty & Protection Products",
+    "l2": "Protection Contract Administration",
+    "l3": "Contract Execution & Enrollment",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Warranty Contract Execution"
+    ]
+  },
+  {
+    "l1": "Warranty & Protection Products",
+    "l2": "Protection Contract Administration",
+    "l3": "Customer Onboarding & Documentation",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Warranty Customer Onboarding & Documentation"
+    ]
+  },
+  {
+    "l1": "After-Sales & Service",
+    "l2": "Service Scheduling & Reception",
+    "l3": "Appointment Management",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Service Appointment Scheduling"
+    ]
+  },
+  {
+    "l1": "After-Sales & Service",
+    "l2": "Service Scheduling & Reception",
+    "l3": "Vehicle Reception",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Vehicle Check-In Process"
+    ]
+  },
+  {
+    "l1": "After-Sales & Service",
+    "l2": "Service Scheduling & Reception",
+    "l3": "Quick Service",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Express Service Lane Process"
+    ]
+  },
+  {
+    "l1": "After-Sales & Service",
+    "l2": "Service Delivery & Repair",
+    "l3": "Repair Execution",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Repair Order Completion"
+    ]
+  },
+  {
+    "l1": "After-Sales & Service",
+    "l2": "Service Delivery & Repair",
+    "l3": "Mobile Service",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Mobile Service Delivery"
+    ]
+  },
+  {
+    "l1": "After-Sales & Service",
+    "l2": "Service Delivery & Repair",
+    "l3": "Battery Services",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Battery Replacement Service"
+    ]
+  },
+  {
+    "l1": "After-Sales & Service",
+    "l2": "Service Delivery & Repair",
+    "l3": "Tire Services",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Tire Replacement Service"
+    ]
+  },
+  {
+    "l1": "After-Sales & Service",
+    "l2": "Parts Management",
+    "l3": "Counter Sales",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Parts Counter Sale"
+    ]
+  },
+  {
+    "l1": "After-Sales & Service",
+    "l2": "Parts Management",
+    "l3": "Inventory Management",
+    "qualifierSubdomain": "Parts Operations",
+    "businessFlows": [
+      "Parts Reorder Process"
+    ]
+  },
+  {
+    "l1": "After-Sales & Service",
+    "l2": "Parts Management",
+    "l3": "Dealer Orders",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Dealer Parts Order Processing"
+    ]
+  },
+  {
+    "l1": "After-Sales & Service",
+    "l2": "Warranty Claims & Field Actions",
+    "l3": "Claim Processing",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Warranty Claim Submission"
+    ]
+  },
+  {
+    "l1": "After-Sales & Service",
+    "l2": "Warranty Claims & Field Actions",
+    "l3": "Customer Relations",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Goodwill Repair Authorization"
+    ]
+  },
+  {
+    "l1": "After-Sales & Service",
+    "l2": "Warranty Claims & Field Actions",
+    "l3": "Campaign Execution",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Recall Campaign Execution"
+    ]
+  },
+  {
+    "l1": "After-Sales & Service",
+    "l2": "Customer Care",
+    "l3": "Complaint Management",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Customer Complaint Resolution"
+    ]
+  },
+  {
+    "l1": "After-Sales & Service",
+    "l2": "Customer Care",
+    "l3": "Issue Resolution",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Customer Complaint Resolution"
+    ]
+  },
+  {
+    "l1": "After-Sales & Service",
+    "l2": "Customer Care",
+    "l3": "Roadside Assistance",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Roadside Assistance Request"
+    ]
+  },
+  {
+    "l1": "Connected Vehicle & Mobility",
+    "l2": "Connected Services Lifecycle",
+    "l3": "Service Activation",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Connected Services Activation"
+    ]
+  },
+  {
+    "l1": "Connected Vehicle & Mobility",
+    "l2": "Connected Services Lifecycle",
+    "l3": "Subscription Management",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Connected Subscription Renewal"
+    ]
+  },
+  {
+    "l1": "Connected Vehicle & Mobility",
+    "l2": "Connected Services Lifecycle",
+    "l3": "Commerce Services",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "In-Vehicle Commerce Transaction"
+    ]
+  },
+  {
+    "l1": "Connected Vehicle & Mobility",
+    "l2": "Connected Vehicle Operations",
+    "l3": "Vehicle Health",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Remote Vehicle Diagnostics"
+    ]
+  },
+  {
+    "l1": "Connected Vehicle & Mobility",
+    "l2": "Connected Vehicle Operations",
+    "l3": "Cyber Defense",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Vehicle Cybersecurity Incident Response"
+    ]
+  },
+  {
+    "l1": "Connected Vehicle & Mobility",
+    "l2": "EV Charging Services",
+    "l3": "Charging Infrastructure",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "EV Charging Network Integration",
+      "EV Charging Network Management"
+    ]
+  },
+  {
+    "l1": "Dealer Network Management",
+    "l2": "Dealer Network Development",
+    "l3": "Dealer Development",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "New Dealer Onboarding"
+    ]
+  },
+  {
+    "l1": "Dealer Network Management",
+    "l2": "Dealer Network Development",
+    "l3": "Training",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Dealer Staff Training Program"
+    ]
+  },
+  {
+    "l1": "Dealer Network Management",
+    "l2": "Dealer Network Development",
+    "l3": "Skills Development",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Dealer Staff Training Program"
+    ]
+  },
+  {
+    "l1": "Dealer Network Management",
+    "l2": "Dealer Performance & Standards",
+    "l3": "Performance Management",
+    "qualifierSubdomain": "Dealer Management",
+    "businessFlows": [
+      "Dealer Performance Review"
+    ]
+  },
+  {
+    "l1": "Dealer Network Management",
+    "l2": "Dealer Performance & Standards",
+    "l3": "Compliance",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Dealer Standards Compliance Audit"
+    ]
+  },
+  {
+    "l1": "Dealer Network Management",
+    "l2": "Dealer Performance & Standards",
+    "l3": "Program Administration",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Dealer Incentive Program Management"
+    ]
+  },
+  {
+    "l1": "Marketing & Customer Experience",
+    "l2": "Brand & Product Launch",
+    "l3": "Partnerships",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Brand Partnership Activation"
+    ]
+  },
+  {
+    "l1": "Marketing & Customer Experience",
+    "l2": "Brand & Product Launch",
+    "l3": "New Vehicle Launch",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "New Model Launch to Market"
+    ]
+  },
+  {
+    "l1": "Marketing & Customer Experience",
+    "l2": "Brand & Product Launch",
+    "l3": "Event Management",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Auto Show & Event Marketing",
+      "Auto Show Event Management"
+    ]
+  },
+  {
+    "l1": "Marketing & Customer Experience",
+    "l2": "Campaign & Digital Marketing",
+    "l3": "Campaign Management",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Marketing Campaign Planning"
+    ]
+  },
+  {
+    "l1": "Marketing & Customer Experience",
+    "l2": "Campaign & Digital Marketing",
+    "l3": "Online Advertising",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Digital Advertising Campaign"
+    ]
+  },
+  {
+    "l1": "Marketing & Customer Experience",
+    "l2": "Campaign & Digital Marketing",
+    "l3": "Social Media",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Social Media Customer Engagement"
+    ]
+  },
+  {
+    "l1": "Marketing & Customer Experience",
+    "l2": "Campaign & Digital Marketing",
+    "l3": "Retention Campaigns",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Service Retention Campaign"
+    ]
+  },
+  {
+    "l1": "Marketing & Customer Experience",
+    "l2": "Customer Loyalty & Feedback",
+    "l3": "Loyalty Management",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Customer Loyalty Program"
+    ]
+  },
+  {
+    "l1": "Marketing & Customer Experience",
+    "l2": "Customer Loyalty & Feedback",
+    "l3": "Feedback Management",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Customer Satisfaction Survey"
+    ]
+  },
+  {
+    "l1": "Enterprise Management",
+    "l2": "Strategy & Financial Management",
+    "l3": "Strategic Planning",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Annual Strategic Planning Process"
+    ]
+  },
+  {
+    "l1": "Enterprise Management",
+    "l2": "Strategy & Financial Management",
+    "l3": "Planning & Budgeting",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Annual Budget Planning"
+    ]
+  },
+  {
+    "l1": "Enterprise Management",
+    "l2": "Strategy & Financial Management",
+    "l3": "Budgeting",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Annual Budget Planning Process"
+    ]
+  },
+  {
+    "l1": "Enterprise Management",
+    "l2": "Strategy & Financial Management",
+    "l3": "Financial Reporting",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Monthly Financial Close"
+    ]
+  },
+  {
+    "l1": "Enterprise Management",
+    "l2": "Strategy & Financial Management",
+    "l3": "Payables",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Accounts Payable Processing"
+    ]
+  },
+  {
+    "l1": "Enterprise Management",
+    "l2": "Governance, Risk & Compliance",
+    "l3": "Regulatory Affairs",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Regulatory Compliance Reporting"
+    ]
+  },
+  {
+    "l1": "Enterprise Management",
+    "l2": "Governance, Risk & Compliance",
+    "l3": "Risk Assessment",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Enterprise Risk Assessment"
+    ]
+  },
+  {
+    "l1": "Enterprise Management",
+    "l2": "Governance, Risk & Compliance",
+    "l3": "Litigation Management",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Legal Case Management"
+    ]
+  },
+  {
+    "l1": "Enterprise Management",
+    "l2": "Human Capital Management",
+    "l3": "Talent Management",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "Employee Onboarding Process"
+    ]
+  },
+  {
+    "l1": "Enterprise Management",
+    "l2": "Human Capital Management",
+    "l3": "Performance Management",
+    "qualifierSubdomain": "HR Services",
+    "businessFlows": [
+      "Employee Performance Review"
+    ]
+  },
+  {
+    "l1": "Enterprise Management",
+    "l2": "IT Service Management",
+    "l3": "Service Management",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "IT Service Request Fulfillment"
+    ]
+  },
+  {
+    "l1": "Enterprise Management",
+    "l2": "IT Service Management",
+    "l3": "Change Management",
+    "qualifierSubdomain": null,
+    "businessFlows": [
+      "IT Change Request Process"
+    ]
+  }
+]

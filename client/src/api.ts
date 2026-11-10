@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Diagram, DiagramMeta, DiagramNote, DiagramCreatePayload, DiagramUpdatePayload, DiagramValidationRequest, DiagramValidationReport, FileSaveResult, CapabilityMatchResult, TaskRecord, TaskCreatePayload, ReferenceData, RefItem, CapabilityItem, ActorItem, ServerItem, DatabaseItem, FactoryNeighborhoodSummary, CustomFactory, CustomFactoryRow, ModelCatalog, ModelCatalogRow, CatalogTreeResponse, CatalogTreeChildrenResponse, CatalogTreeSearchResponse, ProcessChangeRadarResponse, ProcessChangeSnapshot, ProcessOptimizationProposal } from './types';
+import type { Diagram, DiagramMeta, DiagramNote, DiagramSoxControls, SoxControl, FlowScorecardsResponse, DiagramCreatePayload, DiagramUpdatePayload, DiagramValidationRequest, DiagramValidationReport, FileSaveResult, CapabilityMatchResult, TaskRecord, TaskCreatePayload, ReferenceData, RefItem, CapabilityItem, ActorItem, ServerItem, DatabaseItem, FactoryNeighborhoodSummary, CustomFactory, CustomFactoryRow, ModelCatalog, ModelCatalogRow, CatalogTreeResponse, CatalogTreeChildrenResponse, CatalogTreeSearchResponse, ProcessChangeRadarResponse, ProcessChangeSnapshot, ProcessOptimizationProposal } from './types';
 export type { RefItem, CapabilityItem, ActorItem, ServerItem, DatabaseItem, FactoryNeighborhoodSummary, CustomFactory, CustomFactoryRow, ModelCatalog, ModelCatalogRow, CatalogTreeResponse, CatalogTreeChildrenResponse, CatalogTreeSearchResponse };
 
 const api = axios.create({ baseURL: '/api', withCredentials: true });
@@ -73,6 +73,14 @@ export const getDiagramNotes = (id: string): Promise<DiagramNote[]> =>
 // deletes are all just a new array here (see server/routes/diagrams.js).
 export const saveDiagramNotes = (id: string, notes: DiagramNote[]): Promise<DiagramNote[]> =>
   api.put(`/diagrams/${id}/notes`, { notes }).then((r) => r.data);
+
+// SOX controls attached to one diagram's flow, tasks and applications — see
+// server/routes/soxControls.js. Not neighborhood-scoped (looked up by id).
+export const getDiagramSoxControls = (id: string): Promise<DiagramSoxControls> =>
+  api.get(`/sox-controls/for-diagram/${id}`).then((r) => r.data);
+
+export const getSoxControl = (controlId: string): Promise<SoxControl> =>
+  api.get(`/sox-controls/${encodeURIComponent(controlId)}`).then((r) => r.data);
 
 // Also deletes the diagram's own Business Process Flow component row (and
 // rebuilds the search index) — used by the delete "x" on a diagram tile.
@@ -162,6 +170,12 @@ export interface ValueStreamRelationshipLink {
   valueStreamKey: string;
   rollupLabel: string;
   count: number;
+  businessFlows?: string[];
+  // From the capabilitygroupings collection (L2 group / L1 area). An
+  // ungrouped capability is its own group under area "Ungrouped".
+  capabilityGroup?: string;
+  capabilityArea?: string;
+  isGrouped?: boolean;
 }
 
 export type FlowMatrixMode = 'valueStream' | 'journey';
@@ -765,6 +779,11 @@ export const getDashboardServerLocationPoints = (): Promise<{
 // opened (see ProcessChangeRadar.tsx). A non-2xx response (Jira not
 // configured, or its custom fields not found) still comes back as JSON on
 // err.response.data — read `.error` there for the message to show the user.
+// One scorecard per business process flow for the Dashboard tab's tiles —
+// security/defect risk, SOX controls & deviations, TCO (server/routes/dashboard.js).
+export const getFlowScorecards = (): Promise<FlowScorecardsResponse> =>
+  api.get('/dashboard/flow-scorecards').then((r) => r.data);
+
 export const getProcessChangeRadar = (): Promise<ProcessChangeRadarResponse> =>
   api.get('/process-change-radar').then((r) => r.data);
 

@@ -351,6 +351,17 @@ export default function QuantitativeModeling() {
           </div>
         </div>
 
+        {/* ---- gauges: their own column, left of the canvases, stacked
+             vertically. Split into the same two rows as the canvases beside
+             them (grid-rows-2 over the same height) so each set stays
+             visually tied to the panel it measures. ---- */}
+        {selectedMeta && (
+          <div className="grid w-[150px] shrink-0 grid-rows-2 divide-y divide-slate-200 border-r border-slate-200 bg-white">
+            <GaugeColumn title="Baseline" readings={baselineReadings} gaugeMax={gaugeMax} />
+            <GaugeColumn title="What-If" readings={liveReadings} baselineForDelta={baselineReadings} gaugeMax={gaugeMax} />
+          </div>
+        )}
+
         {/* ---- comparison panels ---- */}
         <div className="relative min-h-0 flex-1">
           {!selectedMeta && !diagramLoading && (
@@ -366,8 +377,6 @@ export default function QuantitativeModeling() {
               <ComparisonPanel
                 title="Baseline"
                 subtitle="Read-only — as currently saved"
-                readings={baselineReadings}
-                gaugeMax={gaugeMax}
                 xml={baselineXml}
                 importTrigger={importTrigger}
                 diagramName={selectedMeta.name}
@@ -377,9 +386,6 @@ export default function QuantitativeModeling() {
               <ComparisonPanel
                 title="What-If"
                 subtitle="Editable — change tasks/applications to see live impact"
-                readings={liveReadings}
-                baselineForDelta={baselineReadings}
-                gaugeMax={gaugeMax}
                 xml={baselineXml}
                 importTrigger={importTrigger}
                 diagramName={selectedMeta.name}
@@ -399,34 +405,23 @@ export default function QuantitativeModeling() {
   );
 }
 
-interface ComparisonPanelProps {
+interface GaugeColumnProps {
   title: string;
-  subtitle: string;
   readings: GaugeReadings;
   baselineForDelta?: GaugeReadings;
   gaugeMax: { cost: number; jira: number };
-  xml: string;
-  importTrigger: number;
-  diagramName: string;
-  loading: boolean;
-  readOnly?: boolean;
-  editorRef?: RefObject<BpmnEditorHandle>;
-  onDirty?: () => void;
-  optimizerFindingByTaskName?: Record<string, OptimizerFindingLike>;
-  onOptimizerFindingClick?: () => void;
 }
 
-function ComparisonPanel({ title, subtitle, readings, baselineForDelta, gaugeMax, xml, importTrigger, diagramName, loading, readOnly, editorRef, onDirty, optimizerFindingByTaskName, onOptimizerFindingClick }: ComparisonPanelProps) {
+// The four gauges for one panel, stacked vertically in the left-hand gauge
+// column. Scrolls rather than squashing if the window is too short for four
+// at their fixed height.
+function GaugeColumn({ title, readings, baselineForDelta, gaugeMax }: GaugeColumnProps) {
   return (
     <div className="flex min-h-0 flex-col">
-      <div className="border-b border-slate-100 bg-slate-50 px-3 py-2">
-        <div className="flex items-center gap-2">
-          <span className="text-[13px] font-semibold text-slate-700">{title}</span>
-          <Tag className="!m-0" color={readOnly ? 'default' : 'blue'}>{subtitle}</Tag>
-        </div>
+      <div className="border-b border-slate-100 bg-slate-50 px-2 py-2">
+        <span className="text-[13px] font-semibold text-slate-700">{title}</span>
       </div>
-
-      <div className="grid grid-cols-4 gap-1 border-b border-slate-100 bg-white px-1 py-1">
+      <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-1 py-1">
         <SpeedometerGauge
           label="Cost"
           value={readings.cost}
@@ -459,6 +454,33 @@ function ComparisonPanel({ title, subtitle, readings, baselineForDelta, gaugeMax
           suffix=" issues"
           valueFormat=".0f"
         />
+      </div>
+    </div>
+  );
+}
+
+interface ComparisonPanelProps {
+  title: string;
+  subtitle: string;
+  xml: string;
+  importTrigger: number;
+  diagramName: string;
+  loading: boolean;
+  readOnly?: boolean;
+  editorRef?: RefObject<BpmnEditorHandle>;
+  onDirty?: () => void;
+  optimizerFindingByTaskName?: Record<string, OptimizerFindingLike>;
+  onOptimizerFindingClick?: () => void;
+}
+
+function ComparisonPanel({ title, subtitle, xml, importTrigger, diagramName, loading, readOnly, editorRef, onDirty, optimizerFindingByTaskName, onOptimizerFindingClick }: ComparisonPanelProps) {
+  return (
+    <div className="flex min-h-0 flex-col">
+      <div className="border-b border-slate-100 bg-slate-50 px-3 py-2">
+        <div className="flex items-center gap-2">
+          <span className="text-[13px] font-semibold text-slate-700">{title}</span>
+          <Tag className="!m-0" color={readOnly ? 'default' : 'blue'}>{subtitle}</Tag>
+        </div>
       </div>
 
       <div className="relative min-h-0 flex-1">

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useImperativeHandle, forwardRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import BpmnModeler from 'bpmn-js/lib/Modeler';
 import {
   BpmnPropertiesPanelModule,
@@ -6,9 +7,9 @@ import {
 } from 'bpmn-js-properties-panel';
 import { Modal } from 'antd';
 import dayjs from 'dayjs';
-import { getTaskNames, getServers, getDatabases, getApplicationReferenceForNeighborhood, getSystemComponentLinkedTypes, getSystemComponentRecordsLinkedToApplication, getDiagramNotes, saveDiagramNotes } from '../api';
+import { getTaskNames, getServers, getDatabases, getApplicationReferenceForNeighborhood, getSystemComponentLinkedTypes, getSystemComponentRecordsLinkedToApplication, getDiagramNotes, saveDiagramNotes, getDiagramSoxControls, getSoxControl } from '../api';
 import type { LinkedSystemComponentRecord } from '../api';
-import type { ApplicationItem, CapabilityMatch, DiagramNote, DiagramNoteHistoryEntry } from '../types';
+import type { ApplicationItem, CapabilityMatch, DiagramNote, DiagramNoteHistoryEntry, DiagramSoxControls, SoxControl, SoxDeviation } from '../types';
 import bpmniqModdle from '../bpmniq-moddle.json';
 import {
   buildExactApplicationIdentifierSet,
@@ -126,6 +127,95 @@ interface BpmnEditorProps {
   // panel — only the What-If canvas in Quantitative Modeling passes this.
   optimizerFindingByTaskName?: Record<string, OptimizerFindingLike>;
   onOptimizerFindingClick?: (finding: OptimizerFindingLike, taskName: string) => void;
+  // SOX controls (soxcontrols collection): a shield icon on every task,
+  // application row and diagram title that has controls attached; clicking
+  // it opens the control details in the right-hand column. Controls are
+  // fetched here per diagramId (single or every composite section), same as
+  // sticky notes. Defaults to showProperties, since the details render in
+  // the properties column.
+  showSoxControls?: boolean;
+  // Diagrams tab type-ahead text: tasks, application rows and the title /
+  // breadcrumb text containing it (case-insensitive) are highlighted.
+  searchHighlightTerm?: string;
+}
+
+// An application row clicked on the canvas, shown in the right column.
+interface SelectedApplication {
+  name: string;
+  taskName: string;
+  taskId: string;
+  usedByTasks?: string[];
+  soxControls?: SoxControl[];
+}
+
+// Catalog fields shown on the application details card, in display order.
+const APPLICATION_DETAIL_FIELDS: Array<{ key: keyof ApplicationItem; label: string }> = [
+  { key: 'correlationId', label: 'App ID' },
+  { key: 'acronym', label: 'Acronym' },
+  { key: 'applicationType', label: 'Type' },
+  { key: 'businessCriticality', label: 'Criticality' },
+  { key: 'lifecycle', label: 'Lifecycle' },
+  { key: 'lifecycleStatus', label: 'Lifecycle status' },
+  { key: 'installType', label: 'Install type' },
+  { key: 'userInterface', label: 'User interface' },
+  { key: 'owner', label: 'Owner' },
+  { key: 'discoverySource', label: 'Discovery source' },
+];
+
+// Yes/no risk flags, shown as chips when set.
+const APPLICATION_FLAG_FIELDS: Array<{ key: keyof ApplicationItem; label: string }> = [
+  { key: 'internetFacing', label: 'Internet facing' },
+  { key: 'customerFacing', label: 'Customer facing' },
+  { key: 'soxFsa', label: 'SOX / FSA' },
+  { key: 'pciData', label: 'PCI data' },
+  { key: 'pciDataStored', label: 'PCI data stored' },
+  { key: 'handleSpi', label: 'Handles SPI' },
+  { key: 'storeSpi', label: 'Stores SPI' },
+  { key: 'cpniIndicator', label: 'CPNI' },
+];
+
+function isYesValue(value: unknown): boolean {
+  return ['y', 'yes', 'true', '1'].includes(String(value ?? '').trim().toLowerCase());
+}
+
+const SEARCH_HIT_MARKER = 'search-hit';
+const SEARCH_MARK_STYLE = 'background:#ffe58f;color:inherit;border-radius:2px;padding:0 1px;';
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function textMatchesSearch(text: unknown, term: string): boolean {
+  return Boolean(term) && String(text || '').toLowerCase().includes(term);
+}
+
+// React version: wraps every occurrence of term in a <mark>.
+function highlightSearchText(text: string, term: string): ReactNode {
+  if (!term || !textMatchesSearch(text, term)) return text;
+  return text.split(new RegExp(`(${escapeRegExp(term)})`, 'ig')).map((part, index) => (
+    part.toLowerCase() === term
+      ? <mark key={index} style={{ background: '#ffe58f', color: 'inherit', borderRadius: 2, padding: '0 1px' }}>{part}</mark>
+      : part
+  ));
+}
+
+// DOM version, for overlay HTML built outside React.
+function appendSearchHighlightedText(target: HTMLElement, text: string, term: string) {
+  if (!term || !textMatchesSearch(text, term)) {
+    target.textContent = text;
+    return;
+  }
+  text.split(new RegExp(`(${escapeRegExp(term)})`, 'ig')).forEach((part) => {
+    if (!part) return;
+    if (part.toLowerCase() === term) {
+      const mark = document.createElement('mark');
+      mark.style.cssText = SEARCH_MARK_STYLE;
+      mark.textContent = part;
+      target.appendChild(mark);
+    } else {
+      target.appendChild(document.createTextNode(part));
+    }
+  });
 }
 
 // Minimal shape BpmnEditor needs from a ProcessOptimizerTaskDiffEntry (see
@@ -151,6 +241,56 @@ export interface ImpactIssueLike {
 // otherwise-matching application name won't find its issues.
 function normalizeImpactName(value: unknown): string {
   return String(value || '').trim().toLowerCase();
+}
+
+// SOX control icon — a shield with a check, in a purple distinct from every
+// other overlay color on the canvas (Jira amber/red, optimizer op colors,
+// application blue/orange).
+const SOX_COLOR = '#531dab';
+const SOX_BG = '#f9f0ff';
+const SOX_BORDER = '#d3adf7';
+const SOX_SHIELD_SVG = (size: number, color: string) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l8 3v6c0 5-3.5 9.5-8 11-4.5-1.5-8-6-8-11V5l8-3z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg>`;
+const SOX_RISK_STYLE: Record<string, { bg: string; fg: string; border: string }> = {
+  High: { bg: '#fff1f0', fg: '#cf1322', border: '#ffa39e' },
+  Medium: { bg: '#fffbe6', fg: '#ad6800', border: '#ffe58f' },
+  Low: { bg: '#f6ffed', fg: '#389e0d', border: '#b7eb8f' },
+};
+const SOX_RISK_ORDER: Record<string, number> = { High: 0, Medium: 1, Low: 2 };
+function sortSoxControls(controls: SoxControl[]): SoxControl[] {
+  // Controls with open deviations first (worst deviation first), then by audit risk.
+  const devRank = (c: SoxControl) => { const w = soxWorstSeverity(soxOpenDeviations([c])); return w ? SOX_RISK_ORDER[w] : 3; };
+  return [...controls].sort((a, b) => devRank(a) - devRank(b) || (SOX_RISK_ORDER[a.auditRisk] ?? 3) - (SOX_RISK_ORDER[b.auditRisk] ?? 3) || a.controlId.localeCompare(b.controlId));
+}
+// Deviations still needing action (anything not Closed) across a control set.
+function soxOpenDeviations(controls: SoxControl[]): SoxDeviation[] {
+  const seen = new Set<string>();
+  return controls.flatMap((c) => c.deviations || []).filter((d) => {
+    if (d.remediation?.status === 'Closed' || seen.has(d.deviationId)) return false;
+    seen.add(d.deviationId);
+    return true;
+  });
+}
+function soxWorstSeverity(deviations: SoxDeviation[]): 'High' | 'Medium' | 'Low' | null {
+  if (deviations.some((d) => d.severity === 'High')) return 'High';
+  if (deviations.some((d) => d.severity === 'Medium')) return 'Medium';
+  return deviations.length ? 'Low' : null;
+}
+const SOX_DEVIATION_DOT: Record<string, string> = { High: '#f5222d', Medium: '#fa8c16', Low: '#fadb14' };
+// Small "!" dot appended to a shield badge when its controls have open deviations.
+function soxDeviationDotHtml(controls: SoxControl[], size = 14): HTMLElement | null {
+  const open = soxOpenDeviations(controls);
+  const worst = soxWorstSeverity(open);
+  if (!worst) return null;
+  const dot = document.createElement('span');
+  dot.textContent = open.length > 1 ? String(open.length) : '!';
+  dot.style.cssText = `display:inline-flex;align-items:center;justify-content:center;min-width:${size}px;height:${size}px;padding:0 3px;border-radius:${size / 2}px;background:${SOX_DEVIATION_DOT[worst]};color:${worst === 'Low' ? '#614700' : '#fff'};font-size:${size - 5}px;font-weight:800;line-height:1;margin-left:2px;box-shadow:0 0 0 1.5px #fff;`;
+  return dot;
+}
+function soxSummaryTitle(controls: SoxControl[]): string {
+  const high = controls.filter((c) => c.auditRisk === 'High').length;
+  const open = soxOpenDeviations(controls);
+  const deviationLine = open.length ? `\n⚠ ${open.length} open deviation${open.length === 1 ? '' : 's'} (worst: ${soxWorstSeverity(open)}) — ${open.slice(0, 3).map((d) => d.deviationId).join(', ')}${open.length > 3 ? '…' : ''}` : '';
+  return `${controls.length} SOX control${controls.length === 1 ? '' : 's'}${high ? ` (${high} high audit risk)` : ''} — click for details${deviationLine}\n${controls.slice(0, 6).map((c) => `${c.controlId}  ${c.title}${c.deviations?.length ? '  ⚠' : ''}`).join('\n')}${controls.length > 6 ? '\n…' : ''}`;
 }
 
 // Sticky-note palette — classic Post-it colors, first is the default for a
@@ -210,7 +350,11 @@ function splitStoredApplicationNames(value: string): string[] {
 }
 
 const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
-  ({ xml, importTrigger, onXmlChange, onDirty, showProperties = true, allApplicationNames = [], allApplications = [], allBusinessFlowNames = [], allTaskNames = [], allActorNames = [], diagramName, diagramStatus, canEditDiagramName = false, isInFactory, isAlreadyLoaded, readOnly, onNavigateToFactory, onApplicationLinkClick, onTaskSelect, selectedCapability, isCapabilityAssigned = false, onCapabilityAssignToggle, onCapabilityViewInCatalog, onCapabilityBack, onAddToFactory, onDeleteAndReload, onSaveAsNew, onDiagramNameClick, onViewBusinessFlowComponent, onNewDiagram, onDiagramNameChange, diagramBreadcrumb, diagramId, currentUserId, sectionTitles, impactByDiagramId, impactByApplicationName, onImpactIndicatorClick, optimizerFindingByTaskName, onOptimizerFindingClick }, ref) => {
+  ({ xml, importTrigger, onXmlChange, onDirty, showProperties = true, allApplicationNames = [], allApplications = [], allBusinessFlowNames = [], allTaskNames = [], allActorNames = [], diagramName, diagramStatus, canEditDiagramName = false, isInFactory, isAlreadyLoaded, readOnly, onNavigateToFactory, onApplicationLinkClick, onTaskSelect, selectedCapability, isCapabilityAssigned = false, onCapabilityAssignToggle, onCapabilityViewInCatalog, onCapabilityBack, onAddToFactory, onDeleteAndReload, onSaveAsNew, onDiagramNameClick, onViewBusinessFlowComponent, onNewDiagram, onDiagramNameChange, diagramBreadcrumb, diagramId, currentUserId, sectionTitles, impactByDiagramId, impactByApplicationName, onImpactIndicatorClick, optimizerFindingByTaskName, onOptimizerFindingClick, showSoxControls, searchHighlightTerm }, ref) => {
+    const searchTerm = String(searchHighlightTerm || '').trim().toLowerCase();
+    const searchTermRef = useRef(searchTerm);
+    searchTermRef.current = searchTerm;
+    const renderSearchHighlightsRef = useRef<(m?: any) => void>(() => {});
     const canvasRef = useRef<HTMLDivElement>(null);
     const propertiesRef = useRef<HTMLDivElement>(null);
     const modelerRef = useRef<any>(null);
@@ -250,7 +394,7 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
     const onOptimizerFindingClickRef = useRef(onOptimizerFindingClick);
     onOptimizerFindingClickRef.current = onOptimizerFindingClick;
     const getTaskAppsRef = useRef<(bo: any) => string[]>(() => []);
-    const [selectedApp, setSelectedApp] = useState<{ name: string; taskName: string; taskId: string } | null>(null);
+    const [selectedApp, setSelectedApp] = useState<SelectedApplication | null>(null);
     const [selectedTask, setSelectedTask] = useState<{ name: string; id: string } | null>(null);
     const [selectedLane, setSelectedLane] = useState<{ name: string; id: string } | null>(null);
     const [diagramSelected, setDiagramSelected] = useState(false);
@@ -354,6 +498,70 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
       });
       return () => { cancelled = true; };
     }, [diagramId, sectionTitles]);
+
+    // ─── SOX controls ───────────────────────────────────────────────────
+    // Fetched once per diagram id on screen (like sticky notes above) and
+    // kept per diagram, so on a composite canvas each task's icon resolves
+    // against its own section's diagram (see soxDiagramIdForElement below).
+    const soxEnabled = showSoxControls ?? showProperties;
+    const soxEnabledRef = useRef(soxEnabled);
+    soxEnabledRef.current = soxEnabled;
+    const [soxByDiagram, setSoxByDiagram] = useState<Record<string, DiagramSoxControls>>({});
+    const soxByDiagramRef = useRef<Record<string, DiagramSoxControls>>({});
+    soxByDiagramRef.current = soxByDiagram;
+    const loadedSoxDiagramIdsRef = useRef<Set<string>>(new Set());
+    const renderSoxOverlaysRef = useRef<(m?: any) => void>(() => {});
+    const [soxPanel, setSoxPanel] = useState<{ heading: string; subheading: string; controls: SoxControl[] } | null>(null);
+    const [expandedSoxControlId, setExpandedSoxControlId] = useState<string | null>(null);
+    // Opens the control details in the right-hand column, expanding it (and
+    // widening it to a readable width) if the user had collapsed/narrowed it.
+    const openSoxPanel = (heading: string, subheading: string, controls: SoxControl[]) => {
+      const sorted = sortSoxControls(controls);
+      setSoxPanel({ heading, subheading, controls: sorted });
+      setExpandedSoxControlId(sorted.length === 1 || soxOpenDeviations(sorted.slice(0, 1)).length ? sorted[0].controlId : null);
+      setPropsCollapsed(false);
+      setPropsWidth((w) => Math.max(w, 400));
+    };
+    const openSoxPanelRef = useRef(openSoxPanel);
+    openSoxPanelRef.current = openSoxPanel;
+
+    // Clicking an application row: show its details in the right column,
+    // opening and widening the column if needed (same as openSoxPanel).
+    const selectApplication = (app: SelectedApplication) => {
+      setSoxPanel(null);
+      setSelectedApp(app);
+      setPropsCollapsed(false);
+      setPropsWidth((w) => Math.max(w, 340));
+    };
+    const selectApplicationRef = useRef(selectApplication);
+    selectApplicationRef.current = selectApplication;
+
+    useEffect(() => {
+      if (!soxEnabled) return;
+      const ids = sectionTitles?.length
+        ? Array.from(new Set(sectionTitles.map((section) => section.diagramId).filter((id): id is string => Boolean(id))))
+        : (diagramId ? [diagramId] : []);
+      const toLoad = ids.filter((id) => !loadedSoxDiagramIdsRef.current.has(id));
+      if (!toLoad.length) return;
+      toLoad.forEach((id) => loadedSoxDiagramIdsRef.current.add(id));
+      let cancelled = false;
+      Promise.all(toLoad.map((id) => getDiagramSoxControls(id).catch(() => null))).then((results) => {
+        if (cancelled) return;
+        setSoxByDiagram((current) => {
+          const next = { ...current };
+          toLoad.forEach((id, index) => { if (results[index]) next[id] = results[index] as DiagramSoxControls; });
+          return next;
+        });
+      });
+      return () => {
+        cancelled = true;
+        // Allow a retry if this effect is torn down before the fetch lands.
+        toLoad.forEach((id) => { if (!soxByDiagramRef.current[id]) loadedSoxDiagramIdsRef.current.delete(id); });
+      };
+    }, [diagramId, sectionTitles, soxEnabled]);
+
+    // Close the details panel when the canvas switches to a different diagram.
+    useEffect(() => { setSoxPanel(null); }, [diagramId]);
 
     // Recompute note screen positions whenever the note set itself changes
     // (loaded, added, deleted) — pan/zoom/import changes are handled by the
@@ -738,6 +946,8 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
         renderAppOverlaysRef.current();
         renderImpactOverlaysRef.current();
         renderOptimizerOverlaysRef.current();
+        renderSoxOverlaysRef.current();
+        renderSearchHighlightsRef.current();
       });
 
       // Keep the title banner(s) pinned to their diagram-space anchor as the
@@ -768,6 +978,25 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
           .filter(Boolean);
       }
       getTaskAppsRef.current = getTaskApps;
+
+      // SOX: which diagram a canvas element belongs to. Composite sections
+      // namespace element ids as `${prefix}_${id}` (see diagramComposite.ts);
+      // the first section is unprefixed.
+      function soxDiagramIdForElement(elId: string): string | null {
+        const sections = sectionTitlesRef.current;
+        if (sections?.length) {
+          const prefixed = sections
+            .filter((section) => section.prefix && elId.startsWith(`${section.prefix}_`))
+            .sort((a, b) => b.prefix.length - a.prefix.length)[0];
+          return (prefixed || sections.find((section) => !section.prefix))?.diagramId || null;
+        }
+        return diagramIdRef.current || null;
+      }
+      function soxForElement(el: any): DiagramSoxControls | null {
+        if (!soxEnabledRef.current) return null;
+        const id = soxDiagramIdForElement(el.id);
+        return id ? soxByDiagramRef.current[id] || null : null;
+      }
 
       /** Write app names into a task's extensionElements (mutates businessObject) */
       function setTaskApps(bo: any, appNames: string[], m: any) {
@@ -917,7 +1146,21 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
                 onImpactIndicatorClickRef.current(appIssues, { elementType: 'task', elementName: displayName });
                 return;
               }
-              setSelectedApp({ name: appName, taskName: el.businessObject.name || el.id, taskId: el.id });
+              // Every task on this canvas that uses the same application.
+              const appKey = normalizeApplicationLookupValue(appName);
+              const usedByTasks = Array.from(new Set<string>(
+                elementRegistry
+                  .filter((other: any) => isActivityType(other.businessObject?.$type))
+                  .filter((other: any) => getTaskApps(other.businessObject).some((name) => normalizeApplicationLookupValue(name) === appKey))
+                  .map((other: any) => String(other.businessObject?.name || other.id)),
+              ));
+              selectApplicationRef.current({
+                name: appName,
+                taskName: el.businessObject.name || el.id,
+                taskId: el.id,
+                usedByTasks,
+                soxControls: appSox,
+              });
             });
             row.addEventListener('contextmenu', (e) => {
               e.preventDefault();
@@ -928,10 +1171,28 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
             icon.innerHTML = COMPUTER_ICON;
             icon.style.cssText = `display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;color:${isValid ? '#0284c7' : DARK_ORANGE};flex-shrink:0;`;
             const label = document.createElement('span');
-            label.textContent = displayName;
+            appendSearchHighlightedText(label, displayName, searchTermRef.current);
             label.style.cssText = `font-size:9px;color:${isValid ? '#0284c7' : DARK_ORANGE};line-height:1.1;overflow:hidden;text-overflow:ellipsis;max-width:120px;`;
             row.appendChild(icon);
             row.appendChild(label);
+            // SOX: application-level IT general controls for this app.
+            const appSox = soxForElement(el)?.byApplicationName[normalizeImpactName(appName)] || [];
+            if (appSox.length) {
+              const shield = document.createElement('span');
+              shield.innerHTML = SOX_SHIELD_SVG(11, SOX_COLOR);
+              shield.title = soxSummaryTitle(appSox);
+              shield.style.cssText = `display:inline-flex;align-items:center;gap:1px;padding:0 3px 0 2px;height:14px;border-radius:7px;background:${SOX_BG};border:1px solid ${appSox.some((c) => c.auditRisk === 'High') ? '#ff7875' : SOX_BORDER};color:${SOX_COLOR};font-size:9px;font-weight:700;line-height:1;flex-shrink:0;cursor:pointer;`;
+              const shieldCount = document.createElement('span');
+              shieldCount.textContent = String(appSox.length);
+              shield.appendChild(shieldCount);
+              const appDot = soxDeviationDotHtml(appSox, 12);
+              if (appDot) shield.appendChild(appDot);
+              shield.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openSoxPanelRef.current(displayName, 'Application · IT general controls', appSox);
+              });
+              row.appendChild(shield);
+            }
             if (hasAppImpact) {
               const countBadge = document.createElement('span');
               countBadge.textContent = String(appIssues.length);
@@ -1514,6 +1775,71 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
       }
       renderOptimizerOverlaysRef.current = () => renderOptimizerOverlays(modeler);
 
+      // Diagrams tab type-ahead: mark every task whose name contains the term
+      // (see the .search-hit rule in index.css). Application rows highlight
+      // their own matching text in renderAppOverlays.
+      function renderSearchHighlights(m: any) {
+        try {
+          const canvas = m.get('canvas');
+          const term = searchTermRef.current;
+          m.get('elementRegistry')
+            .filter((el: any) => isActivityType(el.businessObject?.$type))
+            .forEach((el: any) => {
+              canvas.removeMarker(el.id, SEARCH_HIT_MARKER);
+              if (textMatchesSearch(el.businessObject?.name, term)) canvas.addMarker(el.id, SEARCH_HIT_MARKER);
+            });
+        } catch {
+          // best-effort
+        }
+      }
+      renderSearchHighlightsRef.current = () => renderSearchHighlights(modeler);
+
+      // SOX: shield + count on every task with task-level (business process,
+      // application, interface) controls. Matched by task name within the
+      // task's own diagram — see the for-diagram route. A red ring marks a
+      // task carrying at least one high-audit-risk control.
+      const SOX_OVERLAY_TYPE = 'sox-controls';
+      function renderSoxOverlays(m: any) {
+        try {
+          const overlays = m.get('overlays');
+          const elementRegistry = m.get('elementRegistry');
+          const tasks = elementRegistry.filter((el: any) => isActivityType(el.businessObject?.$type));
+          tasks.forEach((el: any) => overlays.remove({ element: el.id, type: SOX_OVERLAY_TYPE }));
+          if (!soxEnabledRef.current) return;
+
+          for (const el of tasks) {
+            const bo = el.businessObject;
+            const controls = soxForElement(el)?.byTaskName[normalizeImpactName(bo.name)] || [];
+            if (!controls.length) continue;
+            const hasHigh = controls.some((c) => c.auditRisk === 'High');
+            const badge = document.createElement('div');
+            badge.className = 'sox-control-badge';
+            badge.title = soxSummaryTitle(controls);
+            badge.innerHTML = SOX_SHIELD_SVG(12, '#fff');
+            const count = document.createElement('span');
+            count.textContent = String(controls.length);
+            badge.appendChild(count);
+            const taskDot = soxDeviationDotHtml(controls);
+            if (taskDot) badge.appendChild(taskDot);
+            badge.style.cssText = `
+              display:flex;align-items:center;gap:2px;height:20px;padding:0 6px 0 4px;border-radius:10px;
+              background:${SOX_COLOR};color:#fff;
+              font-size:11px;font-weight:700;font-family:"IBM Plex Sans",Arial,sans-serif;
+              border:2px solid ${hasHigh ? '#ff4d4f' : '#fff'};box-shadow:0 1px 3px rgba(0,0,0,0.35);cursor:pointer;
+            `;
+            badge.addEventListener('click', (e) => {
+              e.stopPropagation();
+              const flowName = controls[0]?.scope?.businessFlows?.[0]?.name;
+              openSoxPanelRef.current(bo.name || el.id, `Task${flowName ? ` · ${flowName}` : ''}`, controls);
+            });
+            overlays.add(el.id, SOX_OVERLAY_TYPE, { position: { top: -11, right: 16 }, html: badge });
+          }
+        } catch {
+          // best-effort
+        }
+      }
+      renderSoxOverlaysRef.current = () => renderSoxOverlays(modeler);
+
       // Store reference so XML-import effect can call it
       renderAppOverlaysRef.current = () => renderAppOverlays(modeler);
 
@@ -1521,6 +1847,7 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
       modeler.on('element.click', (event: any) => {
         onCapabilityBack?.();
         setSelectedApp(null);
+        setSoxPanel(null);
         setDiagramSelected(false);
         const el = event.element;
         const boType = el?.businessObject?.$type || '';
@@ -1766,6 +2093,8 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
         renderAppOverlaysRef.current();
         renderImpactOverlaysRef.current();
         renderOptimizerOverlaysRef.current();
+        renderSoxOverlaysRef.current();
+        renderSearchHighlightsRef.current();
         // Position the canvas-anchored title banner(s) for the freshly imported diagram
         computeTitleAnchor();
         updateTitleScreenPosition();
@@ -1825,6 +2154,21 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
       if (!modelerRef.current) return;
       renderOptimizerOverlaysRef.current();
     }, [optimizerFindingByTaskName]);
+
+    // Type-ahead text changed: refresh task markers and application-row text.
+    useEffect(() => {
+      if (!modelerRef.current) return;
+      renderSearchHighlightsRef.current();
+      renderAppOverlaysRef.current();
+    }, [searchTerm]);
+
+    // SOX controls arrive asynchronously after import — re-render the task
+    // shields and the application rows (which carry the app-level shield).
+    useEffect(() => {
+      if (!modelerRef.current) return;
+      renderSoxOverlaysRef.current();
+      renderAppOverlaysRef.current();
+    }, [soxByDiagram, soxEnabled]);
 
     // Re-validate task colors when task reference data changes
     useEffect(() => {
@@ -2589,6 +2933,269 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
       );
     }
 
+    // SOX: flow-level controls (e.g. the flow's management review control)
+    // have no single task to anchor to — badge the diagram's title banner,
+    // top-left (the Jira impact badge owns the top-right corner).
+    function renderDiagramSoxBadge(forDiagramId: string | null | undefined, elementName: string) {
+      if (!soxEnabled || !forDiagramId) return null;
+      const sox = soxByDiagram[forDiagramId];
+      const controls = sox?.diagramControls || [];
+      if (!controls.length) return null;
+      const allOnDiagram = [...new Map([
+        ...controls,
+        ...Object.values(sox.byTaskName).flat(),
+        ...Object.values(sox.byApplicationName).flat(),
+      ].map((c) => [c.controlId, c] as const)).values()];
+      const totalOnDiagram = allOnDiagram.length;
+      // Open deviations anywhere on the diagram — the title badge is the
+      // flow-wide summary, so clicking it lists the flow-level controls plus
+      // every control on the diagram that has a deviation to address.
+      const withDeviations = allOnDiagram.filter((c) => soxOpenDeviations([c]).length > 0);
+      const openDeviations = soxOpenDeviations(allOnDiagram);
+      const worstDeviation = soxWorstSeverity(openDeviations);
+      const hasHigh = controls.some((c) => c.auditRisk === 'High');
+      return (
+        <div
+          title={`${soxSummaryTitle(controls)}\n\n${totalOnDiagram} SOX controls attached across this flow's tasks and applications${openDeviations.length ? `\n⚠ ${openDeviations.length} open deviation(s) on ${withDeviations.length} control(s) — click to review` : ''}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            const listed = [...new Map([...controls, ...withDeviations].map((c) => [c.controlId, c] as const)).values()];
+            openSoxPanel(elementName, `Business flow · ${totalOnDiagram} controls on this diagram${openDeviations.length ? ` · ${withDeviations.length} with open deviations` : ''}`, listed);
+          }}
+          style={{
+            position: 'absolute',
+            top: -11,
+            left: -11,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 3,
+            height: 22,
+            padding: '0 7px 0 5px',
+            borderRadius: 11,
+            background: SOX_COLOR,
+            color: '#fff',
+            fontSize: 11,
+            fontWeight: 700,
+            border: `2px solid ${hasHigh ? '#ff4d4f' : '#fff'}`,
+            boxShadow: '0 1px 3px rgba(0,0,0,0.35)',
+            cursor: 'pointer',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          <span style={{ display: 'inline-flex' }} dangerouslySetInnerHTML={{ __html: SOX_SHIELD_SVG(12, '#fff') }} />
+          SOX {totalOnDiagram}
+          {worstDeviation && (
+            <span
+              style={{ marginLeft: 3, padding: '0 5px', height: 16, borderRadius: 8, display: 'inline-flex', alignItems: 'center', background: SOX_DEVIATION_DOT[worstDeviation], color: worstDeviation === 'Low' ? '#614700' : '#fff', fontSize: 10, fontWeight: 800, boxShadow: '0 0 0 1.5px #fff' }}
+            >
+              ⚠ {openDeviations.length}
+            </span>
+          )}
+        </div>
+      );
+    }
+
+    // Related-control chip: expand it if already listed, otherwise add it to
+    // the panel — from controls already loaded for this canvas when possible,
+    // else fetched by id (e.g. an ITGC for an app on another diagram).
+    async function openRelatedSoxControl(controlId: string) {
+      if (!soxPanel) return;
+      if (soxPanel.controls.some((c) => c.controlId === controlId)) {
+        setExpandedSoxControlId(controlId);
+        return;
+      }
+      const loaded = Object.values(soxByDiagram).flatMap((sox) => [
+        ...sox.diagramControls,
+        ...Object.values(sox.byTaskName).flat(),
+        ...Object.values(sox.byApplicationName).flat(),
+      ]).find((c) => c.controlId === controlId);
+      const control = loaded || await getSoxControl(controlId).catch(() => null);
+      if (!control) return;
+      setSoxPanel((current) => (current ? { ...current, controls: [...current.controls, control] } : current));
+      setExpandedSoxControlId(controlId);
+    }
+
+    // One deviation (soxdeviations) inside its control's card: where it was
+    // found (audit / source, auditor, date), what it affects, and remediation.
+    function renderSoxDeviation(d: SoxDeviation) {
+      const sev = SOX_RISK_STYLE[d.severity] || SOX_RISK_STYLE.Medium;
+      const fmt = (v?: string) => (v ? dayjs(v).format('MMM D, YYYY') : '—');
+      const overdue = Boolean(d.remediation?.targetDate) && d.remediation.status !== 'Closed' && dayjs(d.remediation.targetDate).isBefore(dayjs());
+      const row = (label: string, value: ReactNode) => (value ? <tr><td className="text-gray-500 pr-2 align-top whitespace-nowrap py-0.5">{label}</td><td className="py-0.5">{value}</td></tr> : null);
+      const a = d.affected || ({} as SoxDeviation['affected']);
+      return (
+        <div key={d.deviationId} className="rounded-md border p-2" style={{ borderColor: sev.border, background: sev.bg }}>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="font-mono text-[11px] font-bold" style={{ color: sev.fg }}>{d.deviationId}</span>
+            <span className="px-1.5 rounded text-[10px] font-bold" style={{ background: SOX_DEVIATION_DOT[d.severity], color: d.severity === 'Low' ? '#614700' : '#fff' }}>{d.severity}</span>
+            <span className="px-1.5 rounded text-[10px] bg-white border border-gray-200 text-gray-700">{d.category}</span>
+            {d.remediation?.repeatFinding && <span className="px-1.5 rounded text-[10px] bg-white border border-red-200 text-red-700">Repeat</span>}
+          </div>
+          <div className="text-xs font-semibold text-gray-800 mt-1 leading-4">{d.title}</div>
+          <div className="text-[10px] text-slate-600 mt-0.5">{d.deficiencyClassification} · {d.deficiencyType}</div>
+          <p className="text-xs text-gray-700 leading-5 mt-1.5 mb-0">{d.condition}</p>
+          <table className="w-full text-[11px] mt-1.5"><tbody>
+            {row('Audit', d.audit?.auditName)}
+            {row('Source', `${d.source}${d.audit?.auditorOrganization ? ` — ${d.audit.auditorOrganization}` : ''}`)}
+            {row('Auditor', d.audit?.auditor)}
+            {row('Date found', `${fmt(d.audit?.auditDate)} (${d.audit?.auditId})`)}
+            {row('Period', d.audit?.periodStart ? `${fmt(d.audit.periodStart)} – ${fmt(d.audit.periodEnd)}` : null)}
+            {d.testing?.sampleSize ? row('Testing', `${d.testing.exceptions} exception(s) in ${d.testing.sampleSize} sampled · ${d.testing.population}`) : row('Testing', d.testing?.population)}
+            {row('Process', a.process)}
+            {row('Flow', a.businessFlows?.map((x) => x.name).join(', '))}
+            {row('Task', a.tasks?.map((t) => `${t.taskName} (${t.actor})`).join(', '))}
+            {row('Application', a.applications?.map((x) => `${x.name}${x.appId ? ` (${x.appId})` : ''}`).join(', '))}
+            {row('Database', a.databases?.map((x) => `${x.name}${x.version && !String(x.name).includes(String(x.version)) ? ` ${x.version}` : ''} [${x.softwareId}]`).join(', '))}
+            {row('Server', a.servers?.map((x) => `${x.name || x.serverId}${x.patchingStatus ? ` (${x.patchingStatus})` : ''}`).join(', '))}
+            {row('API', a.apis?.map((x) => `${x.apiId} ${x.method} ${x.endpoint}`).join(', '))}
+          </tbody></table>
+          <details className="mt-1.5 text-[11px] text-gray-700">
+            <summary className="cursor-pointer text-slate-600">Criteria, cause, effect &amp; recommendation</summary>
+            <div className="mt-1 leading-5">
+              <div><span className="text-gray-500">Criteria: </span>{d.criteria}</div>
+              <div className="mt-1"><span className="text-gray-500">Cause: </span>{d.cause}</div>
+              <div className="mt-1"><span className="text-gray-500">Effect: </span>{d.effect}</div>
+              <div className="mt-1"><span className="text-gray-500">Recommendation: </span>{d.recommendation}</div>
+              <div className="mt-1"><span className="text-gray-500">Management response: </span>{d.managementResponse}</div>
+            </div>
+          </details>
+          <div className="mt-1.5 pt-1.5 border-t text-[11px] flex flex-wrap gap-x-3 gap-y-0.5" style={{ borderColor: sev.border }}>
+            <span><span className="text-gray-500">Status: </span><b>{d.remediation?.status}</b></span>
+            <span><span className="text-gray-500">Owner: </span>{d.remediation?.owner}</span>
+            <span style={{ color: overdue ? '#cf1322' : undefined }}><span className="text-gray-500">Target: </span>{fmt(d.remediation?.targetDate)}{overdue ? ' (overdue)' : ''}</span>
+          </div>
+        </div>
+      );
+    }
+
+    function renderSoxControlCard(control: SoxControl) {
+      const expanded = expandedSoxControlId === control.controlId;
+      const risk = SOX_RISK_STYLE[control.auditRisk] || SOX_RISK_STYLE.Medium;
+      const section = (label: string, body: ReactNode) => (
+        <div className="mt-2.5">
+          <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">{label}</div>
+          <div className="text-xs text-gray-700 leading-5">{body}</div>
+        </div>
+      );
+      const chips = (items: string[], color = '#475569', bg = '#f1f5f9') => (
+        <div className="flex flex-wrap gap-1">
+          {items.map((item) => (
+            <span key={item} className="px-1.5 py-0.5 rounded text-[10px]" style={{ color, background: bg }}>{item}</span>
+          ))}
+        </div>
+      );
+      const scope = control.scope;
+      return (
+        <div key={control.controlId} id={`sox-card-${control.controlId}`} className="border rounded-lg mb-2 bg-white" style={{ borderColor: expanded ? SOX_BORDER : '#e5e7eb' }}>
+          <button
+            className="w-full text-left px-3 py-2 hover:bg-purple-50/60 rounded-lg"
+            onClick={() => setExpandedSoxControlId(expanded ? null : control.controlId)}
+          >
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="font-mono text-xs font-bold" style={{ color: SOX_COLOR }}>{control.controlId}</span>
+              <span className="px-1.5 rounded text-[10px] font-semibold border" style={{ color: risk.fg, background: risk.bg, borderColor: risk.border }}>{control.auditRisk} audit risk</span>
+              {control.keyControl && <span className="px-1.5 rounded text-[10px] font-semibold border" style={{ color: SOX_COLOR, background: SOX_BG, borderColor: SOX_BORDER }}>Key</span>}
+              {(() => {
+                const open = soxOpenDeviations([control]);
+                const worst = soxWorstSeverity(open);
+                if (!worst) return null;
+                return <span className="px-1.5 rounded text-[10px] font-bold" style={{ background: SOX_DEVIATION_DOT[worst], color: worst === 'Low' ? '#614700' : '#fff' }}>⚠ {open.length} {worst} deviation{open.length === 1 ? '' : 's'}</span>;
+              })()}
+              <span className="ml-auto text-gray-400 text-[10px]">{expanded ? '▲' : '▼'}</span>
+            </div>
+            <div className="text-xs font-semibold text-gray-800 mt-1 leading-4">{control.title}</div>
+            <div className="text-[10px] text-slate-500 mt-0.5">
+              {[control.category, control.itgcDomain || control.processCycleName, control.controlNature, control.controlType, control.frequency].filter(Boolean).join(' · ')}
+            </div>
+          </button>
+          {expanded && (
+            <div className="px-3 pb-3 border-t border-gray-100">
+              {(control.deviations?.length || 0) > 0 && section(`Deviations (${control.deviations!.length})`, (
+                <div className="flex flex-col gap-2">{control.deviations!.map((d) => renderSoxDeviation(d))}</div>
+              ))}
+              {section('Control activity', control.description)}
+              {section('Control objective', control.controlObjective)}
+              {section('Risk addressed (what could go wrong)', control.riskStatement)}
+              {control.assertions?.length > 0 && section('Assertions', chips(control.assertions, '#1d39c4', '#f0f5ff'))}
+              {control.financialStatementAccounts?.length > 0 && section('Financial statement accounts', chips(control.financialStatementAccounts))}
+              {section('Ownership', (
+                <table className="w-full"><tbody>
+                  <tr><td className="text-gray-500 pr-2 align-top whitespace-nowrap">Control owner</td><td>{control.controlOwner || '—'}</td></tr>
+                  <tr><td className="text-gray-500 pr-2 align-top whitespace-nowrap">Performed by</td><td>{control.performedBy || '—'}</td></tr>
+                </tbody></table>
+              ))}
+              {control.observations?.length > 0 && section('Audit observations', (
+                <ul className="m-0 pl-4 rounded border p-2 list-disc" style={{ background: '#fffbe6', borderColor: '#ffe58f' }}>
+                  {control.observations.map((obs, i) => <li key={i} className="mb-1">{obs}</li>)}
+                </ul>
+              ))}
+              {section('Why auditors target it', control.auditRiskRationale)}
+              {section('Evidence', control.evidence)}
+              {section('Audit test procedure', control.testingProcedure)}
+              {section('Sample size', control.sampleSize)}
+              {(scope.applications.length > 0 || scope.tasks.length > 0 || scope.apis.length > 0 || scope.servers.length > 0 || scope.databases.length > 0) && section('Scope', (
+                <div className="flex flex-col gap-1.5">
+                  {scope.applications.length > 0 && (
+                    <div><span className="text-gray-500">Applications: </span>{scope.applications.map((a) => `${a.name}${a.appId ? ` (${a.appId})` : ' (not in catalog)'}`).join(', ')}</div>
+                  )}
+                  {scope.businessFlows.length > 0 && scope.level !== 'application' && (
+                    <div><span className="text-gray-500">Business flow: </span>{scope.businessFlows.map((f) => f.name).join(', ')}</div>
+                  )}
+                  {scope.tasks.length > 0 && (
+                    <div><span className="text-gray-500">Task: </span>{scope.tasks.map((t) => `${t.taskName} (${t.actor})`).join(', ')}</div>
+                  )}
+                  {scope.apis.length > 0 && (
+                    <div>
+                      <div className="text-gray-500">APIs ({scope.apis.length}):</div>
+                      <div className="max-h-28 overflow-y-auto">
+                        {scope.apis.map((api) => (
+                          <div key={api.apiId} className="font-mono text-[10px] text-gray-600 truncate" title={api.name}>{api.apiId} {api.method} {api.endpoint}</div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {scope.databases.length > 0 && (
+                    <div>
+                      <div className="text-gray-500">Databases ({scope.databases.length}):</div>
+                      <div className="max-h-24 overflow-y-auto">
+                        {scope.databases.map((db) => (
+                          <div key={db.softwareId} className="text-[10px] text-gray-600">{db.softwareId} · {db.name} {db.version} {db.serverId ? `on ${db.serverId}` : ''}</div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {scope.servers.length > 0 && (
+                    <div>
+                      <div className="text-gray-500">Servers ({scope.servers.length}):</div>
+                      <div className="max-h-32 overflow-y-auto">
+                        {scope.servers.map((srv) => (
+                          <div key={srv.serverId} className="text-[10px] text-gray-600 flex gap-1">
+                            <span className="truncate">{srv.name || srv.serverId}</span>
+                            <span className="text-gray-400 truncate">{srv.role}</span>
+                            <span className="ml-auto whitespace-nowrap" style={{ color: srv.patchingStatus === 'Critical' ? '#cf1322' : srv.patchingStatus === 'Behind' ? '#ad6800' : '#389e0d' }}>{srv.patchingStatus}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+              {control.relatedControlIds?.length > 0 && section('Related controls', (
+                <div className="flex flex-wrap gap-1">
+                  {control.relatedControlIds.map((id) => (
+                    <button key={id} className="px-1.5 py-0.5 rounded font-mono text-[10px] border hover:bg-purple-100" style={{ color: SOX_COLOR, background: SOX_BG, borderColor: SOX_BORDER }} onClick={() => openRelatedSoxControl(id)}>
+                      {id}
+                    </button>
+                  ))}
+                </div>
+              ))}
+              {control.frameworkRefs?.length > 0 && section('Framework references', chips(control.frameworkRefs))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
     return (
       <div
         className="flex h-full w-full overflow-hidden relative"
@@ -2640,13 +3247,14 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
                   : { boxShadow: '0 1px 2px rgba(0,0,0,0.08)' }),
               }}
             >
-              <span className="text-xl font-bold" style={{ color: diagramNameColor, textAlign: 'left' }}>{diagramName}</span>
+              <span className="text-xl font-bold" style={{ color: diagramNameColor, textAlign: 'left' }}>{highlightSearchText(diagramName, searchTerm)}</span>
               {diagramBreadcrumb && (
                 <div style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 400, letterSpacing: '0.02em', marginTop: 2, textAlign: 'left', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 480 }}>
-                  {diagramBreadcrumb}
+                  {highlightSearchText(diagramBreadcrumb, searchTerm)}
                 </div>
               )}
               {renderDiagramImpactBadge(diagramId, diagramName)}
+              {renderDiagramSoxBadge(diagramId, diagramName)}
             </div>
           </div>
         )}
@@ -2717,13 +3325,14 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
                   boxShadow: isNoteTarget ? '0 0 0 3px rgba(22,119,255,0.18)' : '0 1px 2px rgba(0,0,0,0.08)',
                 }}
               >
-                <span className="text-xl font-bold" style={{ color: '#000000', textAlign: 'left' }}>{pos.name}</span>
+                <span className="text-xl font-bold" style={{ color: '#000000', textAlign: 'left' }}>{highlightSearchText(pos.name, searchTerm)}</span>
                 {pos.breadcrumb && (
                   <div style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 400, letterSpacing: '0.02em', marginTop: 2, textAlign: 'left', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 480 }}>
-                    {pos.breadcrumb}
+                    {highlightSearchText(pos.breadcrumb, searchTerm)}
                   </div>
                 )}
                 {renderDiagramImpactBadge(sectionDiagramId, pos.name)}
+                {renderDiagramSoxBadge(sectionDiagramId, pos.name)}
               </div>
             </div>
           );
@@ -3016,9 +3625,80 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
                   <div className="font-semibold text-sm" style={{ color: isSelectedAppValid ? '#1677ff' : '#cc7000' }}>{getAppDisplayName(selectedApp.name)}</div>
                 </div>
               </div>
-              <div className="border-t border-gray-100 pt-3">
-                <table className="w-full text-xs"><tbody><tr><td className="text-gray-500 py-1 pr-2 align-top">Status</td><td className="py-1"><span className={`px-1.5 py-0.5 rounded text-xs ${isSelectedAppValid ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-orange-50 text-orange-700 border border-orange-300'}`}>{isSelectedAppValid ? 'Valid' : 'Invalid'}</span></td></tr><tr><td className="text-gray-500 py-1 pr-2 align-top">Task</td><td className="py-1 font-medium">{selectedApp.taskName}</td></tr><tr><td className="text-gray-500 py-1 pr-2 align-top">Task ID</td><td className="py-1 text-gray-600 break-all">{selectedApp.taskId}</td></tr></tbody></table>
-              </div>
+              {(() => {
+                const meta = getAppMeta(selectedApp.name);
+                const description = meta?.shortDescription || meta?.businessPurpose || meta?.applPurpose;
+                const detailRows = meta ? APPLICATION_DETAIL_FIELDS.filter(({ key }) => String(meta[key] ?? '').trim()) : [];
+                const flags = meta ? APPLICATION_FLAG_FIELDS.filter(({ key }) => isYesValue(meta[key])) : [];
+                const usedByTasks = selectedApp.usedByTasks?.length ? selectedApp.usedByTasks : [selectedApp.taskName];
+                const sox = selectedApp.soxControls || [];
+                const openSox = soxOpenDeviations(sox);
+                return (
+                  <>
+                    {meta?.name && meta.name !== getAppDisplayName(selectedApp.name) ? (
+                      <div className="text-xs text-slate-600 -mt-2 mb-3">{meta.name}</div>
+                    ) : null}
+                    {description ? (
+                      <p className="text-xs text-gray-700 leading-5 mb-3 mt-0">{description}</p>
+                    ) : null}
+                    <div className="border-t border-gray-100 pt-3">
+                      <table className="w-full text-xs"><tbody>
+                        <tr><td className="text-gray-500 py-1 pr-2 align-top">Status</td><td className="py-1"><span className={`px-1.5 py-0.5 rounded text-xs ${isSelectedAppValid ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-orange-50 text-orange-700 border border-orange-300'}`}>{isSelectedAppValid ? 'Valid' : 'Not in application catalog'}</span></td></tr>
+                        {detailRows.map(({ key, label }) => (
+                          <tr key={key}><td className="text-gray-500 py-1 pr-2 align-top whitespace-nowrap">{label}</td><td className="py-1 text-gray-800 break-words">{String(meta?.[key] ?? '')}</td></tr>
+                        ))}
+                      </tbody></table>
+                    </div>
+                    {flags.length ? (
+                      <div className="border-t border-gray-100 mt-3 pt-3">
+                        <div className="text-xs text-gray-500 uppercase tracking-wide mb-1.5">Risk flags</div>
+                        <div className="flex flex-wrap gap-1">
+                          {flags.map(({ key, label }) => (
+                            <span key={key} className="px-1.5 py-0.5 rounded text-[11px] bg-amber-50 text-amber-800 border border-amber-200">{label}</span>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                    <div className="border-t border-gray-100 mt-3 pt-3">
+                      <div className="text-xs text-gray-500 uppercase tracking-wide mb-1.5">Used by {usedByTasks.length} task{usedByTasks.length === 1 ? '' : 's'} in this diagram</div>
+                      <ul className="m-0 pl-4 text-xs text-gray-800">
+                        {usedByTasks.map((taskName) => (
+                          <li key={taskName} className={`py-0.5 ${taskName === selectedApp.taskName ? 'font-semibold' : ''}`}>{taskName}</li>
+                        ))}
+                      </ul>
+                    </div>
+                    {sox.length ? (
+                      <div className="border-t border-gray-100 mt-3 pt-3">
+                        <button
+                          className="w-full text-xs py-1.5 px-3 rounded border text-left flex items-center gap-1.5"
+                          style={{ color: SOX_COLOR, background: SOX_BG, borderColor: SOX_BORDER }}
+                          onClick={() => openSoxPanel(getAppDisplayName(selectedApp.name), 'Application · IT general controls', sox)}
+                        >
+                          <span style={{ display: 'inline-flex' }} dangerouslySetInnerHTML={{ __html: SOX_SHIELD_SVG(12, SOX_COLOR) }} />
+                          {sox.length} SOX control{sox.length === 1 ? '' : 's'}
+                          {openSox.length ? <span className="ml-auto font-semibold" style={{ color: SOX_DEVIATION_DOT[soxWorstSeverity(openSox) || 'Low'] }}>⚠ {openSox.length} open</span> : null}
+                        </button>
+                      </div>
+                    ) : null}
+                    {linkedComponentTypes.length ? (
+                      <div className="border-t border-gray-100 mt-3 pt-3">
+                        <div className="text-xs text-gray-500 uppercase tracking-wide mb-1.5">Linked system components</div>
+                        <div className="flex flex-wrap gap-1">
+                          {linkedComponentTypes.map((componentType) => (
+                            <button
+                              key={componentType}
+                              className="px-2 py-0.5 rounded border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-700 text-[11px]"
+                              onClick={() => { void loadLinkedRecordsForApp(componentType, selectedApp.name, selectedApp.taskId, meta); }}
+                            >
+                              {componentType}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                  </>
+                );
+              })()}
               <div className="border-t border-gray-100 mt-3 pt-3 flex flex-col gap-1.5">
                 <button className="properties-panel-btn-primary is-valid w-full text-xs py-1.5 px-3 text-left flex items-center gap-1.5" onClick={async () => { const exactMatch = getAppMeta(selectedApp.name); if (exactMatch) { onApplicationLinkClick?.(getPreferredApplicationDisplayName(exactMatch, selectedApp.name), exactMatch.correlationId || null); return; } const resolvedApp = await ensureResolvedDiagramApplication(selectedApp.name, selectedApp.taskId); if (resolvedApp) { onApplicationLinkClick?.(getPreferredApplicationDisplayName(resolvedApp, selectedApp.name), resolvedApp.correlationId || null); return; } onNavigateToFactory?.('applications', selectedApp.name, 'add'); }} title={isSelectedAppValid ? 'Open in Application Component' : 'Add to Application Component'}>
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
@@ -3026,6 +3706,50 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
                 </button>
               </div>
               <button className="mt-4 w-full text-xs py-1.5 px-3 rounded-lg border border-blue-100 hover:bg-blue-50 text-slate-600" onClick={() => setSelectedApp(null)}>
+                ← Back to Properties
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ─── SOX Control details (right column) ─── Opened from a shield
+            icon on a task, application row or title banner; sits above
+            whichever properties card is showing and expands/widens the
+            column (see openSoxPanel). */}
+        {soxPanel && (
+          <div
+            className="properties-panel-summary-card absolute right-0 top-0 bottom-0 z-40 overflow-y-auto border-l border-gray-200 bg-slate-50"
+            style={{ width: Math.max(propsWidth, 400), background: '#f8fafc', fontFamily: '"IBM Plex Sans", Arial, sans-serif', boxShadow: '-4px 0 12px rgba(0,0,0,0.08)' }}
+          >
+            <div className="p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <div className="w-8 h-8 rounded flex items-center justify-center flex-shrink-0" style={{ background: SOX_BG, border: `1px solid ${SOX_BORDER}` }}>
+                  <span style={{ display: 'inline-flex' }} dangerouslySetInnerHTML={{ __html: SOX_SHIELD_SVG(18, SOX_COLOR) }} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs uppercase tracking-wide text-slate-500">SOX Controls</div>
+                  <div className="font-semibold text-sm truncate" style={{ color: SOX_COLOR }} title={soxPanel.heading}>{soxPanel.heading}</div>
+                  <div className="text-[11px] text-slate-500 truncate" title={soxPanel.subheading}>{soxPanel.subheading}</div>
+                </div>
+                <button className="text-gray-400 hover:text-gray-700 text-lg leading-none px-1" onClick={() => setSoxPanel(null)} title="Close">×</button>
+              </div>
+              <div className="flex flex-wrap gap-1.5 mb-3 text-[11px]">
+                <span className="px-2 py-0.5 rounded-full bg-white border border-gray-200 text-gray-700">{soxPanel.controls.length} control{soxPanel.controls.length === 1 ? '' : 's'}</span>
+                {(['High', 'Medium', 'Low'] as const).map((level) => {
+                  const n = soxPanel.controls.filter((c) => c.auditRisk === level).length;
+                  if (!n) return null;
+                  const style = SOX_RISK_STYLE[level];
+                  return <span key={level} className="px-2 py-0.5 rounded-full border" style={{ color: style.fg, background: style.bg, borderColor: style.border }}>{n} {level}</span>;
+                })}
+                <span className="px-2 py-0.5 rounded-full border" style={{ color: SOX_COLOR, background: SOX_BG, borderColor: SOX_BORDER }}>{soxPanel.controls.filter((c) => c.keyControl).length} key</span>
+                {(() => {
+                  const open = soxOpenDeviations(soxPanel.controls);
+                  const worst = soxWorstSeverity(open);
+                  return worst ? <span className="px-2 py-0.5 rounded-full font-semibold" style={{ background: SOX_DEVIATION_DOT[worst], color: worst === 'Low' ? '#614700' : '#fff' }}>⚠ {open.length} open deviation{open.length === 1 ? '' : 's'}</span> : null;
+                })()}
+              </div>
+              {soxPanel.controls.map((control) => renderSoxControlCard(control))}
+              <button className="mt-2 w-full text-xs py-1.5 px-3 rounded-lg border border-blue-100 hover:bg-blue-50 text-slate-600 bg-white" onClick={() => setSoxPanel(null)}>
                 ← Back to Properties
               </button>
             </div>
