@@ -215,6 +215,8 @@ export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggl
     suppressNextSearchChangeRef.current = true;
     setSelectedFrameworks(requestedFrameworks);
     setFilters(externalFilterRequest.filters || {});
+    // Leftover type-ahead text would silently narrow the requested results.
+    setQuickSearch('');
   }, [externalFilterRequest, frameworks]);
 
   const facetDefinitions = useMemo(() => {

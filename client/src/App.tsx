@@ -53,7 +53,9 @@ import {
   FundOutlined,
   FireOutlined,
   ExperimentOutlined,
+  HomeOutlined,
 } from '@ant-design/icons';
+import LandingPage from './components/LandingPage';
 import BpmnEditor, { EMPTY_DIAGRAM, type BpmnEditorHandle } from './components/BpmnEditor';
 import { composeStackedDiagramXml, type CompositeDiagramItem, type CompositeSectionTitle } from './utils/diagramComposite';
 import ProcessChangeRadar from './components/ProcessChangeRadar';
@@ -77,7 +79,7 @@ import CapabilitiesFactory from './components/CapabilitiesFactory';
 import ActorFactory from './components/ActorFactory';
 import BpmnFactory from './components/BpmnFactory';
 import Dashboard from './components/Dashboard';
-import ValueStreamsMatrix, { type DomainSelection, type SubdomainSelection, type ValueStreamCapabilitySelection, type ValueStreamFlowSelection, type ValueStreamRollupSelection } from './components/ValueStreamsMatrix';
+import ValueStreamsMatrix, { type BusinessFlowSelection, type DomainSelection, type SubdomainSelection, type ValueStreamCapabilitySelection, type ValueStreamFlowSelection, type ValueStreamRollupSelection } from './components/ValueStreamsMatrix';
 import ReportsPanel from './components/ReportsPanel';
 import Login from './components/Login';
 import AdminPanel from './components/AdminPanel';
@@ -499,7 +501,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   );
 
   // Tab state — outer app tabs, analytics/data subtabs, and factory tabs scoped per neighborhood
-  const [activeOuterTab, setActiveOuterTab] = useState<string>('analytics');   // outer: analytics | valueStreams | bpmn | data | neighborhoods
+  const [activeOuterTab, setActiveOuterTab] = useState<string>('landing');   // outer: analytics | valueStreams | bpmn | data | neighborhoods
   // Set when the Dashboard tab's Change Exposure Board sends the user to
   // Process Change Radar pre-filtered to one domain (see
   // handleDashboardDomainSelect) — read once by ProcessChangeRadar on mount.
@@ -508,6 +510,8 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   // tile is clicked (see handleHeatMapFlowSelect). Takes priority over
   // radarDomainFocus in ProcessChangeRadar when both are set.
   const [radarDiagramFocus, setRadarDiagramFocus] = useState<string | null>(null);
+  // Which sub-tab of the "Process Changes" outer tab is showing.
+  const [processChangeSubTab, setProcessChangeSubTab] = useState<'heatMap' | 'radar'>('heatMap');
   const [activeAnalyticsTab, setActiveAnalyticsTab] = useState<string>('dashboard'); // inner Analytics sub-tabs
   const [activeAnalyticsModel, setActiveAnalyticsModel] = useState<string>('');
   const [activeAnalyticsTabsByModel, setActiveAnalyticsTabsByModel] = useState<Record<string, string>>({});
@@ -1614,60 +1618,34 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
     setSelectedValueStreamEntity(null);
   }, []);
 
-  const handleValueStreamCapabilitySelect = useCallback(async (selection: ValueStreamCapabilitySelection) => {
-    const flowMode = activeValueStreamsModeByModel[selection.neighborhoodName] || 'valueStream';
-    setSelectedCapability(null);
-    setSelectedValueStreamEntityLoading(true);
-    setSelectedValueStreamEntity({
-      type: 'businessCapability',
-      flowMode,
-      title: selection.capabilityName,
-      neighborhoodName: selection.neighborhoodName,
-      domain: selection.domain,
-      subdomain: selection.subdomain,
-      valueStreamName: selection.valueStreamName,
-      capabilityName: selection.capabilityName,
-      relationshipCount: selection.relationshipCount,
-      metadata: [],
-    });
-
-    try {
-      const factories = await getCustomFactories(selection.neighborhoodName, selection.neighborhoodName);
-      const capabilityFactory = factories.find(isBusinessCapabilityFactory) || null;
-      const flowFactory = factories.find((factory) => normalizeLookupToken(factory.name) === (flowMode === 'journey' ? 'journey' : 'valuestream')) || null;
-      const metadata = [
-        ...getFactoryMetadata(flowFactory, selection.valueStreamName),
-        ...getCapabilityMetadata(capabilityFactory, selection.capabilityName),
-      ];
-      setSelectedValueStreamEntity({
-        type: 'businessCapability',
-        flowMode,
-        title: selection.capabilityName,
-        neighborhoodName: selection.neighborhoodName,
-        domain: selection.domain,
-        subdomain: selection.subdomain,
-        valueStreamName: selection.valueStreamName,
-        capabilityName: selection.capabilityName,
-        relationshipCount: selection.relationshipCount,
-        metadata,
-      });
-    } catch {
-      setSelectedValueStreamEntity({
-        type: 'businessCapability',
-        flowMode,
-        title: selection.capabilityName,
-        neighborhoodName: selection.neighborhoodName,
-        domain: selection.domain,
-        subdomain: selection.subdomain,
-        valueStreamName: selection.valueStreamName,
-        capabilityName: selection.capabilityName,
-        relationshipCount: selection.relationshipCount,
-        metadata: [],
-      });
-    } finally {
-      setSelectedValueStreamEntityLoading(false);
+  // Value Streams → Diagrams tab: clicking a subdomain, value stream,
+  // capability (or group) or business flow shows the search-result tiles
+  // for exactly the diagrams behind it. Filters by business flow name: this
+  // framework's Diagrams search has no Value Stream or Business Capability
+  // facet, and domain names exist in two spellings (& / &amp;), so a flow
+  // list is the one filter that always matches.
+  const openDiagramsForBusinessFlows = useCallback((neighborhoodName: string, businessFlows: string[], label: string) => {
+    const flows = Array.from(new Set(businessFlows.map((flow) => String(flow || '').trim()).filter(Boolean)));
+    if (!flows.length) {
+      message.info(`No business flows found for "${label}".`);
+      return;
     }
-  }, [activeValueStreamsModeByModel]);
+    setSelectedValueStreamEntity(null);
+    setSelectedCapability(null);
+    setSelectedDiagramIds([]);
+    void rebuildCompositeCanvas([]);
+    setSelectedDiagramTask(null);
+    setDiagramBrowserFilterRequest({
+      frameworks: [neighborhoodName],
+      filters: { businessFlow: flows },
+      nonce: Date.now(),
+    });
+    setActiveOuterTab('bpmn');
+  }, [message, rebuildCompositeCanvas]);
+
+  const handleValueStreamCapabilitySelect = useCallback((selection: ValueStreamCapabilitySelection) => {
+    openDiagramsForBusinessFlows(selection.neighborhoodName, selection.businessFlows, selection.capabilityName);
+  }, [openDiagramsForBusinessFlows]);
 
   const handleValueStreamRollupSelect = useCallback(async (selection: ValueStreamRollupSelection) => {
     const flowMode = activeValueStreamsModeByModel[selection.neighborhoodName] || 'valueStream';
@@ -1722,154 +1700,21 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
     }
   }, [activeValueStreamsModeByModel]);
 
-  const handleValueStreamDomainSelect = useCallback(async (selection: DomainSelection) => {
-    const flowMode = activeValueStreamsModeByModel[selection.neighborhoodName] || 'valueStream';
-    setSelectedCapability(null);
-    setSelectedValueStreamEntityLoading(true);
-    setSelectedValueStreamEntity({
-      type: 'domain',
-      flowMode,
-      title: selection.domain,
-      neighborhoodName: selection.neighborhoodName,
-      domain: selection.domain,
-      subdomain: '',
-      relationshipCount: selection.relationshipCount,
-      secondaryCountLabel: `${selection.subdomainCount} subdomain${selection.subdomainCount === 1 ? '' : 's'}`,
-      metadata: [],
-    });
+  const handleValueStreamDomainSelect = useCallback((selection: DomainSelection) => {
+    openDiagramsForBusinessFlows(selection.neighborhoodName, selection.businessFlows, selection.domain);
+  }, [openDiagramsForBusinessFlows]);
 
-    try {
-      const factories = await getCustomFactories(selection.neighborhoodName, selection.neighborhoodName);
-      const domainFactory = factories.find((factory) => normalizeLookupToken(factory.name) === 'domain') || null;
-      const metadata = getFactoryMetadata(domainFactory, selection.domain);
-      setSelectedValueStreamEntity((current) => ({
-        ...current,
-        type: 'domain',
-        flowMode,
-        title: selection.domain,
-        neighborhoodName: selection.neighborhoodName,
-        domain: selection.domain,
-        subdomain: '',
-        relationshipCount: selection.relationshipCount,
-        secondaryCountLabel: `${selection.subdomainCount} subdomain${selection.subdomainCount === 1 ? '' : 's'}`,
-        metadata,
-      }));
-    } catch {
-      setSelectedValueStreamEntity((current) => ({
-        ...current,
-        type: 'domain',
-        flowMode,
-        title: selection.domain,
-        neighborhoodName: selection.neighborhoodName,
-        domain: selection.domain,
-        subdomain: '',
-        relationshipCount: selection.relationshipCount,
-        secondaryCountLabel: `${selection.subdomainCount} subdomain${selection.subdomainCount === 1 ? '' : 's'}`,
-        metadata: [],
-      }));
-    } finally {
-      setSelectedValueStreamEntityLoading(false);
-    }
-  }, [activeValueStreamsModeByModel]);
+  const handleValueStreamSubdomainSelect = useCallback((selection: SubdomainSelection) => {
+    openDiagramsForBusinessFlows(selection.neighborhoodName, selection.businessFlows, selection.subdomain);
+  }, [openDiagramsForBusinessFlows]);
 
-  const handleValueStreamSubdomainSelect = useCallback(async (selection: SubdomainSelection) => {
-    const flowMode = activeValueStreamsModeByModel[selection.neighborhoodName] || 'valueStream';
-    setSelectedCapability(null);
-    setSelectedValueStreamEntityLoading(true);
-    setSelectedValueStreamEntity({
-      type: 'subdomain',
-      flowMode,
-      title: selection.subdomain,
-      neighborhoodName: selection.neighborhoodName,
-      domain: selection.domain,
-      subdomain: selection.subdomain,
-      relationshipCount: selection.relationshipCount,
-      secondaryCountLabel: `${selection.businessFlowCount} business flow${selection.businessFlowCount === 1 ? '' : 's'}`,
-      metadata: [],
-    });
+  const handleValueStreamFlowSelect = useCallback((selection: ValueStreamFlowSelection) => {
+    openDiagramsForBusinessFlows(selection.neighborhoodName, selection.businessFlows, selection.valueStreamName);
+  }, [openDiagramsForBusinessFlows]);
 
-    try {
-      const factories = await getCustomFactories(selection.neighborhoodName, selection.neighborhoodName);
-      const subdomainFactory = factories.find((factory) => normalizeLookupToken(factory.name) === 'subdomain') || null;
-      const metadata = getFactoryMetadata(subdomainFactory, selection.subdomain);
-      setSelectedValueStreamEntity((current) => ({
-        ...current,
-        type: 'subdomain',
-        flowMode,
-        title: selection.subdomain,
-        neighborhoodName: selection.neighborhoodName,
-        domain: selection.domain,
-        subdomain: selection.subdomain,
-        relationshipCount: selection.relationshipCount,
-        secondaryCountLabel: `${selection.businessFlowCount} business flow${selection.businessFlowCount === 1 ? '' : 's'}`,
-        metadata,
-      }));
-    } catch {
-      setSelectedValueStreamEntity((current) => ({
-        ...current,
-        type: 'subdomain',
-        flowMode,
-        title: selection.subdomain,
-        neighborhoodName: selection.neighborhoodName,
-        domain: selection.domain,
-        subdomain: selection.subdomain,
-        relationshipCount: selection.relationshipCount,
-        secondaryCountLabel: `${selection.businessFlowCount} business flow${selection.businessFlowCount === 1 ? '' : 's'}`,
-        metadata: [],
-      }));
-    } finally {
-      setSelectedValueStreamEntityLoading(false);
-    }
-  }, [activeValueStreamsModeByModel]);
-
-  const handleValueStreamFlowSelect = useCallback(async (selection: ValueStreamFlowSelection) => {
-    const flowMode = activeValueStreamsModeByModel[selection.neighborhoodName] || 'valueStream';
-    const flowLookup = flowMode === 'journey' ? 'journey' : 'valuestream';
-    setSelectedCapability(null);
-    setSelectedValueStreamEntityLoading(true);
-    setSelectedValueStreamEntity({
-      type: 'valueStream',
-      flowMode,
-      title: selection.valueStreamName,
-      neighborhoodName: selection.neighborhoodName,
-      domain: selection.domain,
-      subdomain: selection.subdomain,
-      valueStreamName: selection.valueStreamName,
-      relationshipCount: selection.relationshipCount,
-      metadata: [],
-    });
-
-    try {
-      const factories = await getCustomFactories(selection.neighborhoodName, selection.neighborhoodName);
-      const valueStreamFactory = factories.find((factory) => normalizeLookupToken(factory.name) === flowLookup) || null;
-      const metadata = getFactoryMetadata(valueStreamFactory, selection.valueStreamName);
-      setSelectedValueStreamEntity({
-        type: 'valueStream',
-        flowMode,
-        title: selection.valueStreamName,
-        neighborhoodName: selection.neighborhoodName,
-        domain: selection.domain,
-        subdomain: selection.subdomain,
-        valueStreamName: selection.valueStreamName,
-        relationshipCount: selection.relationshipCount,
-        metadata,
-      });
-    } catch {
-      setSelectedValueStreamEntity({
-        type: 'valueStream',
-        flowMode,
-        title: selection.valueStreamName,
-        neighborhoodName: selection.neighborhoodName,
-        domain: selection.domain,
-        subdomain: selection.subdomain,
-        valueStreamName: selection.valueStreamName,
-        relationshipCount: selection.relationshipCount,
-        metadata: [],
-      });
-    } finally {
-      setSelectedValueStreamEntityLoading(false);
-    }
-  }, [activeValueStreamsModeByModel]);
+  const handleValueStreamBusinessFlowSelect = useCallback((selection: BusinessFlowSelection) => {
+    openDiagramsForBusinessFlows(selection.neighborhoodName, [selection.businessFlowName], selection.businessFlowName);
+  }, [openDiagramsForBusinessFlows]);
 
   const handleOpenCapabilityDiagrams = useCallback(() => {
     if (!selectedValueStreamEntity) return;
@@ -1947,7 +1792,8 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   // Process Change Radar with its sidebar pre-filtered to that domain.
   const handleDashboardDomainSelect = useCallback((domain: string) => {
     setRadarDomainFocus(domain);
-    handleOuterTabChange('processChangeRadar');
+    setProcessChangeSubTab('radar');
+    handleOuterTabChange('processChanges');
   }, [handleOuterTabChange]);
 
   // Process Change Heat Map → clicking a flow tile jumps to Process Change
@@ -1957,7 +1803,8 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   const handleHeatMapFlowSelect = useCallback((flow: { diagramId: string; domain: string }) => {
     setRadarDiagramFocus(flow.diagramId);
     setRadarDomainFocus(flow.domain);
-    handleOuterTabChange('processChangeRadar');
+    setProcessChangeSubTab('radar');
+    handleOuterTabChange('processChanges');
   }, [handleOuterTabChange]);
 
   // Process Flow Scorecards (Dashboard tab) → clicking a flow tile opens that
@@ -1979,11 +1826,11 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   // click on that tab (not via the dashboard or heat map) doesn't inherit a
   // stale filter/selection.
   useEffect(() => {
-    if (activeOuterTab !== 'processChangeRadar') {
+    if (activeOuterTab !== 'processChanges' || processChangeSubTab !== 'radar') {
       setRadarDomainFocus(null);
       setRadarDiagramFocus(null);
     }
-  }, [activeOuterTab]);
+  }, [activeOuterTab, processChangeSubTab]);
 
   const handleViewCapabilityInCatalog = useCallback((capability: CapabilityMatch) => {
     const clickedName = getCapabilityFocusName(capability.capabilityName);
@@ -2909,13 +2756,14 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
         onCapabilitySelect={handleValueStreamCapabilitySelect}
         onRollupSelect={handleValueStreamRollupSelect}
         onValueStreamSelect={handleValueStreamFlowSelect}
+        onBusinessFlowSelect={handleValueStreamBusinessFlowSelect}
         selectedCapabilityName={selectedValueStreamEntity?.type === 'businessCapability' ? selectedValueStreamEntity.capabilityName || null : null}
         selectedValueStreamName={selectedValueStreamEntity?.valueStreamName || null}
         selectedRollupKey={selectedValueStreamEntity?.type === 'rollup' ? `${selectedValueStreamEntity.domain}|||${selectedValueStreamEntity.subdomain}` : null}
         selectedValueStreamKey={selectedValueStreamEntity?.type === 'valueStream' && selectedValueStreamEntity.valueStreamName ? `${selectedValueStreamEntity.valueStreamName}|||${selectedValueStreamEntity.domain} | ${selectedValueStreamEntity.subdomain}` : null}
       />
     ),
-  })), [activeValueStreamsModeByModel, handleValueStreamCapabilitySelect, handleValueStreamFlowSelect, handleValueStreamRollupSelect, neighborhoodTabLabel, selectedValueStreamEntity, sortedValueStreamModels]);
+  })), [activeValueStreamsModeByModel, handleValueStreamBusinessFlowSelect, handleValueStreamCapabilitySelect, handleValueStreamFlowSelect, handleValueStreamRollupSelect, handleValueStreamSubdomainSelect, neighborhoodTabLabel, selectedValueStreamEntity, sortedValueStreamModels]);
 
   // Reports used to live here as a sub-tab alongside Dashboards — moved to
   // its own top-level tab (see the 'reports' entry in the outer Tabs below),
@@ -3271,6 +3119,11 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
             )}
             items={[
               {
+                key: 'landing',
+                label: outerTabLabel('landing', <span><HomeOutlined /> BPMN IQ</span>),
+                children: <LandingPage onNavigate={handleOuterTabChange} />,
+              },
+              {
                 key: 'execDashboard',
                 label: outerTabLabel('execDashboard', <span><FundOutlined /> Dashboard</span>),
                 // destroyInactiveTabPane means mounting here is a fresh fetch
@@ -3480,21 +3333,31 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                 ),
               },
               {
-                key: 'processChangeRadar',
-                label: outerTabLabel('processChangeRadar', <span><RadarChartOutlined /> Process Change Radar</span>),
-                // destroyInactiveTabPane (on this outer Tabs) unmounts this
-                // pane whenever another tab is selected, so mounting here IS
-                // "the button was pressed" — ProcessChangeRadar fires its
-                // Jira fetch fresh from its own mount effect, never on app
-                // startup and never cached across visits.
-                children: <ProcessChangeRadar initialDomainFilter={radarDomainFocus} initialDiagramId={radarDiagramFocus} />,
-              },
-              {
-                key: 'processChangeHeatMap',
-                label: outerTabLabel('processChangeHeatMap', <span><FireOutlined /> Process Change Heat Map</span>),
-                // Same destroyInactiveTabPane behavior as Process Change
-                // Radar above — a fresh Jira fetch every time this tab opens.
-                children: <ProcessChangeHeatMap onSelectFlow={handleHeatMapFlowSelect} />,
+                key: 'processChanges',
+                label: outerTabLabel('processChanges', <span><RadarChartOutlined /> Process Changes</span>),
+                // Heat Map and Radar as sub-tabs. destroyInactiveTabPane on
+                // both the outer and this inner Tabs means each sub-tab
+                // remounts (and fetches Jira fresh) every time it's shown.
+                children: (
+                  <Tabs
+                    className="factory-tabs"
+                    activeKey={processChangeSubTab}
+                    onChange={(key) => setProcessChangeSubTab(key as 'heatMap' | 'radar')}
+                    destroyInactiveTabPane
+                    items={[
+                      {
+                        key: 'heatMap',
+                        label: <span><FireOutlined /> Heat Map</span>,
+                        children: <ProcessChangeHeatMap onSelectFlow={handleHeatMapFlowSelect} />,
+                      },
+                      {
+                        key: 'radar',
+                        label: <span><RadarChartOutlined /> Radar</span>,
+                        children: <ProcessChangeRadar initialDomainFilter={radarDomainFocus} initialDiagramId={radarDiagramFocus} />,
+                      },
+                    ]}
+                  />
+                ),
               },
               {
                 key: 'quantitativeModeling',

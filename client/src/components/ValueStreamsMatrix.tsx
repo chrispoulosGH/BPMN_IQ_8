@@ -12,6 +12,15 @@ export interface ValueStreamCapabilitySelection {
   neighborhoodName: string;
   domain: string;
   subdomain: string;
+  // The business flows behind this tile (a capability group's are its
+  // members' combined), so the Diagrams tab can show exactly those diagrams.
+  businessFlows: string[];
+  isGroup?: boolean;
+}
+
+export interface BusinessFlowSelection {
+  neighborhoodName: string;
+  businessFlowName: string;
 }
 
 export interface ValueStreamRollupSelection {
@@ -27,6 +36,7 @@ export interface DomainSelection {
   domain: string;
   relationshipCount: number;
   subdomainCount: number;
+  businessFlows: string[];
 }
 
 export interface SubdomainSelection {
@@ -35,6 +45,7 @@ export interface SubdomainSelection {
   subdomain: string;
   relationshipCount: number;
   businessFlowCount: number;
+  businessFlows: string[];
 }
 
 export interface ValueStreamFlowSelection {
@@ -43,6 +54,7 @@ export interface ValueStreamFlowSelection {
   subdomain: string;
   valueStreamName: string;
   relationshipCount: number;
+  businessFlows: string[];
 }
 
 interface ValueStreamsMatrixProps {
@@ -54,6 +66,7 @@ interface ValueStreamsMatrixProps {
   onCapabilitySelect?: (selection: ValueStreamCapabilitySelection) => void;
   onRollupSelect?: (selection: ValueStreamRollupSelection) => void;
   onValueStreamSelect?: (selection: ValueStreamFlowSelection) => void;
+  onBusinessFlowSelect?: (selection: BusinessFlowSelection) => void;
   selectedCapabilityName?: string | null;
   selectedValueStreamName?: string | null;
   selectedRollupKey?: string | null;
@@ -124,6 +137,7 @@ export default function ValueStreamsMatrix({
   onCapabilitySelect,
   onRollupSelect,
   onValueStreamSelect,
+  onBusinessFlowSelect,
   selectedCapabilityName = null,
   selectedValueStreamName = null,
   selectedRollupKey = null,
@@ -411,6 +425,11 @@ export default function ValueStreamsMatrix({
     setVisibleDomains(groupedDomains.length ? [groupedDomains[0].key] : []);
   }, [groupedDomains]);
 
+  // Every business flow in a domain: the union of its value streams' flows.
+  const domainFlows = (domainGroup: { subdomains: Array<{ valueStreams: typeof valueStreams }> }) => (
+    [...new Set(domainGroup.subdomains.flatMap((sub) => sub.valueStreams.flatMap((vs) => vs.businessFlows || [])))].sort((a, b) => a.localeCompare(b))
+  );
+
   const visibleGroupedDomains = useMemo(
     () => groupedDomains.filter((domainGroup) => visibleDomains.includes(domainGroup.key)),
     [groupedDomains, visibleDomains],
@@ -562,6 +581,7 @@ export default function ValueStreamsMatrix({
                         domain: domainGroup.domain,
                         relationshipCount: domainGroup.totalCount,
                         subdomainCount: domainGroup.subdomains.length,
+                        businessFlows: domainFlows(domainGroup),
                       })}
                       onKeyDown={(event) => {
                         if (event.key === 'Enter' || event.key === ' ') {
@@ -571,6 +591,7 @@ export default function ValueStreamsMatrix({
                             domain: domainGroup.domain,
                             relationshipCount: domainGroup.totalCount,
                             subdomainCount: domainGroup.subdomains.length,
+                        businessFlows: domainFlows(domainGroup),
                           });
                         }
                       }}
@@ -604,6 +625,7 @@ export default function ValueStreamsMatrix({
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(560px, 1fr))', gap: 16, alignItems: 'start' }}>
                   {domainGroup.subdomains.map((subdomainGroup) => {
                     const isRollupSelected = !isJourneyMode && selectedRollupKey === subdomainGroup.key;
+                    const subdomainFlows = [...new Set(subdomainGroup.valueStreams.flatMap((vs) => vs.businessFlows || []))].sort((a, b) => a.localeCompare(b));
 
                     return (
                       <div
@@ -635,6 +657,7 @@ export default function ValueStreamsMatrix({
                                 subdomain: subdomainGroup.subdomain,
                                 relationshipCount: subdomainGroup.totalCount,
                                 businessFlowCount: subdomainGroup.totalCount,
+                                businessFlows: subdomainFlows,
                               });
                               return;
                             }
@@ -657,6 +680,7 @@ export default function ValueStreamsMatrix({
                                   subdomain: subdomainGroup.subdomain,
                                   relationshipCount: subdomainGroup.totalCount,
                                   businessFlowCount: subdomainGroup.totalCount,
+                                businessFlows: subdomainFlows,
                                 });
                               }
                               return;
@@ -740,6 +764,7 @@ export default function ValueStreamsMatrix({
                                     subdomain: subdomainGroup.subdomain,
                                     valueStreamName: valueStream.name,
                                     relationshipCount: valueStream.count,
+                                    businessFlows: valueStream.businessFlows || [],
                                   })}
                                   onKeyDown={(event) => {
                                     if (event.key === 'Enter' || event.key === ' ') {
@@ -750,20 +775,16 @@ export default function ValueStreamsMatrix({
                                         subdomain: subdomainGroup.subdomain,
                                         valueStreamName: valueStream.name,
                                         relationshipCount: valueStream.count,
+                                    businessFlows: valueStream.businessFlows || [],
                                       });
                                     }
                                   }}
                                 >
                                   <div style={{ ...tileCaptionStyle, position: 'absolute', top: 6, left: 0, right: 0 }}>{flowEntityLabel}</div>
                                   <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '12px 22px 0', color: theme.flowName, fontWeight: 600, fontSize: 14 }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-                                      <span style={{ maxWidth: 'calc(100% - 50px)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: theme.flowName }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%' }}>
+                                      <span style={{ maxWidth: '100%', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: theme.flowName }}>
                                         {valueStream.name}
-                                      </span>
-                                      <span style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                                        <span style={{ color: theme.flowCount, fontSize: 12, fontWeight: 500 }}>
-                                          {valueStream.count} {flowCountLabel}{valueStream.count === 1 ? '' : 's'}
-                                        </span>
                                       </span>
                                     </div>
                                     {hasJourneyActors ? (
@@ -849,13 +870,15 @@ export default function ValueStreamsMatrix({
 
                                 <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexWrap: 'nowrap', gap: capabilityTileGap, alignItems: 'flex-start', justifyContent: 'center', width: '100%' }}>
                                   {vsCapabilities.map((capability, capabilityIndex) => {
-                                    // A group isn't a catalog row, so only detailed capabilities select / click through.
-                                    const canSelect = Boolean(onCapabilitySelect) && !capability.isGroup;
+                                    // Capabilities and capability groups both click through to their flows' diagrams.
+                                    const canSelect = Boolean(onCapabilitySelect);
                                     const isSelected = canSelect && selectedCapabilityName === capability.name && selectedValueStreamName === valueStream.name;
                                     const selectCapability = () => canSelect && onCapabilitySelect?.({
                                       capabilityName: capability.name,
                                       valueStreamName: valueStream.name,
                                       relationshipCount: capability.count,
+                                      businessFlows: capability.businessFlows,
+                                      isGroup: capability.isGroup,
                                       neighborhoodName,
                                       domain: domainGroup.domain,
                                       subdomain: subdomainGroup.subdomain,
@@ -955,7 +978,17 @@ export default function ValueStreamsMatrix({
                                         {flowNames.map((flowName) => (
                                           <Tooltip key={flowName} title={`${flowName} supports ${capability.name}`} placement="bottom" mouseEnterDelay={0.3}>
                                             <div
+                                              role={onBusinessFlowSelect ? 'button' : undefined}
+                                              tabIndex={onBusinessFlowSelect ? 0 : undefined}
+                                              onClick={() => onBusinessFlowSelect?.({ neighborhoodName, businessFlowName: flowName })}
+                                              onKeyDown={(event) => {
+                                                if (event.key === 'Enter' || event.key === ' ') {
+                                                  event.preventDefault();
+                                                  onBusinessFlowSelect?.({ neighborhoodName, businessFlowName: flowName });
+                                                }
+                                              }}
                                               style={{
+                                                cursor: onBusinessFlowSelect ? 'pointer' : 'default',
                                                 width: businessFlowTileWidth,
                                                 minHeight: 60,
                                                 borderRadius: 8,

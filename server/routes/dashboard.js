@@ -774,11 +774,14 @@ router.get('/value-stream-relationships', async (req, res) => {
 
         return b.count - a.count || a.name.localeCompare(b.name) || a.rollupLabel.localeCompare(b.rollupLabel);
       })
-      .map((row) => (
-        isJourneyMode
-          ? { ...row, actors: Array.from(actorsByFlowKey.get(row.key) || []).sort((a, b) => a.localeCompare(b)) }
-          : row
-      ));
+      .map((row) => {
+        // Every business flow in this value stream (including any with no
+        // capability), so a click can open exactly those diagrams.
+        const withFlows = { ...row, businessFlows: Array.from(businessFlowsByFlowKey.get(row.key) || []).sort((a, b) => a.localeCompare(b)) };
+        return isJourneyMode
+          ? { ...withFlows, actors: Array.from(actorsByFlowKey.get(row.key) || []).sort((a, b) => a.localeCompare(b)) }
+          : withFlows;
+      });
 
     const capabilities = [...capabilityCounts.entries()]
       .map(([name, count]) => ({ name, count }))

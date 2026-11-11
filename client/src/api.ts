@@ -196,6 +196,7 @@ export interface ValueStreamRelationshipData {
     domainSequence: number | null;
     subdomainSequence: number | null;
     actors?: string[];
+    businessFlows?: string[];
   }>;
   capabilities: Array<{ name: string; count: number }>;
   links: ValueStreamRelationshipLink[];

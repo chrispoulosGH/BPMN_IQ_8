@@ -10,6 +10,42 @@
 ## Session log
 Newest entry first. Each entry: date, what was in flight, what's uncommitted/unresolved.
 
+### 2026-11-11 (2) — BPMN IQ landing tab
+- New [LandingPage.tsx](client/src/components/LandingPage.tsx) is the first outer tab (`landing`, "BPMN IQ", `HomeOutlined`) and now the default `activeOuterTab` (was `analytics`).
+  - Hero background is inline SVG drawn in BPMN 2.0 notation: an Order-to-Cash pool with 2 lanes, a Customer/Supplier collaboration with message flows, and a smaller faded copy.
+  - Animations: sequence flows draw in, SMIL `animateMotion` tokens travel the flows, tasks light up in turn, gateways pulse, the timer hand spins, layers drift, and the hero text rises in. All of it is off under `prefers-reduced-motion`.
+  - Feature cards and CTAs call `handleOuterTabChange` with existing tab keys.
+  - Tailwind runs with `preflight: false`, so `<button>`s need explicit `border-solid`/`border-0`, or they get the browser's outset border.
+- Verified in the browser: screenshots of the hero and feature grid, 9 tokens running. `tsc`: 3 baseline errors. Not committed.
+
+### 2026-11-11 — Process Changes tab (Heat Map + Radar merged)
+- The outer tabs `processChangeRadar` and `processChangeHeatMap` are now one outer tab, `processChanges` ("Process Changes"), with sub-tabs **Heat Map** (default) and **Radar**. The inner Tabs has `destroyInactiveTabPane`, so each sub-tab still fetches Jira fresh when it's shown.
+- New App.tsx state `processChangeSubTab`. The Dashboard domain click, Heat Map tile click and scorecard change-row click all set it to `'radar'`. The radar focus values are cleared once the user leaves the Radar sub-tab or the outer tab.
+- `tsc`: 3 baseline errors. Not checked in the browser. Not committed.
+
+### 2026-11-10 (4) — Value Streams clicks go straight to the Diagrams tab
+- Clicking a subdomain header, value stream bar, capability or capability group, or business flow tile in [ValueStreamsMatrix.tsx](client/src/components/ValueStreamsMatrix.tsx) now switches to the Diagrams tab with the search-result tiles filtered to exactly that item's business flows. The canvas is cleared, and the type-ahead box is cleared too (DiagramBrowser's external-filter effect).
+  - Business flow tiles are newly clickable (new `onBusinessFlowSelect` / `BusinessFlowSelection`).
+  - Group tiles are now clickable too.
+  - The domain title now navigates the same way (`DomainSelection.businessFlows` = union of the domain's value-stream flows; verified: Connected Vehicle & Mobility → 7 tiles, matching its header). `selectedValueStreamEntity` / the old details panel is no longer set from any matrix click.
+- **Why it filters by business-flow name:** LLM AMI's Diagrams facets are only Application, Business Process Flow, Domain, Subdomain and Task (from `/api/canonical/:n/types`).
+  - The old `handleOpenCapabilityDiagrams` / `handleOuterTabChange` path filters on `valueStream` / `businessCapability`, which have no facet here, so `filteredDiagrams` silently ignores them and shows too many tiles. That path is left as-is but is now only reached from the domain panel.
+  - Domain strings also exist as both `&` and `&amp;`.
+- App.tsx: the three old panel handlers (capability, subdomain, value stream) were replaced by `openDiagramsForBusinessFlows(neighborhood, flows, label)` plus thin wrappers, and `handleValueStreamBusinessFlowSelect` was added.
+- Server: `/value-stream-relationships` `valueStreams[]` gained additive `businessFlows` (from `businessFlowsByFlowKey`). A subdomain's flows are the union of its value streams' flows.
+- Verified in the browser on Connected Vehicle & Mobility:
+  - flow → 1 tile
+  - "EV Charging Services" group → 2
+  - "EV Charging Experience" value stream → 2
+  - "Connected Services" subdomain → 3 (the correct flows)
+- Also removed the "N Business Flows" count from the right of each value-stream bar; the name is now centred.
+- `tsc`: 3 baseline errors. **Not committed** (on branch `work/2026-11-10`, after `df9aa43`).
+
+### 2026-11-10 (3) — Committed
+- **All work from the 2026-10-03, 10-04, 10-04 (2), 11-10 and 11-10 (2) entries is committed as `df9aa43` on branch `work/2026-11-10`, not yet merged to `main`.** Those entries still say "Not committed"; that's out of date.
+- It's one commit because several files mix features from different sessions (BpmnEditor, App.tsx, api.ts, dashboard.js).
+- `mongodb-collection-inventory.html` was deliberately left untracked (unreviewed export).
+
 ### 2026-11-10 (2) — Capability grouping, Step 1 (additive, read-time only)
 - Step 1 of the capability consolidation, as recommended in the impact inventory in the entry below. It adds an L2 group and L1 area for each existing capability **without renaming, moving or copying any capability name**, and touches no existing collection.
   - New [server/models/CapabilityGrouping.js](server/models/CapabilityGrouping.js) (`capabilitygroupings`): `{neighborhoodName, capabilityName, qualifierSubdomain, capabilityGroup, capabilityArea}`, unique on the first three.
