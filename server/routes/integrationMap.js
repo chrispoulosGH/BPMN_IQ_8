@@ -272,3 +272,5 @@ router.get('/sequence/:diagramId', async (req, res) => {
 });
 
 module.exports = router;
+// Also used by scripts/export_mockprod_catalog.js.
+module.exports.getIntegrationMapCached = getIntegrationMapCached;

@@ -59,6 +59,7 @@ import {
 import LandingPage from './components/LandingPage';
 import IntegrationMap from './components/IntegrationMap';
 import ApiSequencePanel from './components/ApiSequencePanel';
+import DiscoveredProcesses from './components/DiscoveredProcesses';
 
 // API names encode their business flow ("Flow — Task API"); those flows' diagrams
 // all live in this framework (Diagram.neighborhoodName has one distinct value).
@@ -519,6 +520,8 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   const [radarDiagramFocus, setRadarDiagramFocus] = useState<string | null>(null);
   // Which sub-tab of the "Process Changes" outer tab is showing.
   const [processChangeSubTab, setProcessChangeSubTab] = useState<'heatMap' | 'radar'>('heatMap');
+  // Business Processes tab: modeled diagrams vs. processes discovered from traces.
+  const [businessProcessSubTab, setBusinessProcessSubTab] = useState<'processes' | 'discovered'>('processes');
   const [activeAnalyticsTab, setActiveAnalyticsTab] = useState<string>('dashboard'); // inner Analytics sub-tabs
   const [activeAnalyticsModel, setActiveAnalyticsModel] = useState<string>('');
   const [activeAnalyticsTabsByModel, setActiveAnalyticsTabsByModel] = useState<Record<string, string>>({});
@@ -1605,6 +1608,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
         nonce: Date.now(),
       });
       setActiveOuterTab('bpmn');
+      setBusinessProcessSubTab('processes');
     } catch (err: any) {
       message.error(err?.response?.data?.error || err?.message || 'Unable to open diagram for this Business Process Flow.');
     }
@@ -1649,6 +1653,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
       nonce: Date.now(),
     });
     setActiveOuterTab('bpmn');
+    setBusinessProcessSubTab('processes');
   }, [message, rebuildCompositeCanvas]);
 
   const handleValueStreamCapabilitySelect = useCallback((selection: ValueStreamCapabilitySelection) => {
@@ -1758,6 +1763,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
       nonce: Date.now(),
     });
     setActiveOuterTab('bpmn');
+    setBusinessProcessSubTab('processes');
   }, [rebuildCompositeCanvas, selectedValueStreamEntity]);
 
   const handleOuterTabChange = useCallback((nextTab: string) => {
@@ -1827,6 +1833,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
     setSelectedDiagramIds([flow.diagramId]);
     void rebuildCompositeCanvas([flow.diagramId]);
     setActiveOuterTab('bpmn');
+    setBusinessProcessSubTab('processes');
   }, [rebuildCompositeCanvas]);
 
   // Both focus values are only valid for the visit they were set for — clear
@@ -2319,6 +2326,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
 
   const toggleCanvasDiagram = useCallback(async (id: string, neighborhoodName?: string) => {
     setActiveOuterTab('bpmn');
+    setBusinessProcessSubTab('processes');
     setSelectedDiagramIds((current) => {
       const shouldReplace = Boolean(
         neighborhoodName
@@ -3169,8 +3177,21 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
               },
               {
                 key: 'bpmn',
-                label: outerTabLabel('bpmn', <span><PartitionOutlined /> Diagrams</span>),
+                label: outerTabLabel('bpmn', <span><PartitionOutlined /> Business Processes</span>),
+                // Processes = the modeled diagrams (formerly the Diagrams tab).
+                // Discovered Processes = flows seen in production traces that
+                // have no diagram, rebuilt from the spans.
                 children: (
+                  <Tabs
+                    className="factory-tabs business-process-tabs"
+                    activeKey={businessProcessSubTab}
+                    onChange={(key) => setBusinessProcessSubTab(key as 'processes' | 'discovered')}
+                    destroyInactiveTabPane
+                    items={[
+                      {
+                        key: 'processes',
+                        label: <span><PartitionOutlined /> Processes</span>,
+                        children: (
                   <div className="flex h-full w-full min-h-0">
                     <div className="bpmn-ribbon w-[92px] shrink-0 px-2 py-3 overflow-y-auto">
                       <div className="flex flex-col gap-3">
@@ -3347,6 +3368,15 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                   </div>
                     </div>
                   </div>
+                        ),
+                      },
+                      {
+                        key: 'discovered',
+                        label: <span><RadarChartOutlined /> Discovered Processes</span>,
+                        children: <DiscoveredProcesses allApplications={allApplications} />,
+                      },
+                    ]}
+                  />
                 ),
               },
               {

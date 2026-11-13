@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Diagram, DiagramMeta, DiagramNote, DiagramSoxControls, SoxControl, FlowScorecardsResponse, DiagramCreatePayload, DiagramUpdatePayload, DiagramValidationRequest, DiagramValidationReport, FileSaveResult, CapabilityMatchResult, TaskRecord, TaskCreatePayload, ReferenceData, RefItem, CapabilityItem, ActorItem, ServerItem, DatabaseItem, FactoryNeighborhoodSummary, CustomFactory, CustomFactoryRow, ModelCatalog, ModelCatalogRow, CatalogTreeResponse, CatalogTreeChildrenResponse, CatalogTreeSearchResponse, ProcessChangeRadarResponse, ProcessChangeSnapshot, ProcessOptimizationProposal, IntegrationMapResponse, ApiSequenceResponse } from './types';
+import type { Diagram, DiagramMeta, DiagramNote, DiagramSoxControls, SoxControl, FlowScorecardsResponse, DiagramCreatePayload, DiagramUpdatePayload, DiagramValidationRequest, DiagramValidationReport, FileSaveResult, CapabilityMatchResult, TaskRecord, TaskCreatePayload, ReferenceData, RefItem, CapabilityItem, ActorItem, ServerItem, DatabaseItem, FactoryNeighborhoodSummary, CustomFactory, CustomFactoryRow, ModelCatalog, ModelCatalogRow, CatalogTreeResponse, CatalogTreeChildrenResponse, CatalogTreeSearchResponse, ProcessChangeRadarResponse, ProcessChangeSnapshot, ProcessOptimizationProposal, IntegrationMapResponse, ApiSequenceResponse, DiscoveredProcessesResponse } from './types';
 export type { RefItem, CapabilityItem, ActorItem, ServerItem, DatabaseItem, FactoryNeighborhoodSummary, CustomFactory, CustomFactoryRow, ModelCatalog, ModelCatalogRow, CatalogTreeResponse, CatalogTreeChildrenResponse, CatalogTreeSearchResponse };
 
 const api = axios.create({ baseURL: '/api', withCredentials: true });
@@ -787,6 +787,9 @@ export const getFlowScorecards = (): Promise<FlowScorecardsResponse> =>
 
 export const getIntegrationMap = (fresh = false): Promise<IntegrationMapResponse> =>
   api.get('/integration-map', { params: fresh ? { fresh: 1 } : undefined }).then((r) => r.data as IntegrationMapResponse);
+
+export const getDiscoveredProcesses = (fresh = false, hours = 24): Promise<DiscoveredProcessesResponse> =>
+  api.get('/discovered-processes', { params: { hours, ...(fresh ? { fresh: 1 } : {}) } }).then((r) => r.data as DiscoveredProcessesResponse);
 
 export const getApiSequence = (diagramId: string): Promise<ApiSequenceResponse> =>
   api.get(`/integration-map/sequence/${encodeURIComponent(diagramId)}`).then((r) => r.data as ApiSequenceResponse);

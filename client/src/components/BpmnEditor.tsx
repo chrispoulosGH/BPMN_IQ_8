@@ -57,6 +57,9 @@ export interface BpmnEditorHandle {
   // composite canvas, sectionIndex picks the stacked section (0 = unprefixed,
   // n = "stack_n_" element ids). Returns false if no task matched.
   focusTaskByName: (taskName: string, sectionIndex?: number) => boolean;
+  // Fit the whole diagram in view (zooming out as needed), leaving room for
+  // the title banner. fitViewport() keeps 100% zoom; this one doesn't.
+  fitAll: () => void;
 }
 
 interface BpmnEditorProps {
@@ -821,6 +824,20 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
       },
       fitViewport: () => {
         if (modelerRef.current) fitViewportWithTitleRoom(modelerRef.current);
+      },
+      fitAll: () => {
+        try {
+          const canvas = modelerRef.current?.get('canvas');
+          if (!canvas) return;
+          canvas.zoom('fit-viewport', 'auto');
+          const vbox = canvas.viewbox();
+          // Pad in diagram units: room on the left for the palette, on top for
+          // the title banner.
+          const padLeft = vbox.width * 0.07;
+          const padRight = vbox.width * 0.02;
+          const padTop = vbox.height * 0.25;
+          canvas.viewbox({ x: vbox.x - padLeft, y: vbox.y - padTop, width: vbox.width + padLeft + padRight, height: vbox.height + padTop + padRight });
+        } catch { /* canvas not ready */ }
       },
       zoomIn: () => {
         const canvas = modelerRef.current?.get('canvas');

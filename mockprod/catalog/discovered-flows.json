@@ -1,0 +1,60 @@
+{
+  "_comment": "Business flows that run in mock production but have NO diagram in BPMN IQ. They are added to catalog.json by server/scripts/export_mockprod_catalog.js and are 'discovered' from their traces by GET /api/discovered-processes. Applications are real catalog app ids; APIs, the 'Upsell Offer' data object and all BPMN element ids are defined only here.",
+  "flows": [
+    {
+      "name": "Vehicle Feature & Package Upsell",
+      "processId": "Process_Vehicle_Feature_Package_Upsell",
+      "domain": "Sales & Distribution",
+      "subdomain": "New Vehicle Sales",
+      "abandonRate": 0.12,
+      "abandonNote": "Customers decline the upgrade offer more often than they abandon a purchase.",
+      "endpointBase": "/api/v1/sales-distribution/new-vehicle-sales/vehicle-feature-package-upsell",
+      "lanes": [
+        { "id": "Lane_Customer", "name": "Customer" },
+        { "id": "Lane_Sales_Consultant", "name": "Sales Consultant" },
+        { "id": "Lane_System", "name": "System" }
+      ],
+      "startEvent": { "id": "StartEvent_1", "name": "Customer Reaches Configuration Review" },
+      "endEvent": { "id": "EndEvent_1", "name": "Upgrade Added to Order" },
+      "tasks": [
+        { "id": "Task_Retrieve_Customer_Profile_Purchase_Intent", "name": "Retrieve Customer Profile & Purchase Intent", "lane": "Lane_System", "provider": "LLM-005", "consumer": "LLM-099", "method": "GET", "slug": "customer-profile-intent", "request": "", "response": "DO-001" },
+        { "id": "Task_Score_Upsell_Propensity", "name": "Score Upsell Propensity", "lane": "Lane_System", "provider": "LLM-099", "consumer": "LLM-011", "method": "POST", "slug": "upsell-propensity", "request": "DO-001", "response": "DO-U01" },
+        { "id": "Task_Generate_Package_Recommendations", "name": "Generate Leather, Performance & Color Package Recommendations", "lane": "Lane_System", "provider": "LLM-011", "consumer": "LLM-096", "method": "POST", "slug": "package-recommendations", "request": "DO-005", "response": "DO-U01" },
+        { "id": "Task_Apply_Eligible_Incentives", "name": "Apply Eligible Incentives & Package Discounts", "lane": "Lane_System", "provider": "LLM-096", "consumer": "LLM-004", "method": "POST", "slug": "package-incentives", "request": "DO-U01", "response": "DO-064" },
+        { "id": "Task_Present_Upgrade_Packages", "name": "Present Upgrade Packages to Customer", "lane": "Lane_Sales_Consultant", "provider": "LLM-004", "consumer": "LLM-056", "method": "GET", "slug": "upgrade-presentation", "request": "", "response": "DO-U01" },
+        { "id": "Task_Customer_Configures_Packages", "name": "Customer Configures Selected Packages", "lane": "Lane_Customer", "provider": "LLM-056", "consumer": "LLM-085", "method": "PUT", "slug": "package-selection", "request": "DO-005", "response": "DO-005" },
+        { "id": "Task_Validate_Package_Compatibility", "name": "Validate Package Compatibility & Availability", "lane": "Lane_System", "provider": "LLM-085", "consumer": "LLM-096", "method": "POST", "slug": "package-compatibility", "request": "DO-005", "response": "DO-005" },
+        { "id": "Task_Reprice_Upgraded_Configuration", "name": "Reprice Upgraded Configuration", "lane": "Lane_System", "provider": "LLM-096", "consumer": "LLM-015", "method": "POST", "slug": "upgrade-pricing", "request": "DO-005", "response": "DO-007" },
+        { "id": "Task_Recalculate_Monthly_Payment", "name": "Recalculate Monthly Payment with Upgrades", "lane": "Lane_System", "provider": "LLM-015", "consumer": "LLM-056", "method": "GET", "slug": "upgrade-payment", "request": "", "response": "DO-007" },
+        { "id": "Task_Customer_Accepts_Upgrade_Offer", "name": "Customer Accepts Upgrade Offer", "lane": "Lane_Customer", "provider": "LLM-056", "consumer": "LLM-004", "method": "POST", "slug": "offer-acceptance", "request": "DO-U01", "response": "DO-U01" },
+        { "id": "Task_Update_Vehicle_Order", "name": "Update Vehicle Order with Selected Packages", "lane": "Lane_Sales_Consultant", "provider": "LLM-004", "consumer": "LLM-012", "method": "PUT", "slug": "order-update", "request": "DO-006", "response": "DO-006" },
+        { "id": "Task_Record_Upsell_Revenue", "name": "Record Upsell Revenue & Consultant Incentive", "lane": "Lane_System", "provider": "LLM-012", "consumer": "LLM-005", "method": "POST", "slug": "upsell-revenue", "request": "DO-006", "response": "DO-074" }
+      ]
+    }
+  ],
+  "dataObjects": {
+    "DO-U01": {
+      "id": "DO-U01",
+      "name": "Upsell Offer",
+      "category": "Transactional",
+      "domain": "Sales",
+      "sensitivity": "Internal",
+      "containsPii": false,
+      "systemOfRecord": "LLM-096",
+      "fields": [
+        { "name": "offerId", "type": "string", "required": true, "pii": false, "financial": false, "restricted": false },
+        { "name": "customerId", "type": "string", "required": true, "pii": false, "financial": false, "restricted": false },
+        { "name": "vin", "type": "string", "required": true, "pii": false, "financial": false, "restricted": false },
+        { "name": "packageType", "type": "enum", "required": true, "pii": false, "financial": false, "restricted": false },
+        { "name": "packageCode", "type": "string", "required": true, "pii": false, "financial": false, "restricted": false },
+        { "name": "packagePrice", "type": "decimal", "required": true, "pii": false, "financial": true, "restricted": false },
+        { "name": "incentiveCode", "type": "string", "required": false, "pii": false, "financial": false, "restricted": false },
+        { "name": "incentiveAmount", "type": "decimal", "required": false, "pii": false, "financial": true, "restricted": false },
+        { "name": "monthlyPaymentDelta", "type": "decimal", "required": false, "pii": false, "financial": true, "restricted": false },
+        { "name": "propensityScore", "type": "decimal", "required": false, "pii": false, "financial": false, "restricted": false },
+        { "name": "offerStatus", "type": "enum", "required": true, "pii": false, "financial": false, "restricted": false },
+        { "name": "expiresAt", "type": "datetime", "required": false, "pii": false, "financial": false, "restricted": false }
+      ]
+    }
+  }
+}

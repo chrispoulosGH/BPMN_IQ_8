@@ -854,3 +854,10 @@ html, body, #root {
   background: #94a3b8;
 }
 
+
+/* Business Processes tab: the inner Processes / Discovered Processes panes
+   hold a full-height canvas. */
+.business-process-tabs .ant-tabs-content-holder {
+  min-height: 0;
+  overflow: hidden;
+}

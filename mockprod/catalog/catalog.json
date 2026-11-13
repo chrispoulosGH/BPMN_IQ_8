@@ -1,0 +1,3932 @@
+{
+  "generatedAt": "2026-11-13T21:54:58.297Z",
+  "source": "BPMN IQ (server/scripts/export_mockprod_catalog.js)",
+  "notes": {
+    "hosts": "Host servers are derived (one of the provider app's API Gateway servers), not sourced inventory.",
+    "dataObjects": "Data objects are generated (illustrative vocabulary assigned from task wording and HTTP method), not sourced from API specs."
+  },
+  "flows": [
+    {
+      "diagramId": "6a713674bb42b57871f0e31b",
+      "name": "Digital Retailing Journey",
+      "businessFlow": "Digital Retailing Journey",
+      "domain": "Sales & Distribution",
+      "subdomain": "Digital Sales",
+      "processId": "Process_Digital_Retailing_Journey",
+      "processName": "",
+      "isExecutable": false,
+      "collaborationId": "",
+      "participantId": "",
+      "participantName": "",
+      "lanes": [
+        {
+          "id": "Lane_Customer",
+          "name": "Customer"
+        },
+        {
+          "id": "Lane_System",
+          "name": "System"
+        }
+      ],
+      "events": [
+        {
+          "id": "StartEvent_1",
+          "name": "Start",
+          "type": "startEvent",
+          "laneId": "Lane_Customer",
+          "incoming": [],
+          "outgoing": [
+            {
+              "id": "Flow_1",
+              "targetId": "Task_Browse_Online_Inventory"
+            }
+          ]
+        },
+        {
+          "id": "EndEvent_1",
+          "name": "End",
+          "type": "endEvent",
+          "laneId": "Lane_System",
+          "incoming": [
+            {
+              "id": "Flow_11",
+              "sourceId": "Task_Process_Complete_Transaction"
+            }
+          ],
+          "outgoing": []
+        }
+      ],
+      "sequenceFlows": [
+        {
+          "id": "Flow_1",
+          "sourceId": "StartEvent_1",
+          "targetId": "Task_Browse_Online_Inventory",
+          "name": ""
+        },
+        {
+          "id": "Flow_2",
+          "sourceId": "Task_Browse_Online_Inventory",
+          "targetId": "Task_Configure_Vehicle_Online",
+          "name": ""
+        },
+        {
+          "id": "Flow_3",
+          "sourceId": "Task_Configure_Vehicle_Online",
+          "targetId": "Task_Calculate_Payment_Options",
+          "name": ""
+        },
+        {
+          "id": "Flow_4",
+          "sourceId": "Task_Calculate_Payment_Options",
+          "targetId": "Task_Submit_Credit_Application",
+          "name": ""
+        },
+        {
+          "id": "Flow_5",
+          "sourceId": "Task_Submit_Credit_Application",
+          "targetId": "Task_Receive_Instant_Credit_Decision",
+          "name": ""
+        },
+        {
+          "id": "Flow_6",
+          "sourceId": "Task_Receive_Instant_Credit_Decision",
+          "targetId": "Task_Value_Trade_In_Online",
+          "name": ""
+        },
+        {
+          "id": "Flow_7",
+          "sourceId": "Task_Value_Trade_In_Online",
+          "targetId": "Task_Accept_Deal_Terms",
+          "name": ""
+        },
+        {
+          "id": "Flow_8",
+          "sourceId": "Task_Accept_Deal_Terms",
+          "targetId": "Task_E_Sign_All_Documents",
+          "name": ""
+        },
+        {
+          "id": "Flow_9",
+          "sourceId": "Task_E_Sign_All_Documents",
+          "targetId": "Task_Schedule_Home_Delivery",
+          "name": ""
+        },
+        {
+          "id": "Flow_10",
+          "sourceId": "Task_Schedule_Home_Delivery",
+          "targetId": "Task_Process_Complete_Transaction",
+          "name": ""
+        },
+        {
+          "id": "Flow_11",
+          "sourceId": "Task_Process_Complete_Transaction",
+          "targetId": "EndEvent_1",
+          "name": ""
+        }
+      ],
+      "tasks": [
+        {
+          "sequence": 1,
+          "id": "Task_Browse_Online_Inventory",
+          "name": "Browse Online Inventory",
+          "type": "task",
+          "laneId": "Lane_Customer",
+          "laneName": "Customer",
+          "diagramApplications": [
+            "DIGITAL-RETAIL"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_1",
+              "sourceId": "StartEvent_1",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_2",
+              "targetId": "Task_Configure_Vehicle_Online",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-00127",
+              "apiName": "Digital Retailing Journey — Browse Online Inventory API",
+              "method": "POST",
+              "endpoint": "/api/v1/sales-distribution/digital-sales/digital-retailing-journey/browse-online-inventory",
+              "apiType": "Task Support API",
+              "lifecycle": "Proposed",
+              "provider": "LLM-056",
+              "consumer": "LLM-011",
+              "internal": false,
+              "host": "SRV-002265",
+              "requestObject": "DO-004",
+              "responseObject": "DO-004"
+            }
+          ]
+        },
+        {
+          "sequence": 2,
+          "id": "Task_Configure_Vehicle_Online",
+          "name": "Configure Vehicle Online",
+          "type": "task",
+          "laneId": "Lane_Customer",
+          "laneName": "Customer",
+          "diagramApplications": [
+            "SALES-CONFIG"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_2",
+              "sourceId": "Task_Browse_Online_Inventory",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_3",
+              "targetId": "Task_Calculate_Payment_Options",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-00128",
+              "apiName": "Digital Retailing Journey — Configure Vehicle Online API",
+              "method": "POST",
+              "endpoint": "/api/v1/sales-distribution/digital-sales/digital-retailing-journey/configure-vehicle-online",
+              "apiType": "Task Support API",
+              "lifecycle": "Proposed",
+              "provider": "LLM-011",
+              "consumer": "LLM-056",
+              "internal": false,
+              "host": "SRV-001002",
+              "requestObject": "DO-005",
+              "responseObject": "DO-005"
+            }
+          ]
+        },
+        {
+          "sequence": 3,
+          "id": "Task_Calculate_Payment_Options",
+          "name": "Calculate Payment Options",
+          "type": "task",
+          "laneId": "Lane_System",
+          "laneName": "System",
+          "diagramApplications": [
+            "DIGITAL-RETAIL"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_3",
+              "sourceId": "Task_Configure_Vehicle_Online",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_4",
+              "targetId": "Task_Submit_Credit_Application",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-00129",
+              "apiName": "Digital Retailing Journey — Calculate Payment Options API",
+              "method": "GET",
+              "endpoint": "/api/v1/sales-distribution/digital-sales/digital-retailing-journey/calculate-payment-options",
+              "apiType": "System Service API",
+              "lifecycle": "Proposed",
+              "provider": "LLM-056",
+              "consumer": "LLM-015",
+              "internal": false,
+              "host": "SRV-002253",
+              "requestObject": "",
+              "responseObject": "DO-005"
+            }
+          ]
+        },
+        {
+          "sequence": 4,
+          "id": "Task_Submit_Credit_Application",
+          "name": "Submit Credit Application",
+          "type": "task",
+          "laneId": "Lane_Customer",
+          "laneName": "Customer",
+          "diagramApplications": [
+            "CREDIT-DECIDE"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_4",
+              "sourceId": "Task_Calculate_Payment_Options",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_5",
+              "targetId": "Task_Receive_Instant_Credit_Decision",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-00130",
+              "apiName": "Digital Retailing Journey — Submit Credit Application API",
+              "method": "POST",
+              "endpoint": "/api/v1/sales-distribution/digital-sales/digital-retailing-journey/submit-credit-application",
+              "apiType": "Task Support API",
+              "lifecycle": "Proposed",
+              "provider": "LLM-015",
+              "consumer": "LLM-017",
+              "internal": false,
+              "host": "SRV-001118",
+              "requestObject": "DO-014",
+              "responseObject": "DO-014"
+            }
+          ]
+        },
+        {
+          "sequence": 5,
+          "id": "Task_Receive_Instant_Credit_Decision",
+          "name": "Receive Instant Credit Decision",
+          "type": "task",
+          "laneId": "Lane_System",
+          "laneName": "System",
+          "diagramApplications": [
+            "CREDIT-DECIDE"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_5",
+              "sourceId": "Task_Submit_Credit_Application",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_6",
+              "targetId": "Task_Value_Trade_In_Online",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-00131",
+              "apiName": "Digital Retailing Journey — Receive Instant Credit Decision API",
+              "method": "POST",
+              "endpoint": "/api/v1/sales-distribution/digital-sales/digital-retailing-journey/receive-instant-credit-decision",
+              "apiType": "System Service API",
+              "lifecycle": "Proposed",
+              "provider": "LLM-015",
+              "consumer": "LLM-017",
+              "internal": false,
+              "host": "SRV-001131",
+              "requestObject": "DO-015",
+              "responseObject": "DO-015"
+            }
+          ]
+        },
+        {
+          "sequence": 6,
+          "id": "Task_Value_Trade_In_Online",
+          "name": "Value Trade-In Online",
+          "type": "task",
+          "laneId": "Lane_System",
+          "laneName": "System",
+          "diagramApplications": [
+            "REMARKETING-SYS"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_6",
+              "sourceId": "Task_Receive_Instant_Credit_Decision",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_7",
+              "targetId": "Task_Accept_Deal_Terms",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-00132",
+              "apiName": "Digital Retailing Journey — Value Trade-In Online API",
+              "method": "POST",
+              "endpoint": "/api/v1/sales-distribution/digital-sales/digital-retailing-journey/value-trade-in-online",
+              "apiType": "System Service API",
+              "lifecycle": "Proposed",
+              "provider": "LLM-017",
+              "consumer": "LLM-056",
+              "internal": false,
+              "host": "SRV-REMARKETING-SYS-005",
+              "requestObject": "DO-007",
+              "responseObject": "DO-007"
+            }
+          ]
+        },
+        {
+          "sequence": 7,
+          "id": "Task_Accept_Deal_Terms",
+          "name": "Accept Deal Terms",
+          "type": "task",
+          "laneId": "Lane_Customer",
+          "laneName": "Customer",
+          "diagramApplications": [
+            "DIGITAL-RETAIL"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_7",
+              "sourceId": "Task_Value_Trade_In_Online",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_8",
+              "targetId": "Task_E_Sign_All_Documents",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-00133",
+              "apiName": "Digital Retailing Journey — Accept Deal Terms API",
+              "method": "POST",
+              "endpoint": "/api/v1/sales-distribution/digital-sales/digital-retailing-journey/accept-deal-terms",
+              "apiType": "Task Support API",
+              "lifecycle": "Proposed",
+              "provider": "LLM-056",
+              "consumer": "LLM-007",
+              "internal": false,
+              "host": "SRV-002253",
+              "requestObject": "DO-007",
+              "responseObject": "DO-007"
+            }
+          ]
+        },
+        {
+          "sequence": 8,
+          "id": "Task_E_Sign_All_Documents",
+          "name": "E-Sign All Documents",
+          "type": "task",
+          "laneId": "Lane_Customer",
+          "laneName": "Customer",
+          "diagramApplications": [
+            "DIGITAL-RETAIL"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_8",
+              "sourceId": "Task_Accept_Deal_Terms",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_9",
+              "targetId": "Task_Schedule_Home_Delivery",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-00134",
+              "apiName": "Digital Retailing Journey — E-Sign All Documents API",
+              "method": "PUT",
+              "endpoint": "/api/v1/sales-distribution/digital-sales/digital-retailing-journey/e-sign-all-documents",
+              "apiType": "Task Support API",
+              "lifecycle": "Proposed",
+              "provider": "LLM-056",
+              "consumer": "LLM-007",
+              "internal": false,
+              "host": "SRV-002270",
+              "requestObject": "DO-073",
+              "responseObject": "DO-073"
+            }
+          ]
+        },
+        {
+          "sequence": 9,
+          "id": "Task_Schedule_Home_Delivery",
+          "name": "Schedule Home Delivery",
+          "type": "task",
+          "laneId": "Lane_Customer",
+          "laneName": "Customer",
+          "diagramApplications": [
+            "DIGITAL-RETAIL"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_9",
+              "sourceId": "Task_E_Sign_All_Documents",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_10",
+              "targetId": "Task_Process_Complete_Transaction",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-00135",
+              "apiName": "Digital Retailing Journey — Schedule Home Delivery API",
+              "method": "POST",
+              "endpoint": "/api/v1/sales-distribution/digital-sales/digital-retailing-journey/schedule-home-delivery",
+              "apiType": "Task Support API",
+              "lifecycle": "Proposed",
+              "provider": "LLM-056",
+              "consumer": "LLM-007",
+              "internal": false,
+              "host": "SRV-002265",
+              "requestObject": "DO-011",
+              "responseObject": "DO-011"
+            }
+          ]
+        },
+        {
+          "sequence": 10,
+          "id": "Task_Process_Complete_Transaction",
+          "name": "Process Complete Transaction",
+          "type": "task",
+          "laneId": "Lane_System",
+          "laneName": "System",
+          "diagramApplications": [
+            "FINANCE-HUB"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_10",
+              "sourceId": "Task_Schedule_Home_Delivery",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_11",
+              "targetId": "EndEvent_1",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-00136",
+              "apiName": "Digital Retailing Journey — Process Complete Transaction API",
+              "method": "POST",
+              "endpoint": "/api/v1/sales-distribution/digital-sales/digital-retailing-journey/process-complete-transaction",
+              "apiType": "System Service API",
+              "lifecycle": "Proposed",
+              "provider": "LLM-007",
+              "consumer": "LLM-056",
+              "internal": false,
+              "host": "SRV-000892",
+              "requestObject": "DO-056",
+              "responseObject": "DO-074"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "diagramId": "6a713615bb42b57871f0de62",
+      "name": "Customer Credit Application",
+      "businessFlow": "Customer Credit Application",
+      "domain": "Finance & Insurance",
+      "subdomain": "Vehicle Financing",
+      "processId": "Process_Customer_Credit_Application",
+      "processName": "",
+      "isExecutable": false,
+      "collaborationId": "",
+      "participantId": "",
+      "participantName": "",
+      "lanes": [
+        {
+          "id": "Lane_F_I_Manager",
+          "name": "F&I Manager"
+        },
+        {
+          "id": "Lane_System",
+          "name": "System"
+        },
+        {
+          "id": "Lane_Customer",
+          "name": "Customer"
+        }
+      ],
+      "events": [
+        {
+          "id": "StartEvent_1",
+          "name": "Start",
+          "type": "startEvent",
+          "laneId": "Lane_F_I_Manager",
+          "incoming": [],
+          "outgoing": [
+            {
+              "id": "Flow_1",
+              "targetId": "Task_Collect_Customer_Financial_Info"
+            }
+          ]
+        },
+        {
+          "id": "EndEvent_1",
+          "name": "End",
+          "type": "endEvent",
+          "laneId": "Lane_System",
+          "incoming": [
+            {
+              "id": "Flow_11",
+              "sourceId": "Task_Generate_Loan_Documents"
+            }
+          ],
+          "outgoing": []
+        }
+      ],
+      "sequenceFlows": [
+        {
+          "id": "Flow_1",
+          "sourceId": "StartEvent_1",
+          "targetId": "Task_Collect_Customer_Financial_Info",
+          "name": ""
+        },
+        {
+          "id": "Flow_2",
+          "sourceId": "Task_Collect_Customer_Financial_Info",
+          "targetId": "Task_Pull_Credit_Bureau_Report",
+          "name": ""
+        },
+        {
+          "id": "Flow_3",
+          "sourceId": "Task_Pull_Credit_Bureau_Report",
+          "targetId": "Task_Calculate_Credit_Score",
+          "name": ""
+        },
+        {
+          "id": "Flow_4",
+          "sourceId": "Task_Calculate_Credit_Score",
+          "targetId": "Task_Match_to_Lender_Programs",
+          "name": ""
+        },
+        {
+          "id": "Flow_5",
+          "sourceId": "Task_Match_to_Lender_Programs",
+          "targetId": "Task_Submit_to_Multiple_Lenders",
+          "name": ""
+        },
+        {
+          "id": "Flow_6",
+          "sourceId": "Task_Submit_to_Multiple_Lenders",
+          "targetId": "Task_Receive_Lender_Decisions",
+          "name": ""
+        },
+        {
+          "id": "Flow_7",
+          "sourceId": "Task_Receive_Lender_Decisions",
+          "targetId": "Task_Select_Best_Financing_Offer",
+          "name": ""
+        },
+        {
+          "id": "Flow_8",
+          "sourceId": "Task_Select_Best_Financing_Offer",
+          "targetId": "Task_Present_Terms_to_Customer",
+          "name": ""
+        },
+        {
+          "id": "Flow_9",
+          "sourceId": "Task_Present_Terms_to_Customer",
+          "targetId": "Task_Customer_Accepts_Terms",
+          "name": ""
+        },
+        {
+          "id": "Flow_10",
+          "sourceId": "Task_Customer_Accepts_Terms",
+          "targetId": "Task_Generate_Loan_Documents",
+          "name": ""
+        },
+        {
+          "id": "Flow_11",
+          "sourceId": "Task_Generate_Loan_Documents",
+          "targetId": "EndEvent_1",
+          "name": ""
+        }
+      ],
+      "tasks": [
+        {
+          "sequence": 1,
+          "id": "Task_Collect_Customer_Financial_Info",
+          "name": "Collect Customer Financial Info",
+          "type": "task",
+          "laneId": "Lane_F_I_Manager",
+          "laneName": "F&I Manager",
+          "diagramApplications": [
+            "CREDIT-DECIDE"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_1",
+              "sourceId": "StartEvent_1",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_2",
+              "targetId": "Task_Pull_Credit_Bureau_Report",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-00170",
+              "apiName": "Customer Credit Application — Collect Customer Financial Info API",
+              "method": "POST",
+              "endpoint": "/api/v1/finance-insurance/vehicle-financing/customer-credit-application/collect-customer-financial-info",
+              "apiType": "Task Support API",
+              "lifecycle": "Proposed",
+              "provider": "LLM-015",
+              "consumer": "LLM-004",
+              "internal": false,
+              "host": "SRV-001118",
+              "requestObject": "DO-018",
+              "responseObject": "DO-018"
+            }
+          ]
+        },
+        {
+          "sequence": 2,
+          "id": "Task_Pull_Credit_Bureau_Report",
+          "name": "Pull Credit Bureau Report",
+          "type": "task",
+          "laneId": "Lane_System",
+          "laneName": "System",
+          "diagramApplications": [
+            "CREDIT-DECIDE"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_2",
+              "sourceId": "Task_Collect_Customer_Financial_Info",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_3",
+              "targetId": "Task_Calculate_Credit_Score",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-00171",
+              "apiName": "Customer Credit Application — Pull Credit Bureau Report API",
+              "method": "POST",
+              "endpoint": "/api/v1/finance-insurance/vehicle-financing/customer-credit-application/pull-credit-bureau-report",
+              "apiType": "System Service API",
+              "lifecycle": "Proposed",
+              "provider": "LLM-015",
+              "consumer": "LLM-004",
+              "internal": false,
+              "host": "SRV-001131",
+              "requestObject": "DO-014",
+              "responseObject": "DO-074"
+            }
+          ]
+        },
+        {
+          "sequence": 3,
+          "id": "Task_Calculate_Credit_Score",
+          "name": "Calculate Credit Score",
+          "type": "task",
+          "laneId": "Lane_System",
+          "laneName": "System",
+          "diagramApplications": [
+            "CREDIT-DECIDE"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_3",
+              "sourceId": "Task_Pull_Credit_Bureau_Report",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_4",
+              "targetId": "Task_Match_to_Lender_Programs",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-00172",
+              "apiName": "Customer Credit Application — Calculate Credit Score API",
+              "method": "GET",
+              "endpoint": "/api/v1/finance-insurance/vehicle-financing/customer-credit-application/calculate-credit-score",
+              "apiType": "System Service API",
+              "lifecycle": "Proposed",
+              "provider": "LLM-015",
+              "consumer": "LLM-004",
+              "internal": false,
+              "host": "SRV-001124",
+              "requestObject": "",
+              "responseObject": "DO-014"
+            }
+          ]
+        },
+        {
+          "sequence": 4,
+          "id": "Task_Match_to_Lender_Programs",
+          "name": "Match to Lender Programs",
+          "type": "task",
+          "laneId": "Lane_System",
+          "laneName": "System",
+          "diagramApplications": [
+            "CREDIT-DECIDE"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_4",
+              "sourceId": "Task_Calculate_Credit_Score",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_5",
+              "targetId": "Task_Submit_to_Multiple_Lenders",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-00173",
+              "apiName": "Customer Credit Application — Match to Lender Programs API",
+              "method": "POST",
+              "endpoint": "/api/v1/finance-insurance/vehicle-financing/customer-credit-application/match-to-lender-programs",
+              "apiType": "System Service API",
+              "lifecycle": "Proposed",
+              "provider": "LLM-015",
+              "consumer": "LLM-004",
+              "internal": false,
+              "host": "SRV-001123",
+              "requestObject": "DO-016",
+              "responseObject": "DO-074"
+            }
+          ]
+        },
+        {
+          "sequence": 5,
+          "id": "Task_Submit_to_Multiple_Lenders",
+          "name": "Submit to Multiple Lenders",
+          "type": "task",
+          "laneId": "Lane_System",
+          "laneName": "System",
+          "diagramApplications": [
+            "CREDIT-DECIDE"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_5",
+              "sourceId": "Task_Match_to_Lender_Programs",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_6",
+              "targetId": "Task_Receive_Lender_Decisions",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-00174",
+              "apiName": "Customer Credit Application — Submit to Multiple Lenders API",
+              "method": "POST",
+              "endpoint": "/api/v1/finance-insurance/vehicle-financing/customer-credit-application/submit-to-multiple-lenders",
+              "apiType": "System Service API",
+              "lifecycle": "Proposed",
+              "provider": "LLM-015",
+              "consumer": "LLM-004",
+              "internal": false,
+              "host": "SRV-001131",
+              "requestObject": "DO-016",
+              "responseObject": "DO-074"
+            }
+          ]
+        },
+        {
+          "sequence": 6,
+          "id": "Task_Receive_Lender_Decisions",
+          "name": "Receive Lender Decisions",
+          "type": "task",
+          "laneId": "Lane_System",
+          "laneName": "System",
+          "diagramApplications": [
+            "CREDIT-DECIDE"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_6",
+              "sourceId": "Task_Submit_to_Multiple_Lenders",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_7",
+              "targetId": "Task_Select_Best_Financing_Offer",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-00175",
+              "apiName": "Customer Credit Application — Receive Lender Decisions API",
+              "method": "POST",
+              "endpoint": "/api/v1/finance-insurance/vehicle-financing/customer-credit-application/receive-lender-decisions",
+              "apiType": "System Service API",
+              "lifecycle": "Proposed",
+              "provider": "LLM-015",
+              "consumer": "LLM-004",
+              "internal": false,
+              "host": "SRV-001128",
+              "requestObject": "DO-015",
+              "responseObject": "DO-015"
+            }
+          ]
+        },
+        {
+          "sequence": 7,
+          "id": "Task_Select_Best_Financing_Offer",
+          "name": "Select Best Financing Offer",
+          "type": "task",
+          "laneId": "Lane_F_I_Manager",
+          "laneName": "F&I Manager",
+          "diagramApplications": [
+            "CREDIT-DECIDE"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_7",
+              "sourceId": "Task_Receive_Lender_Decisions",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_8",
+              "targetId": "Task_Present_Terms_to_Customer",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-00176",
+              "apiName": "Customer Credit Application — Select Best Financing Offer API",
+              "method": "POST",
+              "endpoint": "/api/v1/finance-insurance/vehicle-financing/customer-credit-application/select-best-financing-offer",
+              "apiType": "Task Support API",
+              "lifecycle": "Proposed",
+              "provider": "LLM-015",
+              "consumer": "LLM-004",
+              "internal": false,
+              "host": "SRV-001123",
+              "requestObject": "DO-007",
+              "responseObject": "DO-007"
+            }
+          ]
+        },
+        {
+          "sequence": 8,
+          "id": "Task_Present_Terms_to_Customer",
+          "name": "Present Terms to Customer",
+          "type": "task",
+          "laneId": "Lane_F_I_Manager",
+          "laneName": "F&I Manager",
+          "diagramApplications": [
+            "DEALER-NET"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_8",
+              "sourceId": "Task_Select_Best_Financing_Offer",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_9",
+              "targetId": "Task_Customer_Accepts_Terms",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-00177",
+              "apiName": "Customer Credit Application — Present Terms to Customer API",
+              "method": "POST",
+              "endpoint": "/api/v1/finance-insurance/vehicle-financing/customer-credit-application/present-terms-to-customer",
+              "apiType": "Task Support API",
+              "lifecycle": "Proposed",
+              "provider": "LLM-004",
+              "consumer": "LLM-015",
+              "internal": false,
+              "host": "SRV-000822",
+              "requestObject": "DO-014",
+              "responseObject": "DO-014"
+            }
+          ]
+        },
+        {
+          "sequence": 9,
+          "id": "Task_Customer_Accepts_Terms",
+          "name": "Customer Accepts Terms",
+          "type": "task",
+          "laneId": "Lane_Customer",
+          "laneName": "Customer",
+          "diagramApplications": [
+            "DEALER-NET"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_9",
+              "sourceId": "Task_Present_Terms_to_Customer",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_10",
+              "targetId": "Task_Generate_Loan_Documents",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-00178",
+              "apiName": "Customer Credit Application — Customer Accepts Terms API",
+              "method": "POST",
+              "endpoint": "/api/v1/finance-insurance/vehicle-financing/customer-credit-application/customer-accepts-terms",
+              "apiType": "Task Support API",
+              "lifecycle": "Proposed",
+              "provider": "LLM-004",
+              "consumer": "LLM-015",
+              "internal": false,
+              "host": "SRV-000820",
+              "requestObject": "DO-014",
+              "responseObject": "DO-014"
+            }
+          ]
+        },
+        {
+          "sequence": 10,
+          "id": "Task_Generate_Loan_Documents",
+          "name": "Generate Loan Documents",
+          "type": "task",
+          "laneId": "Lane_System",
+          "laneName": "System",
+          "diagramApplications": [
+            "CREDIT-DECIDE"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_10",
+              "sourceId": "Task_Customer_Accepts_Terms",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_11",
+              "targetId": "EndEvent_1",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-00179",
+              "apiName": "Customer Credit Application — Generate Loan Documents API",
+              "method": "PUT",
+              "endpoint": "/api/v1/finance-insurance/vehicle-financing/customer-credit-application/generate-loan-documents",
+              "apiType": "System Service API",
+              "lifecycle": "Proposed",
+              "provider": "LLM-015",
+              "consumer": "LLM-004",
+              "internal": false,
+              "host": "SRV-001124",
+              "requestObject": "DO-016",
+              "responseObject": "DO-016"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "diagramId": "6a71367fbb42b57871f0e363",
+      "name": "Warranty Contract Execution",
+      "businessFlow": "Warranty Contract Execution",
+      "domain": "Warranty & Protection Services",
+      "subdomain": "Contract Administration",
+      "processId": "Process_Warranty_Contract_Execution",
+      "processName": "",
+      "isExecutable": false,
+      "collaborationId": "",
+      "participantId": "",
+      "participantName": "",
+      "lanes": [
+        {
+          "id": "Lane_Warranty_Salesman",
+          "name": "Warranty Salesman"
+        },
+        {
+          "id": "Lane_Customer",
+          "name": "Customer"
+        },
+        {
+          "id": "Lane_Manager",
+          "name": "Manager"
+        }
+      ],
+      "events": [
+        {
+          "id": "StartEvent_1",
+          "name": "Start",
+          "type": "startEvent",
+          "laneId": "Lane_Warranty_Salesman",
+          "incoming": [],
+          "outgoing": [
+            {
+              "id": "Flow_1",
+              "targetId": "Task_Confirm_Customer_Purchase_Decision"
+            }
+          ]
+        },
+        {
+          "id": "EndEvent_1",
+          "name": "End",
+          "type": "endEvent",
+          "laneId": "Lane_Warranty_Salesman",
+          "incoming": [
+            {
+              "id": "Flow_12",
+              "sourceId": "Task_Receive_Contract_Confirmation_Number"
+            }
+          ],
+          "outgoing": []
+        }
+      ],
+      "sequenceFlows": [
+        {
+          "id": "Flow_1",
+          "sourceId": "StartEvent_1",
+          "targetId": "Task_Confirm_Customer_Purchase_Decision",
+          "name": ""
+        },
+        {
+          "id": "Flow_2",
+          "sourceId": "Task_Confirm_Customer_Purchase_Decision",
+          "targetId": "Task_Select_Payment_Method",
+          "name": ""
+        },
+        {
+          "id": "Flow_3",
+          "sourceId": "Task_Select_Payment_Method",
+          "targetId": "Task_Calculate_Monthly_Payment_if_Financed",
+          "name": ""
+        },
+        {
+          "id": "Flow_4",
+          "sourceId": "Task_Calculate_Monthly_Payment_if_Financed",
+          "targetId": "Task_Generate_Warranty_Contract_Document",
+          "name": ""
+        },
+        {
+          "id": "Flow_5",
+          "sourceId": "Task_Generate_Warranty_Contract_Document",
+          "targetId": "Task_Review_Contract_Terms_with_Customer",
+          "name": ""
+        },
+        {
+          "id": "Flow_6",
+          "sourceId": "Task_Review_Contract_Terms_with_Customer",
+          "targetId": "Task_Customer_Signs_Contract_Electronically",
+          "name": ""
+        },
+        {
+          "id": "Flow_7",
+          "sourceId": "Task_Customer_Signs_Contract_Electronically",
+          "targetId": "Task_Witness_and_Verify_Signature",
+          "name": ""
+        },
+        {
+          "id": "Flow_8",
+          "sourceId": "Task_Witness_and_Verify_Signature",
+          "targetId": "Task_Manager_Final_Review_Approval",
+          "name": ""
+        },
+        {
+          "id": "Flow_9",
+          "sourceId": "Task_Manager_Final_Review_Approval",
+          "targetId": "Task_Process_Payment_Transaction",
+          "name": ""
+        },
+        {
+          "id": "Flow_10",
+          "sourceId": "Task_Process_Payment_Transaction",
+          "targetId": "Task_Submit_Contract_to_VSC_Administrator",
+          "name": ""
+        },
+        {
+          "id": "Flow_11",
+          "sourceId": "Task_Submit_Contract_to_VSC_Administrator",
+          "targetId": "Task_Receive_Contract_Confirmation_Number",
+          "name": ""
+        },
+        {
+          "id": "Flow_12",
+          "sourceId": "Task_Receive_Contract_Confirmation_Number",
+          "targetId": "EndEvent_1",
+          "name": ""
+        }
+      ],
+      "tasks": [
+        {
+          "sequence": 1,
+          "id": "Task_Confirm_Customer_Purchase_Decision",
+          "name": "Confirm Customer Purchase Decision",
+          "type": "task",
+          "laneId": "Lane_Warranty_Salesman",
+          "laneName": "Warranty Salesman",
+          "diagramApplications": [
+            "WARRANTY-SALES"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_1",
+              "sourceId": "StartEvent_1",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_2",
+              "targetId": "Task_Select_Payment_Method",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-00028",
+              "apiName": "Warranty Contract Execution — Confirm Customer Purchase Decision API",
+              "method": "POST",
+              "endpoint": "/api/v1/warranty-protection-services/contract-administration/warranty-contract-execution/confirm-customer-purchase-decision",
+              "apiType": "Task Support API",
+              "lifecycle": "Proposed",
+              "provider": "LLM-071",
+              "consumer": "LLM-004",
+              "internal": false,
+              "host": "SRV-002730",
+              "requestObject": "DO-025",
+              "responseObject": "DO-025"
+            }
+          ]
+        },
+        {
+          "sequence": 2,
+          "id": "Task_Select_Payment_Method",
+          "name": "Select Payment Method",
+          "type": "task",
+          "laneId": "Lane_Customer",
+          "laneName": "Customer",
+          "diagramApplications": [
+            "DEALER-NET"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_2",
+              "sourceId": "Task_Confirm_Customer_Purchase_Decision",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_3",
+              "targetId": "Task_Calculate_Monthly_Payment_if_Financed",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-00029",
+              "apiName": "Warranty Contract Execution — Select Payment Method API",
+              "method": "POST",
+              "endpoint": "/api/v1/warranty-protection-services/contract-administration/warranty-contract-execution/select-payment-method",
+              "apiType": "Task Support API",
+              "lifecycle": "Proposed",
+              "provider": "LLM-004",
+              "consumer": "LLM-015",
+              "internal": false,
+              "host": "SRV-DEALER-NET-006",
+              "requestObject": "DO-018",
+              "responseObject": "DO-018"
+            }
+          ]
+        },
+        {
+          "sequence": 3,
+          "id": "Task_Calculate_Monthly_Payment_if_Financed",
+          "name": "Calculate Monthly Payment if Financed",
+          "type": "task",
+          "laneId": "Lane_Warranty_Salesman",
+          "laneName": "Warranty Salesman",
+          "diagramApplications": [
+            "CREDIT-DECIDE"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_3",
+              "sourceId": "Task_Select_Payment_Method",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_4",
+              "targetId": "Task_Generate_Warranty_Contract_Document",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-00030",
+              "apiName": "Warranty Contract Execution — Calculate Monthly Payment if Financed API",
+              "method": "GET",
+              "endpoint": "/api/v1/warranty-protection-services/contract-administration/warranty-contract-execution/calculate-monthly-payment-if-financed",
+              "apiType": "System Service API",
+              "lifecycle": "Proposed",
+              "provider": "LLM-015",
+              "consumer": "LLM-072",
+              "internal": false,
+              "host": "SRV-001128",
+              "requestObject": "",
+              "responseObject": "DO-025"
+            }
+          ]
+        },
+        {
+          "sequence": 4,
+          "id": "Task_Generate_Warranty_Contract_Document",
+          "name": "Generate Warranty Contract Document",
+          "type": "task",
+          "laneId": "Lane_Warranty_Salesman",
+          "laneName": "Warranty Salesman",
+          "diagramApplications": [
+            "VSC-ADMIN"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_4",
+              "sourceId": "Task_Calculate_Monthly_Payment_if_Financed",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_5",
+              "targetId": "Task_Review_Contract_Terms_with_Customer",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-00031",
+              "apiName": "Warranty Contract Execution — Generate Warranty Contract Document API",
+              "method": "PUT",
+              "endpoint": "/api/v1/warranty-protection-services/contract-administration/warranty-contract-execution/generate-warranty-contract-document",
+              "apiType": "System Service API",
+              "lifecycle": "Proposed",
+              "provider": "LLM-072",
+              "consumer": "LLM-071",
+              "internal": false,
+              "host": "SRV-002775",
+              "requestObject": "DO-025",
+              "responseObject": "DO-025"
+            }
+          ]
+        },
+        {
+          "sequence": 5,
+          "id": "Task_Review_Contract_Terms_with_Customer",
+          "name": "Review Contract Terms with Customer",
+          "type": "task",
+          "laneId": "Lane_Warranty_Salesman",
+          "laneName": "Warranty Salesman",
+          "diagramApplications": [
+            "WARRANTY-SALES"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_5",
+              "sourceId": "Task_Generate_Warranty_Contract_Document",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_6",
+              "targetId": "Task_Customer_Signs_Contract_Electronically",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-00032",
+              "apiName": "Warranty Contract Execution — Review Contract Terms with Customer API",
+              "method": "GET",
+              "endpoint": "/api/v1/warranty-protection-services/contract-administration/warranty-contract-execution/review-contract-terms-with-customer",
+              "apiType": "Task Support API",
+              "lifecycle": "Proposed",
+              "provider": "LLM-071",
+              "consumer": "LLM-056",
+              "internal": false,
+              "host": "SRV-002720",
+              "requestObject": "",
+              "responseObject": "DO-025"
+            }
+          ]
+        },
+        {
+          "sequence": 6,
+          "id": "Task_Customer_Signs_Contract_Electronically",
+          "name": "Customer Signs Contract Electronically",
+          "type": "task",
+          "laneId": "Lane_Customer",
+          "laneName": "Customer",
+          "diagramApplications": [
+            "DIGITAL-RETAIL"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_6",
+              "sourceId": "Task_Review_Contract_Terms_with_Customer",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_7",
+              "targetId": "Task_Witness_and_Verify_Signature",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-00033",
+              "apiName": "Warranty Contract Execution — Customer Signs Contract Electronically API",
+              "method": "POST",
+              "endpoint": "/api/v1/warranty-protection-services/contract-administration/warranty-contract-execution/customer-signs-contract-electronically",
+              "apiType": "Task Support API",
+              "lifecycle": "Proposed",
+              "provider": "LLM-056",
+              "consumer": "LLM-004",
+              "internal": false,
+              "host": "SRV-002261",
+              "requestObject": "DO-010",
+              "responseObject": "DO-010"
+            }
+          ]
+        },
+        {
+          "sequence": 7,
+          "id": "Task_Witness_and_Verify_Signature",
+          "name": "Witness and Verify Signature",
+          "type": "task",
+          "laneId": "Lane_Warranty_Salesman",
+          "laneName": "Warranty Salesman",
+          "diagramApplications": [
+            "DEALER-NET"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_7",
+              "sourceId": "Task_Customer_Signs_Contract_Electronically",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_8",
+              "targetId": "Task_Manager_Final_Review_Approval",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-00034",
+              "apiName": "Warranty Contract Execution — Witness and Verify Signature API",
+              "method": "GET",
+              "endpoint": "/api/v1/warranty-protection-services/contract-administration/warranty-contract-execution/witness-and-verify-signature",
+              "apiType": "Task Support API",
+              "lifecycle": "Proposed",
+              "provider": "LLM-004",
+              "consumer": "LLM-007",
+              "internal": false,
+              "host": "SRV-000822",
+              "requestObject": "",
+              "responseObject": "DO-025"
+            }
+          ]
+        },
+        {
+          "sequence": 8,
+          "id": "Task_Manager_Final_Review_Approval",
+          "name": "Manager Final Review & Approval",
+          "type": "task",
+          "laneId": "Lane_Manager",
+          "laneName": "Manager",
+          "diagramApplications": [
+            "DEALER-NET"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_8",
+              "sourceId": "Task_Witness_and_Verify_Signature",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_9",
+              "targetId": "Task_Process_Payment_Transaction",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-00035",
+              "apiName": "Warranty Contract Execution — Manager Final Review & Approval API",
+              "method": "GET",
+              "endpoint": "/api/v1/warranty-protection-services/contract-administration/warranty-contract-execution/manager-final-review-approval",
+              "apiType": "Task Support API",
+              "lifecycle": "Proposed",
+              "provider": "LLM-004",
+              "consumer": "LLM-007",
+              "internal": false,
+              "host": "SRV-DEALER-NET-001",
+              "requestObject": "",
+              "responseObject": "DO-025"
+            }
+          ]
+        },
+        {
+          "sequence": 9,
+          "id": "Task_Process_Payment_Transaction",
+          "name": "Process Payment Transaction",
+          "type": "task",
+          "laneId": "Lane_Warranty_Salesman",
+          "laneName": "Warranty Salesman",
+          "diagramApplications": [
+            "FINANCE-HUB"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_9",
+              "sourceId": "Task_Manager_Final_Review_Approval",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_10",
+              "targetId": "Task_Submit_Contract_to_VSC_Administrator",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-00036",
+              "apiName": "Warranty Contract Execution — Process Payment Transaction API",
+              "method": "POST",
+              "endpoint": "/api/v1/warranty-protection-services/contract-administration/warranty-contract-execution/process-payment-transaction",
+              "apiType": "System Service API",
+              "lifecycle": "Proposed",
+              "provider": "LLM-007",
+              "consumer": "LLM-072",
+              "internal": false,
+              "host": "SRV-000903",
+              "requestObject": "DO-018",
+              "responseObject": "DO-074"
+            }
+          ]
+        },
+        {
+          "sequence": 10,
+          "id": "Task_Submit_Contract_to_VSC_Administrator",
+          "name": "Submit Contract to VSC Administrator",
+          "type": "task",
+          "laneId": "Lane_Warranty_Salesman",
+          "laneName": "Warranty Salesman",
+          "diagramApplications": [
+            "VSC-ADMIN"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_10",
+              "sourceId": "Task_Process_Payment_Transaction",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_11",
+              "targetId": "Task_Receive_Contract_Confirmation_Number",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-00037",
+              "apiName": "Warranty Contract Execution — Submit Contract to VSC Administrator API",
+              "method": "POST",
+              "endpoint": "/api/v1/warranty-protection-services/contract-administration/warranty-contract-execution/submit-contract-to-vsc-administrator",
+              "apiType": "System Service API",
+              "lifecycle": "Proposed",
+              "provider": "LLM-072",
+              "consumer": "LLM-007",
+              "internal": false,
+              "host": "SRV-002761",
+              "requestObject": "DO-025",
+              "responseObject": "DO-074"
+            }
+          ]
+        },
+        {
+          "sequence": 11,
+          "id": "Task_Receive_Contract_Confirmation_Number",
+          "name": "Receive Contract Confirmation Number",
+          "type": "task",
+          "laneId": "Lane_Warranty_Salesman",
+          "laneName": "Warranty Salesman",
+          "diagramApplications": [
+            "VSC-ADMIN"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_11",
+              "sourceId": "Task_Submit_Contract_to_VSC_Administrator",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_12",
+              "targetId": "EndEvent_1",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-00038",
+              "apiName": "Warranty Contract Execution — Receive Contract Confirmation Number API",
+              "method": "POST",
+              "endpoint": "/api/v1/warranty-protection-services/contract-administration/warranty-contract-execution/receive-contract-confirmation-number",
+              "apiType": "System Service API",
+              "lifecycle": "Proposed",
+              "provider": "LLM-072",
+              "consumer": "LLM-007",
+              "internal": false,
+              "host": "SRV-002759",
+              "requestObject": "DO-025",
+              "responseObject": "DO-074"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "discovered": true,
+      "diagramId": "",
+      "name": "Vehicle Feature & Package Upsell",
+      "businessFlow": "Vehicle Feature & Package Upsell",
+      "domain": "Sales & Distribution",
+      "subdomain": "New Vehicle Sales",
+      "processId": "Process_Vehicle_Feature_Package_Upsell",
+      "processName": "",
+      "isExecutable": false,
+      "collaborationId": "",
+      "participantId": "",
+      "participantName": "",
+      "abandonRate": 0.12,
+      "lanes": [
+        {
+          "id": "Lane_Customer",
+          "name": "Customer"
+        },
+        {
+          "id": "Lane_Sales_Consultant",
+          "name": "Sales Consultant"
+        },
+        {
+          "id": "Lane_System",
+          "name": "System"
+        }
+      ],
+      "events": [
+        {
+          "id": "StartEvent_1",
+          "name": "Customer Reaches Configuration Review",
+          "type": "startEvent",
+          "laneId": "Lane_System",
+          "incoming": [],
+          "outgoing": [
+            {
+              "id": "Flow_1",
+              "targetId": "Task_Retrieve_Customer_Profile_Purchase_Intent"
+            }
+          ]
+        },
+        {
+          "id": "EndEvent_1",
+          "name": "Upgrade Added to Order",
+          "type": "endEvent",
+          "laneId": "Lane_System",
+          "incoming": [
+            {
+              "id": "Flow_13",
+              "sourceId": "Task_Record_Upsell_Revenue"
+            }
+          ],
+          "outgoing": []
+        }
+      ],
+      "sequenceFlows": [
+        {
+          "id": "Flow_1",
+          "sourceId": "StartEvent_1",
+          "targetId": "Task_Retrieve_Customer_Profile_Purchase_Intent",
+          "name": ""
+        },
+        {
+          "id": "Flow_2",
+          "sourceId": "Task_Retrieve_Customer_Profile_Purchase_Intent",
+          "targetId": "Task_Score_Upsell_Propensity",
+          "name": ""
+        },
+        {
+          "id": "Flow_3",
+          "sourceId": "Task_Score_Upsell_Propensity",
+          "targetId": "Task_Generate_Package_Recommendations",
+          "name": ""
+        },
+        {
+          "id": "Flow_4",
+          "sourceId": "Task_Generate_Package_Recommendations",
+          "targetId": "Task_Apply_Eligible_Incentives",
+          "name": ""
+        },
+        {
+          "id": "Flow_5",
+          "sourceId": "Task_Apply_Eligible_Incentives",
+          "targetId": "Task_Present_Upgrade_Packages",
+          "name": ""
+        },
+        {
+          "id": "Flow_6",
+          "sourceId": "Task_Present_Upgrade_Packages",
+          "targetId": "Task_Customer_Configures_Packages",
+          "name": ""
+        },
+        {
+          "id": "Flow_7",
+          "sourceId": "Task_Customer_Configures_Packages",
+          "targetId": "Task_Validate_Package_Compatibility",
+          "name": ""
+        },
+        {
+          "id": "Flow_8",
+          "sourceId": "Task_Validate_Package_Compatibility",
+          "targetId": "Task_Reprice_Upgraded_Configuration",
+          "name": ""
+        },
+        {
+          "id": "Flow_9",
+          "sourceId": "Task_Reprice_Upgraded_Configuration",
+          "targetId": "Task_Recalculate_Monthly_Payment",
+          "name": ""
+        },
+        {
+          "id": "Flow_10",
+          "sourceId": "Task_Recalculate_Monthly_Payment",
+          "targetId": "Task_Customer_Accepts_Upgrade_Offer",
+          "name": ""
+        },
+        {
+          "id": "Flow_11",
+          "sourceId": "Task_Customer_Accepts_Upgrade_Offer",
+          "targetId": "Task_Update_Vehicle_Order",
+          "name": ""
+        },
+        {
+          "id": "Flow_12",
+          "sourceId": "Task_Update_Vehicle_Order",
+          "targetId": "Task_Record_Upsell_Revenue",
+          "name": ""
+        },
+        {
+          "id": "Flow_13",
+          "sourceId": "Task_Record_Upsell_Revenue",
+          "targetId": "EndEvent_1",
+          "name": ""
+        }
+      ],
+      "tasks": [
+        {
+          "sequence": 1,
+          "id": "Task_Retrieve_Customer_Profile_Purchase_Intent",
+          "name": "Retrieve Customer Profile & Purchase Intent",
+          "type": "task",
+          "laneId": "Lane_System",
+          "laneName": "System",
+          "diagramApplications": [
+            "CRM-360"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_1",
+              "sourceId": "StartEvent_1",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_2",
+              "targetId": "Task_Score_Upsell_Propensity",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-U001",
+              "apiName": "Vehicle Feature & Package Upsell — Retrieve Customer Profile & Purchase Intent API",
+              "method": "GET",
+              "endpoint": "/api/v1/sales-distribution/new-vehicle-sales/vehicle-feature-package-upsell/customer-profile-intent",
+              "apiType": "Task Support API",
+              "lifecycle": "Production",
+              "provider": "LLM-005",
+              "consumer": "LLM-099",
+              "internal": false,
+              "host": "SRV-000870",
+              "requestObject": "",
+              "responseObject": "DO-001"
+            }
+          ]
+        },
+        {
+          "sequence": 2,
+          "id": "Task_Score_Upsell_Propensity",
+          "name": "Score Upsell Propensity",
+          "type": "task",
+          "laneId": "Lane_System",
+          "laneName": "System",
+          "diagramApplications": [
+            "ANALYTICS-HUB"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_2",
+              "sourceId": "Task_Retrieve_Customer_Profile_Purchase_Intent",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_3",
+              "targetId": "Task_Generate_Package_Recommendations",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-U002",
+              "apiName": "Vehicle Feature & Package Upsell — Score Upsell Propensity API",
+              "method": "POST",
+              "endpoint": "/api/v1/sales-distribution/new-vehicle-sales/vehicle-feature-package-upsell/upsell-propensity",
+              "apiType": "Task Support API",
+              "lifecycle": "Production",
+              "provider": "LLM-099",
+              "consumer": "LLM-011",
+              "internal": false,
+              "host": "SRV-003600",
+              "requestObject": "DO-001",
+              "responseObject": "DO-U01"
+            }
+          ]
+        },
+        {
+          "sequence": 3,
+          "id": "Task_Generate_Package_Recommendations",
+          "name": "Generate Leather, Performance & Color Package Recommendations",
+          "type": "task",
+          "laneId": "Lane_System",
+          "laneName": "System",
+          "diagramApplications": [
+            "SALES-CONFIG"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_3",
+              "sourceId": "Task_Score_Upsell_Propensity",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_4",
+              "targetId": "Task_Apply_Eligible_Incentives",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-U003",
+              "apiName": "Vehicle Feature & Package Upsell — Generate Leather, Performance & Color Package Recommendations API",
+              "method": "POST",
+              "endpoint": "/api/v1/sales-distribution/new-vehicle-sales/vehicle-feature-package-upsell/package-recommendations",
+              "apiType": "Task Support API",
+              "lifecycle": "Production",
+              "provider": "LLM-011",
+              "consumer": "LLM-096",
+              "internal": false,
+              "host": "SRV-001003",
+              "requestObject": "DO-005",
+              "responseObject": "DO-U01"
+            }
+          ]
+        },
+        {
+          "sequence": 4,
+          "id": "Task_Apply_Eligible_Incentives",
+          "name": "Apply Eligible Incentives & Package Discounts",
+          "type": "task",
+          "laneId": "Lane_System",
+          "laneName": "System",
+          "diagramApplications": [
+            "PRICING-ENGINE"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_4",
+              "sourceId": "Task_Generate_Package_Recommendations",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_5",
+              "targetId": "Task_Present_Upgrade_Packages",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-U004",
+              "apiName": "Vehicle Feature & Package Upsell — Apply Eligible Incentives & Package Discounts API",
+              "method": "POST",
+              "endpoint": "/api/v1/sales-distribution/new-vehicle-sales/vehicle-feature-package-upsell/package-incentives",
+              "apiType": "Task Support API",
+              "lifecycle": "Production",
+              "provider": "LLM-096",
+              "consumer": "LLM-004",
+              "internal": false,
+              "host": "SRV-003509",
+              "requestObject": "DO-U01",
+              "responseObject": "DO-064"
+            }
+          ]
+        },
+        {
+          "sequence": 5,
+          "id": "Task_Present_Upgrade_Packages",
+          "name": "Present Upgrade Packages to Customer",
+          "type": "task",
+          "laneId": "Lane_Sales_Consultant",
+          "laneName": "Sales Consultant",
+          "diagramApplications": [
+            "DEALER-NET"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_5",
+              "sourceId": "Task_Apply_Eligible_Incentives",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_6",
+              "targetId": "Task_Customer_Configures_Packages",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-U005",
+              "apiName": "Vehicle Feature & Package Upsell — Present Upgrade Packages to Customer API",
+              "method": "GET",
+              "endpoint": "/api/v1/sales-distribution/new-vehicle-sales/vehicle-feature-package-upsell/upgrade-presentation",
+              "apiType": "Task Support API",
+              "lifecycle": "Production",
+              "provider": "LLM-004",
+              "consumer": "LLM-056",
+              "internal": false,
+              "host": "SRV-000820",
+              "requestObject": "",
+              "responseObject": "DO-U01"
+            }
+          ]
+        },
+        {
+          "sequence": 6,
+          "id": "Task_Customer_Configures_Packages",
+          "name": "Customer Configures Selected Packages",
+          "type": "task",
+          "laneId": "Lane_Customer",
+          "laneName": "Customer",
+          "diagramApplications": [
+            "DIGITAL-RETAIL"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_6",
+              "sourceId": "Task_Present_Upgrade_Packages",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_7",
+              "targetId": "Task_Validate_Package_Compatibility",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-U006",
+              "apiName": "Vehicle Feature & Package Upsell — Customer Configures Selected Packages API",
+              "method": "PUT",
+              "endpoint": "/api/v1/sales-distribution/new-vehicle-sales/vehicle-feature-package-upsell/package-selection",
+              "apiType": "Task Support API",
+              "lifecycle": "Production",
+              "provider": "LLM-056",
+              "consumer": "LLM-085",
+              "internal": false,
+              "host": "SRV-002261",
+              "requestObject": "DO-005",
+              "responseObject": "DO-005"
+            }
+          ]
+        },
+        {
+          "sequence": 7,
+          "id": "Task_Validate_Package_Compatibility",
+          "name": "Validate Package Compatibility & Availability",
+          "type": "task",
+          "laneId": "Lane_System",
+          "laneName": "System",
+          "diagramApplications": [
+            "ACCESSORY-CFG"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_7",
+              "sourceId": "Task_Customer_Configures_Packages",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_8",
+              "targetId": "Task_Reprice_Upgraded_Configuration",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-U007",
+              "apiName": "Vehicle Feature & Package Upsell — Validate Package Compatibility & Availability API",
+              "method": "POST",
+              "endpoint": "/api/v1/sales-distribution/new-vehicle-sales/vehicle-feature-package-upsell/package-compatibility",
+              "apiType": "Task Support API",
+              "lifecycle": "Production",
+              "provider": "LLM-085",
+              "consumer": "LLM-096",
+              "internal": false,
+              "host": "SRV-003177",
+              "requestObject": "DO-005",
+              "responseObject": "DO-005"
+            }
+          ]
+        },
+        {
+          "sequence": 8,
+          "id": "Task_Reprice_Upgraded_Configuration",
+          "name": "Reprice Upgraded Configuration",
+          "type": "task",
+          "laneId": "Lane_System",
+          "laneName": "System",
+          "diagramApplications": [
+            "PRICING-ENGINE"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_8",
+              "sourceId": "Task_Validate_Package_Compatibility",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_9",
+              "targetId": "Task_Recalculate_Monthly_Payment",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-U008",
+              "apiName": "Vehicle Feature & Package Upsell — Reprice Upgraded Configuration API",
+              "method": "POST",
+              "endpoint": "/api/v1/sales-distribution/new-vehicle-sales/vehicle-feature-package-upsell/upgrade-pricing",
+              "apiType": "Task Support API",
+              "lifecycle": "Production",
+              "provider": "LLM-096",
+              "consumer": "LLM-015",
+              "internal": false,
+              "host": "SRV-003509",
+              "requestObject": "DO-005",
+              "responseObject": "DO-007"
+            }
+          ]
+        },
+        {
+          "sequence": 9,
+          "id": "Task_Recalculate_Monthly_Payment",
+          "name": "Recalculate Monthly Payment with Upgrades",
+          "type": "task",
+          "laneId": "Lane_System",
+          "laneName": "System",
+          "diagramApplications": [
+            "CREDIT-DECIDE"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_9",
+              "sourceId": "Task_Reprice_Upgraded_Configuration",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_10",
+              "targetId": "Task_Customer_Accepts_Upgrade_Offer",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-U009",
+              "apiName": "Vehicle Feature & Package Upsell — Recalculate Monthly Payment with Upgrades API",
+              "method": "GET",
+              "endpoint": "/api/v1/sales-distribution/new-vehicle-sales/vehicle-feature-package-upsell/upgrade-payment",
+              "apiType": "Task Support API",
+              "lifecycle": "Production",
+              "provider": "LLM-015",
+              "consumer": "LLM-056",
+              "internal": false,
+              "host": "SRV-001118",
+              "requestObject": "",
+              "responseObject": "DO-007"
+            }
+          ]
+        },
+        {
+          "sequence": 10,
+          "id": "Task_Customer_Accepts_Upgrade_Offer",
+          "name": "Customer Accepts Upgrade Offer",
+          "type": "task",
+          "laneId": "Lane_Customer",
+          "laneName": "Customer",
+          "diagramApplications": [
+            "DIGITAL-RETAIL"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_10",
+              "sourceId": "Task_Recalculate_Monthly_Payment",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_11",
+              "targetId": "Task_Update_Vehicle_Order",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-U010",
+              "apiName": "Vehicle Feature & Package Upsell — Customer Accepts Upgrade Offer API",
+              "method": "POST",
+              "endpoint": "/api/v1/sales-distribution/new-vehicle-sales/vehicle-feature-package-upsell/offer-acceptance",
+              "apiType": "Task Support API",
+              "lifecycle": "Production",
+              "provider": "LLM-056",
+              "consumer": "LLM-004",
+              "internal": false,
+              "host": "SRV-DIGITAL-RETAIL-006",
+              "requestObject": "DO-U01",
+              "responseObject": "DO-U01"
+            }
+          ]
+        },
+        {
+          "sequence": 11,
+          "id": "Task_Update_Vehicle_Order",
+          "name": "Update Vehicle Order with Selected Packages",
+          "type": "task",
+          "laneId": "Lane_Sales_Consultant",
+          "laneName": "Sales Consultant",
+          "diagramApplications": [
+            "DEALER-NET"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_11",
+              "sourceId": "Task_Customer_Accepts_Upgrade_Offer",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_12",
+              "targetId": "Task_Record_Upsell_Revenue",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-U011",
+              "apiName": "Vehicle Feature & Package Upsell — Update Vehicle Order with Selected Packages API",
+              "method": "PUT",
+              "endpoint": "/api/v1/sales-distribution/new-vehicle-sales/vehicle-feature-package-upsell/order-update",
+              "apiType": "Task Support API",
+              "lifecycle": "Production",
+              "provider": "LLM-004",
+              "consumer": "LLM-012",
+              "internal": false,
+              "host": "SRV-000816",
+              "requestObject": "DO-006",
+              "responseObject": "DO-006"
+            }
+          ]
+        },
+        {
+          "sequence": 12,
+          "id": "Task_Record_Upsell_Revenue",
+          "name": "Record Upsell Revenue & Consultant Incentive",
+          "type": "task",
+          "laneId": "Lane_System",
+          "laneName": "System",
+          "diagramApplications": [
+            "ORDER-MGMT"
+          ],
+          "incoming": [
+            {
+              "id": "Flow_12",
+              "sourceId": "Task_Update_Vehicle_Order",
+              "name": ""
+            }
+          ],
+          "outgoing": [
+            {
+              "id": "Flow_13",
+              "targetId": "EndEvent_1",
+              "name": ""
+            }
+          ],
+          "calls": [
+            {
+              "apiId": "API-U012",
+              "apiName": "Vehicle Feature & Package Upsell — Record Upsell Revenue & Consultant Incentive API",
+              "method": "POST",
+              "endpoint": "/api/v1/sales-distribution/new-vehicle-sales/vehicle-feature-package-upsell/upsell-revenue",
+              "apiType": "Task Support API",
+              "lifecycle": "Production",
+              "provider": "LLM-012",
+              "consumer": "LLM-005",
+              "internal": false,
+              "host": "SRV-ORDER-MGMT-006",
+              "requestObject": "DO-006",
+              "responseObject": "DO-074"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "applications": {
+    "LLM-056": {
+      "id": "LLM-056",
+      "acronym": "DIGITAL-RETAIL",
+      "name": "Online Digital Retailing Platform",
+      "domain": "Pre-Sales",
+      "criticality": "Business Critical",
+      "providedApiCount": 7,
+      "consumedApiCount": 5,
+      "internalApiCount": 0
+    },
+    "LLM-011": {
+      "id": "LLM-011",
+      "acronym": "SALES-CONFIG",
+      "name": "Vehicle Configuration & Pricing System",
+      "domain": "Sales",
+      "criticality": "Business Critical",
+      "providedApiCount": 14,
+      "consumedApiCount": 16,
+      "internalApiCount": 0
+    },
+    "LLM-015": {
+      "id": "LLM-015",
+      "acronym": "CREDIT-DECIDE",
+      "name": "Credit Decision & Underwriting System",
+      "domain": "Finance",
+      "criticality": "Mission Critical",
+      "providedApiCount": 18,
+      "consumedApiCount": 9,
+      "internalApiCount": 6
+    },
+    "LLM-017": {
+      "id": "LLM-017",
+      "acronym": "REMARKETING-SYS",
+      "name": "Off-Lease & Used Vehicle Remarketing Platform",
+      "domain": "Finance",
+      "criticality": "Business Critical",
+      "providedApiCount": 7,
+      "consumedApiCount": 9,
+      "internalApiCount": 0
+    },
+    "LLM-007": {
+      "id": "LLM-007",
+      "acronym": "FINANCE-HUB",
+      "name": "Enterprise Financial Management System",
+      "domain": "Finance",
+      "criticality": "Mission Critical",
+      "providedApiCount": 40,
+      "consumedApiCount": 74,
+      "internalApiCount": 27
+    },
+    "LLM-004": {
+      "id": "LLM-004",
+      "acronym": "DEALER-NET",
+      "name": "Dealer Management & Sales Network",
+      "domain": "Sales",
+      "criticality": "Business Critical",
+      "providedApiCount": 56,
+      "consumedApiCount": 45,
+      "internalApiCount": 13
+    },
+    "LLM-071": {
+      "id": "LLM-071",
+      "acronym": "WARRANTY-SALES",
+      "name": "Extended Warranty & Protection Product Sales",
+      "domain": "Warranty Sales",
+      "criticality": "Business Critical",
+      "providedApiCount": 15,
+      "consumedApiCount": 9,
+      "internalApiCount": 9
+    },
+    "LLM-072": {
+      "id": "LLM-072",
+      "acronym": "VSC-ADMIN",
+      "name": "Vehicle Service Contract Administration",
+      "domain": "Warranty Sales",
+      "criticality": "Business Critical",
+      "providedApiCount": 5,
+      "consumedApiCount": 5,
+      "internalApiCount": 0
+    },
+    "LLM-005": {
+      "id": "LLM-005",
+      "acronym": "CRM-360",
+      "name": "Customer Relationship Management Platform",
+      "domain": "Marketing",
+      "criticality": "Business Critical",
+      "providedApiCount": 40,
+      "consumedApiCount": 36,
+      "internalApiCount": 13
+    },
+    "LLM-099": {
+      "id": "LLM-099",
+      "acronym": "ANALYTICS-HUB",
+      "name": "Enterprise Analytics & Data Platform",
+      "domain": "Technology",
+      "criticality": "Business Critical",
+      "providedApiCount": 17,
+      "consumedApiCount": 24,
+      "internalApiCount": 12
+    },
+    "LLM-096": {
+      "id": "LLM-096",
+      "acronym": "PRICING-ENGINE",
+      "name": "Vehicle Pricing & Incentive Management",
+      "domain": "Sales",
+      "criticality": "Mission Critical",
+      "providedApiCount": 5,
+      "consumedApiCount": 3,
+      "internalApiCount": 0
+    },
+    "LLM-085": {
+      "id": "LLM-085",
+      "acronym": "ACCESSORY-CFG",
+      "name": "Vehicle Accessories Configurator & Sales Platform",
+      "domain": "Pre-Sales",
+      "criticality": "High",
+      "providedApiCount": 1,
+      "consumedApiCount": 4,
+      "internalApiCount": 0
+    },
+    "LLM-012": {
+      "id": "LLM-012",
+      "acronym": "ORDER-MGMT",
+      "name": "Order Management & Fulfillment System",
+      "domain": "Sales",
+      "criticality": "Mission Critical",
+      "providedApiCount": 7,
+      "consumedApiCount": 18,
+      "internalApiCount": 0
+    }
+  },
+  "hosts": {
+    "SRV-002265": {
+      "id": "SRV-002265",
+      "name": "DIGITAL-RETAIL-MUC-022",
+      "role": "API Gateway",
+      "city": "Munich",
+      "datacenter": "Munich",
+      "environment": "Development"
+    },
+    "SRV-001002": {
+      "id": "SRV-001002",
+      "name": "SALES-CONFIG-AZU-014",
+      "role": "API Gateway",
+      "city": "Iowa",
+      "datacenter": "Iowa",
+      "environment": "Production"
+    },
+    "SRV-002253": {
+      "id": "SRV-002253",
+      "name": "DIGITAL-RETAIL-AWS-010",
+      "role": "API Gateway",
+      "city": "Virginia",
+      "datacenter": "Virginia",
+      "environment": "Production"
+    },
+    "SRV-001118": {
+      "id": "SRV-001118",
+      "name": "CREDIT-DECIDE-MUC-011",
+      "role": "API Gateway",
+      "city": "Munich",
+      "datacenter": "Munich",
+      "environment": "DMZ"
+    },
+    "SRV-001131": {
+      "id": "SRV-001131",
+      "name": "CREDIT-DECIDE-AZU-024",
+      "role": "API Gateway",
+      "city": "Iowa",
+      "datacenter": "Iowa",
+      "environment": "Production"
+    },
+    "SRV-REMARKETING-SYS-005": {
+      "id": "SRV-REMARKETING-SYS-005",
+      "name": "REMARKETING-SYS-DAT-05",
+      "role": "API Gateway",
+      "city": "Shanghai",
+      "datacenter": "SHA-DC-01",
+      "environment": "Production"
+    },
+    "SRV-002270": {
+      "id": "SRV-002270",
+      "name": "DIGITAL-RETAIL-DET-027",
+      "role": "API Gateway",
+      "city": "Detroit",
+      "datacenter": "Detroit",
+      "environment": "DMZ"
+    },
+    "SRV-000892": {
+      "id": "SRV-000892",
+      "name": "FINANCE-HUB-DET-020",
+      "role": "API Gateway",
+      "city": "Detroit",
+      "datacenter": "Detroit",
+      "environment": "Production"
+    },
+    "SRV-001124": {
+      "id": "SRV-001124",
+      "name": "CREDIT-DECIDE-DET-017",
+      "role": "API Gateway",
+      "city": "Detroit",
+      "datacenter": "Detroit",
+      "environment": "Management"
+    },
+    "SRV-001123": {
+      "id": "SRV-001123",
+      "name": "CREDIT-DECIDE-AWS-016",
+      "role": "API Gateway",
+      "city": "Dublin",
+      "datacenter": "Dublin",
+      "environment": "DMZ"
+    },
+    "SRV-001128": {
+      "id": "SRV-001128",
+      "name": "CREDIT-DECIDE-SHA-021",
+      "role": "API Gateway",
+      "city": "Shanghai",
+      "datacenter": "Shanghai",
+      "environment": "Development"
+    },
+    "SRV-000822": {
+      "id": "SRV-000822",
+      "name": "DEALER-NET-AWS-026",
+      "role": "API Gateway",
+      "city": "Virginia",
+      "datacenter": "Virginia",
+      "environment": "Development"
+    },
+    "SRV-000820": {
+      "id": "SRV-000820",
+      "name": "DEALER-NET-AWS-024",
+      "role": "API Gateway",
+      "city": "Dublin",
+      "datacenter": "Dublin",
+      "environment": "Management"
+    },
+    "SRV-002730": {
+      "id": "SRV-002730",
+      "name": "WARRANTY-SALES-AZU-017",
+      "role": "API Gateway",
+      "city": "Iowa",
+      "datacenter": "Iowa",
+      "environment": "Production"
+    },
+    "SRV-DEALER-NET-006": {
+      "id": "SRV-DEALER-NET-006",
+      "name": "DEALER-NET-WEB-06",
+      "role": "API Gateway",
+      "city": "Dublin",
+      "datacenter": "AWS-EU-WEST",
+      "environment": "Production"
+    },
+    "SRV-002775": {
+      "id": "SRV-002775",
+      "name": "VSC-ADMIN-AWS-032",
+      "role": "API Gateway",
+      "city": "Dublin",
+      "datacenter": "Dublin",
+      "environment": "Production"
+    },
+    "SRV-002720": {
+      "id": "SRV-002720",
+      "name": "WARRANTY-SALES-SHA-007",
+      "role": "API Gateway",
+      "city": "Shanghai",
+      "datacenter": "Shanghai",
+      "environment": "DMZ"
+    },
+    "SRV-002261": {
+      "id": "SRV-002261",
+      "name": "DIGITAL-RETAIL-DET-018",
+      "role": "API Gateway",
+      "city": "Detroit",
+      "datacenter": "Detroit",
+      "environment": "Production"
+    },
+    "SRV-DEALER-NET-001": {
+      "id": "SRV-DEALER-NET-001",
+      "name": "DEALER-NET-DAT-01",
+      "role": "API Gateway",
+      "city": "Shanghai",
+      "datacenter": "SHA-DC-01",
+      "environment": "Development"
+    },
+    "SRV-000903": {
+      "id": "SRV-000903",
+      "name": "FINANCE-HUB-SHA-031",
+      "role": "API Gateway",
+      "city": "Shanghai",
+      "datacenter": "Shanghai",
+      "environment": "Production"
+    },
+    "SRV-002761": {
+      "id": "SRV-002761",
+      "name": "VSC-ADMIN-SHA-018",
+      "role": "API Gateway",
+      "city": "Shanghai",
+      "datacenter": "Shanghai",
+      "environment": "DMZ"
+    },
+    "SRV-002759": {
+      "id": "SRV-002759",
+      "name": "VSC-ADMIN-DET-016",
+      "role": "API Gateway",
+      "city": "Detroit",
+      "datacenter": "Detroit",
+      "environment": "DMZ"
+    },
+    "SRV-000870": {
+      "id": "SRV-000870",
+      "name": "CRM-360-AZU-041",
+      "role": "API Gateway",
+      "city": "Iowa",
+      "datacenter": "Iowa",
+      "environment": "Development"
+    },
+    "SRV-003600": {
+      "id": "SRV-003600",
+      "name": "ANALYTICS-HUB-AWS-031",
+      "role": "API Gateway",
+      "city": "Dublin",
+      "datacenter": "Dublin",
+      "environment": "Development"
+    },
+    "SRV-001003": {
+      "id": "SRV-001003",
+      "name": "SALES-CONFIG-AWS-015",
+      "role": "API Gateway",
+      "city": "Virginia",
+      "datacenter": "Virginia",
+      "environment": "Management"
+    },
+    "SRV-003509": {
+      "id": "SRV-003509",
+      "name": "PRICING-ENGINE-SHA-022",
+      "role": "API Gateway",
+      "city": "Shanghai",
+      "datacenter": "Shanghai",
+      "environment": "DMZ"
+    },
+    "SRV-003177": {
+      "id": "SRV-003177",
+      "name": "ACCESSORY-CFG-MUC-026",
+      "role": "API Gateway",
+      "city": "Munich",
+      "datacenter": "Munich",
+      "environment": "Management"
+    },
+    "SRV-DIGITAL-RETAIL-006": {
+      "id": "SRV-DIGITAL-RETAIL-006",
+      "name": "DIGITAL-RETAIL-INT-06",
+      "role": "API Gateway",
+      "city": "Shanghai",
+      "datacenter": "SHA-DC-01",
+      "environment": "Production"
+    },
+    "SRV-000816": {
+      "id": "SRV-000816",
+      "name": "DEALER-NET-MUC-020",
+      "role": "API Gateway",
+      "city": "Munich",
+      "datacenter": "Munich",
+      "environment": "DMZ"
+    },
+    "SRV-ORDER-MGMT-006": {
+      "id": "SRV-ORDER-MGMT-006",
+      "name": "ORDER-MGMT-APP-06",
+      "role": "API Gateway",
+      "city": "Virginia",
+      "datacenter": "AWS-US-EAST",
+      "environment": "Production"
+    }
+  },
+  "dataObjects": {
+    "DO-004": {
+      "id": "DO-004",
+      "name": "Vehicle Inventory Unit",
+      "category": "Transactional",
+      "domain": "Sales & Distribution",
+      "sensitivity": "Confidential",
+      "containsPii": false,
+      "systemOfRecord": "LLM-013",
+      "fields": [
+        {
+          "name": "stockNumber",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "vin",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "dealerCode",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "status",
+          "type": "enum",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "daysInStock",
+          "type": "integer",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "msrp",
+          "type": "decimal",
+          "required": false,
+          "pii": false,
+          "financial": true,
+          "restricted": false
+        },
+        {
+          "name": "invoicePrice",
+          "type": "decimal",
+          "required": false,
+          "pii": false,
+          "financial": true,
+          "restricted": false
+        },
+        {
+          "name": "location",
+          "type": "string",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        }
+      ]
+    },
+    "DO-005": {
+      "id": "DO-005",
+      "name": "Vehicle Configuration",
+      "category": "Transactional",
+      "domain": "Sales & Distribution",
+      "sensitivity": "Confidential",
+      "containsPii": false,
+      "systemOfRecord": "LLM-011",
+      "fields": [
+        {
+          "name": "configurationId",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "modelCode",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "trim",
+          "type": "string",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "selectedOptions",
+          "type": "string[]",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "packageCodes",
+          "type": "string[]",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "accessoryCodes",
+          "type": "string[]",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "configuredPrice",
+          "type": "decimal",
+          "required": false,
+          "pii": false,
+          "financial": true,
+          "restricted": false
+        }
+      ]
+    },
+    "DO-014": {
+      "id": "DO-014",
+      "name": "Credit Application",
+      "category": "Transactional",
+      "domain": "Finance & Insurance",
+      "sensitivity": "Restricted",
+      "containsPii": true,
+      "systemOfRecord": "LLM-015",
+      "fields": [
+        {
+          "name": "applicationId",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "customerId",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "ssn",
+          "type": "string",
+          "required": true,
+          "pii": true,
+          "financial": false,
+          "restricted": true
+        },
+        {
+          "name": "dateOfBirth",
+          "type": "date",
+          "required": false,
+          "pii": true,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "annualIncome",
+          "type": "decimal",
+          "required": false,
+          "pii": true,
+          "financial": true,
+          "restricted": false
+        },
+        {
+          "name": "employer",
+          "type": "string",
+          "required": false,
+          "pii": true,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "requestedAmount",
+          "type": "decimal",
+          "required": true,
+          "pii": false,
+          "financial": true,
+          "restricted": false
+        },
+        {
+          "name": "termMonths",
+          "type": "integer",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        }
+      ]
+    },
+    "DO-015": {
+      "id": "DO-015",
+      "name": "Credit Decision",
+      "category": "Result",
+      "domain": "Finance & Insurance",
+      "sensitivity": "Confidential",
+      "containsPii": false,
+      "systemOfRecord": "LLM-015",
+      "fields": [
+        {
+          "name": "decisionId",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "applicationId",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "decision",
+          "type": "enum",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "creditTier",
+          "type": "string",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "approvedAmount",
+          "type": "decimal",
+          "required": false,
+          "pii": false,
+          "financial": true,
+          "restricted": false
+        },
+        {
+          "name": "apr",
+          "type": "decimal",
+          "required": false,
+          "pii": false,
+          "financial": true,
+          "restricted": false
+        },
+        {
+          "name": "stipulations",
+          "type": "string[]",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "decidedAt",
+          "type": "datetime",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        }
+      ]
+    },
+    "DO-007": {
+      "id": "DO-007",
+      "name": "Price Quote",
+      "category": "Result",
+      "domain": "Sales & Distribution",
+      "sensitivity": "Confidential",
+      "containsPii": false,
+      "systemOfRecord": "LLM-096",
+      "fields": [
+        {
+          "name": "quoteId",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "vin",
+          "type": "string",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "msrp",
+          "type": "decimal",
+          "required": false,
+          "pii": false,
+          "financial": true,
+          "restricted": false
+        },
+        {
+          "name": "discounts",
+          "type": "decimal",
+          "required": false,
+          "pii": false,
+          "financial": true,
+          "restricted": false
+        },
+        {
+          "name": "incentivesApplied",
+          "type": "string[]",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "tradeInAllowance",
+          "type": "decimal",
+          "required": false,
+          "pii": false,
+          "financial": true,
+          "restricted": false
+        },
+        {
+          "name": "taxesAndFees",
+          "type": "decimal",
+          "required": false,
+          "pii": false,
+          "financial": true,
+          "restricted": false
+        },
+        {
+          "name": "totalPrice",
+          "type": "decimal",
+          "required": true,
+          "pii": false,
+          "financial": true,
+          "restricted": false
+        },
+        {
+          "name": "validUntil",
+          "type": "date",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        }
+      ]
+    },
+    "DO-073": {
+      "id": "DO-073",
+      "name": "Document",
+      "category": "Reference",
+      "domain": "Enterprise (shared)",
+      "sensitivity": "Public",
+      "containsPii": false,
+      "systemOfRecord": "LLM-041",
+      "fields": [
+        {
+          "name": "documentId",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "documentType",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "fileName",
+          "type": "string",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "storageUri",
+          "type": "string",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "signedBy",
+          "type": "string",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "signedAt",
+          "type": "datetime",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "retentionClass",
+          "type": "enum",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        }
+      ]
+    },
+    "DO-011": {
+      "id": "DO-011",
+      "name": "Delivery Record",
+      "category": "Transactional",
+      "domain": "Sales & Distribution",
+      "sensitivity": "Internal",
+      "containsPii": false,
+      "systemOfRecord": "LLM-004",
+      "fields": [
+        {
+          "name": "deliveryId",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "vin",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "customerId",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "deliveredAt",
+          "type": "datetime",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "pdiCompleted",
+          "type": "boolean",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "deliveryChecklist",
+          "type": "string[]",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "deliveredBy",
+          "type": "string",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        }
+      ]
+    },
+    "DO-056": {
+      "id": "DO-056",
+      "name": "In-Vehicle Order",
+      "category": "Transactional",
+      "domain": "Connected Vehicle & Mobility",
+      "sensitivity": "Confidential",
+      "containsPii": false,
+      "systemOfRecord": "LLM-010",
+      "fields": [
+        {
+          "name": "orderId",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "vin",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "customerId",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "sku",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "amount",
+          "type": "decimal",
+          "required": false,
+          "pii": false,
+          "financial": true,
+          "restricted": false
+        },
+        {
+          "name": "paymentToken",
+          "type": "string",
+          "required": false,
+          "pii": false,
+          "financial": true,
+          "restricted": false
+        },
+        {
+          "name": "purchasedAt",
+          "type": "datetime",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        }
+      ]
+    },
+    "DO-074": {
+      "id": "DO-074",
+      "name": "Transaction Acknowledgement",
+      "category": "Acknowledgement",
+      "domain": "Enterprise (shared)",
+      "sensitivity": "Internal",
+      "containsPii": false,
+      "systemOfRecord": "",
+      "fields": [
+        {
+          "name": "correlationId",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "status",
+          "type": "enum",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "receivedAt",
+          "type": "datetime",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "messages",
+          "type": "string[]",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "resourceId",
+          "type": "string",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        }
+      ]
+    },
+    "DO-018": {
+      "id": "DO-018",
+      "name": "Payment",
+      "category": "Transactional",
+      "domain": "Finance & Insurance",
+      "sensitivity": "Confidential",
+      "containsPii": false,
+      "systemOfRecord": "LLM-007",
+      "fields": [
+        {
+          "name": "paymentId",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "accountId",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "amount",
+          "type": "decimal",
+          "required": true,
+          "pii": false,
+          "financial": true,
+          "restricted": false
+        },
+        {
+          "name": "currency",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "method",
+          "type": "enum",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "cardToken",
+          "type": "string",
+          "required": false,
+          "pii": false,
+          "financial": true,
+          "restricted": false
+        },
+        {
+          "name": "paidAt",
+          "type": "datetime",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "status",
+          "type": "enum",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        }
+      ]
+    },
+    "DO-016": {
+      "id": "DO-016",
+      "name": "Finance Contract",
+      "category": "Transactional",
+      "domain": "Finance & Insurance",
+      "sensitivity": "Confidential",
+      "containsPii": false,
+      "systemOfRecord": "LLM-007",
+      "fields": [
+        {
+          "name": "financeContractId",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "customerId",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "amountFinanced",
+          "type": "decimal",
+          "required": true,
+          "pii": false,
+          "financial": true,
+          "restricted": false
+        },
+        {
+          "name": "apr",
+          "type": "decimal",
+          "required": false,
+          "pii": false,
+          "financial": true,
+          "restricted": false
+        },
+        {
+          "name": "termMonths",
+          "type": "integer",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "monthlyPayment",
+          "type": "decimal",
+          "required": false,
+          "pii": false,
+          "financial": true,
+          "restricted": false
+        },
+        {
+          "name": "lenderId",
+          "type": "string",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "fundingStatus",
+          "type": "enum",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "fundedAt",
+          "type": "datetime",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        }
+      ]
+    },
+    "DO-025": {
+      "id": "DO-025",
+      "name": "Service Contract",
+      "category": "Transactional",
+      "domain": "Warranty & Protection Services",
+      "sensitivity": "Confidential",
+      "containsPii": false,
+      "systemOfRecord": "LLM-072",
+      "fields": [
+        {
+          "name": "contractNumber",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "productCode",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "vin",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "customerId",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "purchasePrice",
+          "type": "decimal",
+          "required": false,
+          "pii": false,
+          "financial": true,
+          "restricted": false
+        },
+        {
+          "name": "effectiveDate",
+          "type": "date",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "expirationDate",
+          "type": "date",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "status",
+          "type": "enum",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        }
+      ]
+    },
+    "DO-010": {
+      "id": "DO-010",
+      "name": "Sales Contract",
+      "category": "Transactional",
+      "domain": "Sales & Distribution",
+      "sensitivity": "Confidential",
+      "containsPii": false,
+      "systemOfRecord": "LLM-004",
+      "fields": [
+        {
+          "name": "contractId",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "customerId",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "vin",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "salePrice",
+          "type": "decimal",
+          "required": true,
+          "pii": false,
+          "financial": true,
+          "restricted": false
+        },
+        {
+          "name": "downPayment",
+          "type": "decimal",
+          "required": false,
+          "pii": false,
+          "financial": true,
+          "restricted": false
+        },
+        {
+          "name": "financeContractId",
+          "type": "string",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "signedAt",
+          "type": "datetime",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "signatureMethod",
+          "type": "enum",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "documents",
+          "type": "DocumentRef[]",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        }
+      ]
+    },
+    "DO-001": {
+      "id": "DO-001",
+      "name": "Customer Profile",
+      "category": "Master",
+      "domain": "Marketing & Customer Experience",
+      "sensitivity": "Confidential",
+      "containsPii": true,
+      "systemOfRecord": "LLM-005",
+      "fields": [
+        {
+          "name": "customerId",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "firstName",
+          "type": "string",
+          "required": true,
+          "pii": true,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "lastName",
+          "type": "string",
+          "required": true,
+          "pii": true,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "email",
+          "type": "string",
+          "required": false,
+          "pii": true,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "phone",
+          "type": "string",
+          "required": false,
+          "pii": true,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "postalAddress",
+          "type": "Address",
+          "required": false,
+          "pii": true,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "preferredContactMethod",
+          "type": "enum",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "marketingConsent",
+          "type": "boolean",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "customerSince",
+          "type": "date",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        }
+      ]
+    },
+    "DO-064": {
+      "id": "DO-064",
+      "name": "Incentive Program",
+      "category": "Transactional",
+      "domain": "Dealer Network Operations",
+      "sensitivity": "Confidential",
+      "containsPii": false,
+      "systemOfRecord": "LLM-094",
+      "fields": [
+        {
+          "name": "programId",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "dealerCode",
+          "type": "string",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "eligibilityRules",
+          "type": "string",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "payoutAmount",
+          "type": "decimal",
+          "required": false,
+          "pii": false,
+          "financial": true,
+          "restricted": false
+        },
+        {
+          "name": "period",
+          "type": "string",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "status",
+          "type": "enum",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        }
+      ]
+    },
+    "DO-006": {
+      "id": "DO-006",
+      "name": "Vehicle Order",
+      "category": "Transactional",
+      "domain": "Sales & Distribution",
+      "sensitivity": "Internal",
+      "containsPii": false,
+      "systemOfRecord": "LLM-012",
+      "fields": [
+        {
+          "name": "orderId",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "dealerCode",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "customerId",
+          "type": "string",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "configurationId",
+          "type": "string",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "orderType",
+          "type": "enum",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "quantity",
+          "type": "integer",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "requestedDeliveryDate",
+          "type": "date",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "status",
+          "type": "enum",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        }
+      ]
+    },
+    "DO-U01": {
+      "id": "DO-U01",
+      "name": "Upsell Offer",
+      "category": "Transactional",
+      "domain": "Sales",
+      "sensitivity": "Internal",
+      "containsPii": false,
+      "systemOfRecord": "LLM-096",
+      "fields": [
+        {
+          "name": "offerId",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "customerId",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "vin",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "packageType",
+          "type": "enum",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "packageCode",
+          "type": "string",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "packagePrice",
+          "type": "decimal",
+          "required": true,
+          "pii": false,
+          "financial": true,
+          "restricted": false
+        },
+        {
+          "name": "incentiveCode",
+          "type": "string",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "incentiveAmount",
+          "type": "decimal",
+          "required": false,
+          "pii": false,
+          "financial": true,
+          "restricted": false
+        },
+        {
+          "name": "monthlyPaymentDelta",
+          "type": "decimal",
+          "required": false,
+          "pii": false,
+          "financial": true,
+          "restricted": false
+        },
+        {
+          "name": "propensityScore",
+          "type": "decimal",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "offerStatus",
+          "type": "enum",
+          "required": true,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        },
+        {
+          "name": "expiresAt",
+          "type": "datetime",
+          "required": false,
+          "pii": false,
+          "financial": false,
+          "restricted": false
+        }
+      ]
+    }
+  }
+}

@@ -966,3 +966,43 @@ export interface ApiSequenceResponse {
   directionNote: string;
   dataObjectNote: string;
 }
+
+// ── Discovered processes (GET /api/discovered-processes) ─────────────────────
+export interface DiscoveredProcessTask {
+  id: string;
+  name: string;
+  lane: string;
+  applications: string[];
+  apis: Array<{ id: string; method: string; route: string; provider: string; count: number }>;
+  observedCount: number;
+  medianDurationMs: number;
+}
+
+export interface DiscoveredProcess {
+  name: string;
+  processId: string;
+  domain: string;
+  subdomain: string;
+  instancesAnalyzed: number;
+  outcomes: Record<string, number>;
+  completionRate: number;
+  firstSeen: string | null;
+  lastSeen: string | null;
+  lanes: Array<{ id: string; name: string }>;
+  tasks: DiscoveredProcessTask[];
+  applications: string[];
+  sequenceFlowCount: number;
+  /** BPMN 2.0 XML rebuilt from the traces. */
+  xml: string;
+}
+
+export interface DiscoveredProcessesResponse {
+  generatedAt: string;
+  source: string;
+  tempoUrl: string;
+  lookbackHours: number;
+  observedFlows: string[];
+  documentedFlowsObserved: string[];
+  discovered: DiscoveredProcess[];
+  note: string;
+}

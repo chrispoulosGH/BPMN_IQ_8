@@ -122,6 +122,8 @@ const processOptimizerRouter = require('./routes/processOptimizer');
 app.use('/api/process-optimizer', processOptimizerRouter);
 const integrationMapRouter = require('./routes/integrationMap');
 app.use('/api/integration-map', integrationMapRouter);
+const discoveredProcessesRouter = require('./routes/discoveredProcesses');
+app.use('/api/discovered-processes', discoveredProcessesRouter);
 const soxControlsRouter = require('./routes/soxControls');
 app.use('/api/sox-controls', soxControlsRouter);
 

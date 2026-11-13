@@ -1,0 +1,98 @@
+# Mock production environment: the simulated applications + process engine
+# (one container, one Node process per application), an OpenTelemetry
+# Collector that forwards to Observe, and a local Grafana stack
+# (Tempo for traces, Prometheus for metrics).
+#
+#   cp .env.example .env   # fill in the Observe endpoint + token
+#   docker compose up -d --build
+#   open http://localhost:3000  → Dashboards › BPMN IQ › BPMN business flows
+name: bpmn-iq-mockprod
+
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.164.0
+    depends_on:
+      - tempo
+      - prometheus
+    command:
+      - --config=/etc/otelcol/base.yaml
+      - --config=/etc/otelcol/${OBSERVE_MODE:-local}.yaml
+    environment:
+      OBSERVE_COLLECTION_ENDPOINT: ${OBSERVE_COLLECTION_ENDPOINT:-}
+      OBSERVE_INGEST_TOKEN: ${OBSERVE_INGEST_TOKEN:-}
+    volumes:
+      - ./collector:/etc/otelcol:ro
+      - ./data:/data
+    user: "0:0" # write to the bind-mounted ./data on any host
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "13133:13133"
+    restart: unless-stopped
+
+  tempo:
+    image: grafana/tempo:2.10.10
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    user: "0:0" # write to the named volume
+    volumes:
+      - ./observability/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "3200:3200" # Tempo API (Grafana reaches it inside the network)
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.15.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-otlp-receiver
+      - --web.enable-remote-write-receiver
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:13.2.6
+    depends_on:
+      - tempo
+      - prometheus
+    environment:
+      # Local mock environment: no login; anonymous users can explore and edit.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Editor
+      GF_AUTH_DISABLE_LOGIN_FORM: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/bpmn-flows.json
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+  mockprod:
+    build: .
+    depends_on:
+      - otel-collector
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      DAILY_JOURNEYS: ${DAILY_JOURNEYS:-300}
+      SIM_TIMEZONE: ${SIM_TIMEZONE:-America/New_York}
+      WAIT_SCALE: ${WAIT_SCALE:-1}
+      ABANDON_RATE: ${ABANDON_RATE:-0.03}
+      INCIDENTS_PER_DAY_PER_APP: ${INCIDENTS_PER_DAY_PER_APP:-0.5}
+      FORCE_INCIDENT_APP: ${FORCE_INCIDENT_APP:-}
+    ports:
+      - "7000:7000"
+    restart: unless-stopped
+
+volumes:
+  tempo-data:
+  prometheus-data:
+  grafana-data:

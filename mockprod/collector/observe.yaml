@@ -1,0 +1,37 @@
+# OBSERVE_MODE=observe: also export to Observe Inc over OTLP/HTTP.
+#   OBSERVE_COLLECTION_ENDPOINT  your account's collection URL, e.g.
+#                                https://123456789012.collect.observeinc.com
+#                                (copy it from Observe's setup instructions —
+#                                regional accounts use a different hostname)
+#   OBSERVE_INGEST_TOKEN         ingest token, "<token-id>:<secret>"
+# One exporter per signal so each lands in the right Observe package.
+exporters:
+  otlphttp/observetracing:
+    endpoint: ${env:OBSERVE_COLLECTION_ENDPOINT}/v2/otel
+    headers:
+      authorization: "Bearer ${env:OBSERVE_INGEST_TOKEN}"
+      x-observe-target-package: "Tracing"
+    compression: zstd
+    sending_queue:
+      num_consumers: 4
+      queue_size: 100
+    retry_on_failure:
+      enabled: true
+  otlphttp/observemetrics:
+    endpoint: ${env:OBSERVE_COLLECTION_ENDPOINT}/v2/otel
+    headers:
+      authorization: "Bearer ${env:OBSERVE_INGEST_TOKEN}"
+      x-observe-target-package: "Metrics"
+    compression: zstd
+    sending_queue:
+      num_consumers: 4
+      queue_size: 100
+    retry_on_failure:
+      enabled: true
+
+service:
+  pipelines:
+    traces:
+      exporters: [file/traces, debug, otlp/tempo, otlphttp/observetracing]
+    metrics:
+      exporters: [file/metrics, otlphttp/prometheus, otlphttp/observemetrics]

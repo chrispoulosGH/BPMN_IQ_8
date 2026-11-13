@@ -1,0 +1,9 @@
+apiVersion: 1
+providers:
+  - name: bpmn-iq
+    folder: BPMN IQ
+    type: file
+    allowUiUpdates: true
+    updateIntervalSeconds: 30 # re-read the JSON file; restart Grafana if a Windows bind mount doesn't surface the change
+    options:
+      path: /var/lib/grafana/dashboards

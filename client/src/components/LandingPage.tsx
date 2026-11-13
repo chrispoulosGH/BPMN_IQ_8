@@ -282,10 +282,10 @@ const BpmnBackdrop: React.FC<{ animate: boolean }> = ({ animate }) => (
 const FEATURES: Array<{ icon: React.ReactNode; title: string; body: string; tab: string; cta: string }> = [
   {
     icon: <ApartmentOutlined />,
-    title: 'BPMN 2.0 Diagrams',
-    body: 'Model, search and compose business process flows on a standards-based canvas, with applications, actors and APIs linked to every task.',
+    title: 'Business Processes',
+    body: 'Model, search and compose BPMN 2.0 business process flows on a standards-based canvas, and see processes discovered from production traces that were never modeled.',
     tab: 'bpmn',
-    cta: 'Open Diagrams',
+    cta: 'Open Business Processes',
   },
   {
     icon: <BranchesOutlined />,
@@ -362,7 +362,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
               onClick={() => onNavigate('bpmn')}
               className="group inline-flex items-center gap-2 rounded-lg border-0 bg-sky-500 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-sky-900/40 transition hover:bg-sky-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-300"
             >
-              Open Diagrams
+              Open Business Processes
               <ArrowRightOutlined className="transition-transform group-hover:translate-x-0.5" />
             </button>
             <button

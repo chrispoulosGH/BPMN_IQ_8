@@ -1,0 +1,5 @@
+# OBSERVE_MODE=local: no extra exporters (local files only).
+service:
+  telemetry:
+    logs:
+      level: info

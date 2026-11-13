@@ -1,0 +1,19 @@
+# Prometheus receives metrics pushed to it (no scrape targets of its own):
+#   - from the collector over OTLP (--web.enable-otlp-receiver)
+#   - from Tempo's metrics generator via remote write (--web.enable-remote-write-receiver)
+global:
+  evaluation_interval: 30s
+
+otlp:
+  # Keep these resource attributes as labels (service.name / namespace become job).
+  promote_resource_attributes:
+    - service.name
+    - service.namespace
+    - deployment.environment.name
+    - app.id
+    - app.acronym
+    - app.domain
+
+storage:
+  tsdb:
+    out_of_order_time_window: 10m
