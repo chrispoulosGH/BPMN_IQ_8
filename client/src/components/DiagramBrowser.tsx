@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { App as AntApp, Alert, AutoComplete, Empty, Input, Popconfirm, Spin, Select, Tag, Tooltip, Typography } from 'antd';
-import { CloseOutlined, FolderOpenOutlined, PartitionOutlined, SearchOutlined } from '@ant-design/icons';
+import { App as AntApp, Alert, AutoComplete, Button, Empty, Input, Popconfirm, Spin, Select, Tag, Tooltip, Typography } from 'antd';
+import { ClearOutlined, CloseOutlined, FolderOpenOutlined, PartitionOutlined, SearchOutlined } from '@ant-design/icons';
 import type { DiagramMeta, FactoryNeighborhoodSummary } from '../types';
 import { deleteDiagramWithComponent, getCanonicalTypes, getDashboardValueStreamRelationships, getDiagramsForNeighborhood } from '../api';
 import { stateTagColor } from '../stateUtils';
@@ -422,6 +422,19 @@ export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggl
     setFilters((current) => ({ ...current, [key]: values }));
   };
 
+  const hasActiveCriteria = Boolean(quickSearch.trim())
+    || selectedFrameworks.length > 0
+    || Object.values(filters).some((values) => values && values.length > 0);
+
+  // Resets every criterion at once. Like changing a dropdown by hand, this
+  // fires onSearchChanged (via the frameworks/filters effect), so the parent
+  // clears the canvas too.
+  const clearAllFilters = () => {
+    setQuickSearch('');
+    setSelectedFrameworks([]);
+    setFilters({});
+  };
+
   const handleDeleteDiagram = async (diagram: DiagramMeta) => {
     setDeletingIds((current) => new Set(current).add(diagram._id));
     try {
@@ -450,7 +463,20 @@ export default function DiagramBrowser({ frameworks, selectedDiagramIds, onToggl
       <div className="diagram-search-card m-3 px-4 py-3">
         <div className="mb-3 flex items-center gap-2">
           <FolderOpenOutlined className="text-blue-700" />
-          <Text strong className="font-semibold text-slate-700">Diagram Search</Text>
+          <Text strong className="whitespace-nowrap font-semibold text-slate-700">Diagram Search</Text>
+          <Tooltip title="Clear all filters">
+            <Button
+              size="small"
+              type="link"
+              icon={<ClearOutlined />}
+              className="ml-auto px-1"
+              disabled={!hasActiveCriteria}
+              onClick={clearAllFilters}
+              aria-label="Clear all filters"
+            >
+              Clear
+            </Button>
+          </Tooltip>
         </div>
         <div className="grid gap-2">
           <div>

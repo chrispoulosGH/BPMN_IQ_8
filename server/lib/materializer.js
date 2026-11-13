@@ -304,7 +304,7 @@ materializeFromBatches.postProcess = async function({ neighborhoodName, domain =
   }
 };
 
-module.exports = { materializeFromBatches };
+module.exports = { materializeFromBatches, primaryKeyFromRow };
 
 // After materialization completes, also populate legacy `components` collection
 // when called directly via scripts or routes. This helper is invoked by callers

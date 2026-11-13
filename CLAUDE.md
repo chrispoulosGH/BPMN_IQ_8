@@ -10,6 +10,91 @@
 ## Session log
 Newest entry first. Each entry: date, what was in flight, what's uncommitted/unresolved.
 
+### 2026-11-13 (2) — API sequence panel on the Diagrams tab
+- New `GET /api/integration-map/sequence/:diagramId`, built by [server/services/apiSequence.js](server/services/apiSequence.js). It reuses the integration-map cache, which now also holds `apiIndex`: every API keyed by normalized "flow|task", parsed from "Flow — Task API".
+  - **Order:** parsed from the diagram XML. Back edges (loops) are dropped, then a Kahn topological sort runs with ties broken by shape x.
+  - **Fragments:** diverging gateways → `alt`/`par`/`opt` fragments, with branches running to the next join. **None of the 110 diagrams has a gateway today** (all linear, start→tasks→end), so this path is untested on real data.
+  - **Match rate:** 851/851 tasks match an API; 862 calls in total, since 3 tasks have 2 APIs.
+  - **Arrow direction = provider → consumer** (the API's own "from X to Y"). Checked on real flows: each step's consumer is the next step's provider, so the arrows read as one hand-off chain. Consumer→provider (caller→service) read backwards.
+- New [ApiSequencePanel.tsx](client/src/components/ApiSequencePanel.tsx), docked under the BPMN canvas: collapsed bar → resizable panel (drag the top edge).
+  - Layout: lifelines per app (first-appearance order), one band per task with name and lane, and one arrow per call labelled `n METHOD …/last-segment` with request → response object names. The task column and header corner are sticky.
+  - Flow picker when several diagrams are stacked: Segmented for ≤3, Select above that.
+  - Clicking a call opens a details card (API, endpoint, type, from/to, derived host, `DataObjectTag` chips) and selects the task on the canvas via the new `BpmnEditorHandle.focusTaskByName(name, sectionIndex)`. `sectionIndex` maps to the `stack_n_` prefixes.
+  - Canvas → panel: `selectedDiagramTask` highlights that task's band and calls and scrolls to them.
+  - Mermaid `sequenceDiagram` copy and .mmd download.
+  - `DataObjectTag` is now exported from IntegrationMap.tsx.
+- Verified in the browser on Warranty Contract Execution: 11 calls across 6 apps, call click → canvas selection + details, sticky column when scrolled right, Mermaid download content checked. `tsc`: 3 baseline errors. Not committed.
+- Removed the floating blue "New Diagram" button from the bottom-left of the canvas (BpmnEditor). Replaced it with a "+" (`PlusOutlined`, tooltip "New diagram") as the first action in the left ribbon's File group (App.tsx `getBpmnRibbonGroups`, calls `handleNew`). It's disabled for read-only users; the old button was hidden for them.
+- Not built yet (views 2 and 3 of the proposal): end-to-end journeys chaining flows (needs a flow order within value streams), and app / data-object lenses across flows.
+
+### 2026-11-13 — Generated API data objects (request/response)
+- **Checked first:** nothing in the DB, repo or diagrams described API payloads (no specs or schemas; no BPMN data objects in any of the 111 diagrams). At the user's request, generated an **illustrative** set.
+- New [server/scripts/seed_api_data_objects.js](server/scripts/seed_api_data_objects.js) (`--dry-run`, `SAMPLE=n` prints n assignments; idempotent: it deletes and recreates its own Data Objects). **Ran for real.**
+  - New System Components data type **"Data Objects"**: 74 objects, 554 fields. Stored in `dataBatches` (1 batch) and `canonicaldata`.
+    - Columns: OBJECT_NAME, OBJECT_ID (`DO-001`…), Description, Business Domain, Object Category (Master/Transactional/Reference/Result/Event/Acknowledgement), Sensitivity (40 Confidential, 30 Internal, 1 Restricted, 3 Public), Contains PII, Field Count, Fields (readable text), system-of-record FK to Applications, and Generation Basis.
+    - Structured fields live in `__fields` (hidden from the table).
+    - The tab appeared automatically under System Components.
+  - Every API row (8 batches + 763 canonical, in place, primaryKey recomputed) gained `FK_System Components[Data Objects].OBJECT_ID (Request)`, `… (Response)` and `Payload Basis Qualifier`.
+  - **Rules:** the main object comes from a keyword score.
+    - Task words weigh 2 and flow words 0.5.
+    - Phrases outrank single words; `word~` marks a weak, generic keyword. Simple plural matching.
+    - +1.5 for the same domain, applied only on a task-level hit. No hit falls back to a per-domain default.
+    - GET = no body → object. PUT = object → object.
+    - POST = object → a Result object (evaluative verbs), "Transaction Acknowledgement" (System Service APIs) or the object.
+  - The vocabulary sits at the top of the script; edit it and re-run. I tuned the keywords over several dry-run samples. Misfires remain possible; check with `SAMPLE=120 … --dry-run`.
+- **Integration Map:** `/api/integration-map` now returns `dataObjects` (a dictionary with fields), per-API `requestObject`/`responseObject`, per-link `dataObjects` (counts, acknowledgements excluded) and `dataObjectNote`.
+  - Link tooltips show "Carries: …".
+  - The side panel shows "Data exchanged" chips.
+  - The API table has Request/Response columns.
+  - `DataObjectTag` hover lists the fields with required/PII/financial flags; a lock icon marks objects with personal data.
+- Verified in the browser: FINANCE-HUB → 38 objects exchanged, Request/Response columns render, the Data Objects table shows 74 rows. `tsc`: 3 baseline errors. Not committed.
+
+### 2026-11-12 (3) — Integration Map tab
+- New outer tab `integrationMap` ("Integration Map", `ApiOutlined`) after Process Changes. Component: [IntegrationMap.tsx](client/src/components/IntegrationMap.tsx).
+- **New dependencies:** `d3@7.9.0`, `d3-sankey@0.12.3`, plus `@types/d3` and `@types/d3-sankey`. Installed with `cd client && yarn add`, because the root isn't a real Yarn workspace (`yarn workspace client …` fails). d3 only computes layouts; React renders the SVG.
+- New `GET /api/integration-map` ([integrationMap.js](server/routes/integrationMap.js), 5-min cache, `?fresh=1` to rebuild, ~0.5s). It returns:
+  - `apps`: 100, from the Applications batches.
+  - `links`: one per provider→consumer pair, cross-app only. 158 links, 476 APIs (the 479 batch rows collapse to 476 canonical). Each link carries its APIs and the business flows they support (parsed from "Flow — Task API").
+  - `hosts`: 166 servers.
+  - `internalApiCount` 197 and `unlinkedApiCount` 90, both shown in the UI as "not drawn".
+- **Overview:** hierarchical edge bundling (d3.cluster + curveBundle 0.85). Apps are grouped in domain arcs with neutral alternating fills; the 23 domains deliberately get no categorical hues. Line width = API count.
+  - Hover: outgoing links orange `#ea580c`, incoming blue `#2563eb`, everything else dimmed. Host color is `#7c3aed`. The palette passed the dataviz validator.
+  - Toggle to include the 64 apps that have no cross-app APIs.
+- **Side panel:** selected app's provides/consumes/internal counts, plus "Sends to" and "Receives from" lists. A list item opens that link's APIs.
+- **Drill-down Sankey:** senders → app → host servers (marked as derived) → receivers. It's laid out at the card's measured width (ResizeObserver) so text isn't scaled; a fixed 1100 viewBox made the text huge.
+- **API table:** has an "Open N business flows in Diagrams" button, which calls App.tsx `openDiagramsForBusinessFlows('LLM AMI', …)` (`INTEGRATION_FLOWS_NEIGHBORHOOD`).
+- Verified in the browser: 158 edges render, the hover highlight works, DEALER-NET and FINANCE-HUB drill-downs work, and FINANCE-HUB → CRM-360 opens exactly 2 flows on the Diagrams tab. Not built yet: a domain×domain matrix view.
+- `tsc`: 3 baseline errors. Not committed.
+
+### 2026-11-12 (2) — Explicit API relationships (provider → API → consumer, host server)
+- **Before:** an API row's only link was `FK_System Component[Applications].APP_ID` (singular "Component"). That's the provider, i.e. the "from" app in every cross-app description. The consumer existed only as description text, and there was no API → server link.
+- **New** [server/scripts/backfill_api_relationships.js](server/scripts/backfill_api_relationships.js) (`--dry-run`, idempotent). **Ran for real.** It adds 3 columns to all 768 API rows in `dataBatches` (8 batches, the source of truth) and to the 763 `canonicaldata` APIs in place, so `soxControlIds` survive. It recomputes canonical `primaryKey` via the newly exported `materializer.primaryKeyFromRow`, because FK values are part of the key (673 keys changed).
+  - `FK_System Components[Applications].APP_ID (Consumer)`:
+    - Cross-app (479): taken from "to X" in the description.
+    - Internal (197): same as the provider.
+    - Blank for the 92 internal APIs whose provider is `UNASSIGNED`. That gap was already in the source data.
+  - `FK_System Components[Servers].SERVER_ID (Host)`: **derived, not sourced.** One of the provider's API Gateway servers, picked by a hash of the API ID. 676 assigned, 92 none (`UNASSIGNED`).
+  - `Relationship Basis Qualifier`: a text explanation of both.
+  - 5 acronyms are shared by two app IDs: SERVICE-HUB, PARTS-PRO, RECALL-MGR, EXEC-DASHBOARD, ROADSIDE-360. Canonical Applications has only 95 of the 100 apps for this reason. Consumer resolution picks the ID that provides APIs.
+- **FK convention extended:** an optional trailing `(Role)`, documented in [FK-MAPPING-GUIDE.js](server/services/FK-MAPPING-GUIDE.js).
+  - Stripped by `parseForeignKeyColumnHeader` (customFactories.js), `parseFkColumnKey` (applicationReferenceLookup.js), and on the client by `parseFkColumnHeader`/`splitFkRole` (fkValidation.ts) and the inline regexes in ModelCatalog.tsx and NeighborhoodFactory.tsx.
+  - `findLinkedApplicationsFromFieldByValue` skips role-tagged FKs, so an app's linked APIs are still the ones it provides. Verified: LLM-004 → 69, LLM-011 → 14, unchanged.
+- **Network shape**, for the visualization discussion: 479 cross-app APIs, 36 apps, 158 unique app pairs, 23 domains, 411 cross-domain APIs. Hubs: LLM-004, LLM-007, LLM-005.
+- `tsc`: 3 baseline errors. Not committed.
+
+### 2026-11-12 — Software table was empty (server fix) + Diagrams "Clear" button
+- **Root cause:** `GET /api/custom-factories?loadDomain=data` sorted the `dataBatches` find in Mongo. Software has 478 batches × 100 rows (47,746 rows), so the sort exceeded Mongo's 32MB in-memory limit (`QueryExceededMemoryLimitNoDiskUseAllowed`).
+  - `.catch(() => [])` swallowed the error, and the route fell through to the legacy `Data` collection.
+  - There, `{...typedDataQuery, $or: [...]}` overwrote the dataType `$or`, so it returned all 4 old `Data` stubs (APIs/Applications/Servers/Software) with empty `values`. The result was a table with columns but no values.
+- **Fix** in [customFactories.js](server/routes/customFactories.js):
+  - Sort in Node (`compareDataBatches`) instead of in Mongo.
+  - Log query errors instead of swallowing them.
+  - Combine the two filters with `$and`.
+- Verified via API (Software 478 batches, all rows with values; Servers/Applications unchanged) and in the browser (Software Table: 1,910 pages of 25).
+- **Follow-up worth considering:** the Software response is about 50MB and takes about 4s, because the tab loads every row up front. Server-side pagination would fix that.
+- Diagrams tab: [DiagramBrowser.tsx](client/src/components/DiagramBrowser.tsx) has a "Clear" link button (tooltip "Clear all filters") in the Diagram Search header. It resets the type-ahead box, frameworks and facets, which also clears the canvas, and is disabled when nothing is set. Verified in the browser: 110 → 9 ("warranty") → 110.
+- `tsc`: 3 baseline errors. Not committed.
+
 ### 2026-11-11 (2) — BPMN IQ landing tab
 - New [LandingPage.tsx](client/src/components/LandingPage.tsx) is the first outer tab (`landing`, "BPMN IQ", `HomeOutlined`) and now the default `activeOuterTab` (was `analytics`).
   - Hero background is inline SVG drawn in BPMN 2.0 notation: an Order-to-Cash pool with 2 lanes, a Customer/Supplier collaboration with message flows, and a smaller faded copy.

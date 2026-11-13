@@ -17,6 +17,8 @@
     "bpmn-js": "^17.9.2",
     "bpmn-js-properties-panel": "^5.14.0",
     "camunda-bpmn-moddle": "^7.0.1",
+    "d3": "7.9.0",
+    "d3-sankey": "0.12.3",
     "dayjs": "^1.11.11",
     "plotly.js": "^3.5.1",
     "react": "^18.3.1",
@@ -26,6 +28,8 @@
     "string-similarity": "^4.0.4"
   },
   "devDependencies": {
+    "@types/d3": "7.4.3",
+    "@types/d3-sankey": "0.12.4",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@types/string-similarity": "^4.0.2",

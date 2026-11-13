@@ -7,7 +7,7 @@ import { SearchOutlined, FolderOutlined, TableOutlined, BarsOutlined, UnorderedL
 import { getModelCatalog, getModelCatalogTree, getModelCatalogTreeChildren, searchModelCatalogTree, type ModelCatalogRow } from '../api';
 import type { CatalogTreeNode, ModelCatalog } from '../types';
 import { enhanceColumnsWithSortAndFilters } from '../utils/tableEnhancer';
-import { loadFkValidationValues, normalizeFkToken, parseFkColumnHeader } from '../utils/fkValidation';
+import { loadFkValidationValues, normalizeFkToken, parseFkColumnHeader, splitFkRole } from '../utils/fkValidation';
 
 const CATALOG_PAGE_SIZE = 50;
 
@@ -293,7 +293,7 @@ function ModelCatalog({ modelName, requestedSearch = null }: ModelCatalogProps) 
           if (match) {
             targetTab = match[1];      // "Data"
             targetSubtab = match[2];   // "Applications"
-            searchField = match[3];    // "Correlation_ID"
+            searchField = splitFkRole(match[3]).field;    // "Correlation_ID" (a trailing "(Role)" is dropped)
             console.log(`[FK_COLUMN_SUCCESS] Column "${column}" parsed successfully:`, {
               targetTab,
               targetSubtab,

@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Diagram, DiagramMeta, DiagramNote, DiagramSoxControls, SoxControl, FlowScorecardsResponse, DiagramCreatePayload, DiagramUpdatePayload, DiagramValidationRequest, DiagramValidationReport, FileSaveResult, CapabilityMatchResult, TaskRecord, TaskCreatePayload, ReferenceData, RefItem, CapabilityItem, ActorItem, ServerItem, DatabaseItem, FactoryNeighborhoodSummary, CustomFactory, CustomFactoryRow, ModelCatalog, ModelCatalogRow, CatalogTreeResponse, CatalogTreeChildrenResponse, CatalogTreeSearchResponse, ProcessChangeRadarResponse, ProcessChangeSnapshot, ProcessOptimizationProposal } from './types';
+import type { Diagram, DiagramMeta, DiagramNote, DiagramSoxControls, SoxControl, FlowScorecardsResponse, DiagramCreatePayload, DiagramUpdatePayload, DiagramValidationRequest, DiagramValidationReport, FileSaveResult, CapabilityMatchResult, TaskRecord, TaskCreatePayload, ReferenceData, RefItem, CapabilityItem, ActorItem, ServerItem, DatabaseItem, FactoryNeighborhoodSummary, CustomFactory, CustomFactoryRow, ModelCatalog, ModelCatalogRow, CatalogTreeResponse, CatalogTreeChildrenResponse, CatalogTreeSearchResponse, ProcessChangeRadarResponse, ProcessChangeSnapshot, ProcessOptimizationProposal, IntegrationMapResponse, ApiSequenceResponse } from './types';
 export type { RefItem, CapabilityItem, ActorItem, ServerItem, DatabaseItem, FactoryNeighborhoodSummary, CustomFactory, CustomFactoryRow, ModelCatalog, ModelCatalogRow, CatalogTreeResponse, CatalogTreeChildrenResponse, CatalogTreeSearchResponse };
 
 const api = axios.create({ baseURL: '/api', withCredentials: true });
@@ -784,6 +784,12 @@ export const getDashboardServerLocationPoints = (): Promise<{
 // security/defect risk, SOX controls & deviations, TCO (server/routes/dashboard.js).
 export const getFlowScorecards = (): Promise<FlowScorecardsResponse> =>
   api.get('/dashboard/flow-scorecards').then((r) => r.data);
+
+export const getIntegrationMap = (fresh = false): Promise<IntegrationMapResponse> =>
+  api.get('/integration-map', { params: fresh ? { fresh: 1 } : undefined }).then((r) => r.data as IntegrationMapResponse);
+
+export const getApiSequence = (diagramId: string): Promise<ApiSequenceResponse> =>
+  api.get(`/integration-map/sequence/${encodeURIComponent(diagramId)}`).then((r) => r.data as ApiSequenceResponse);
 
 export const getProcessChangeRadar = (): Promise<ProcessChangeRadarResponse> =>
   api.get('/process-change-radar').then((r) => r.data);

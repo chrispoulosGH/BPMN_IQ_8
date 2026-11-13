@@ -23,6 +23,18 @@ Example: FK_System Components[Applications].APP_ID
   ├─ TargetSubtab  "Applications" — the subtab/data-type within that tab
   └─ ColumnName    "APP_ID" — the field on the target record to resolve against
 
+Optional role suffix: FK_<TargetTab>[<TargetSubtab>].<ColumnName> (<Role>)
+
+  When one row links to the same target type twice, a trailing "(Role)" keeps
+  the columns apart. Every parser strips it, so the target column is unchanged.
+  Example (APIs, backfilled 2026-11-12 by scripts/backfill_api_relationships.js):
+    FK_System Component[Applications].APP_ID              provider (owning) app
+    FK_System Components[Applications].APP_ID (Consumer)  consumer app
+    FK_System Components[Servers].SERVER_ID (Host)        host server (DERIVED:
+        one of the provider's API Gateway servers; see Relationship Basis Qualifier)
+  The plain, role-less FK stays the "owner" link: findLinkedApplicationsFromFieldByValue()
+  in applicationReferenceLookup.js skips role-tagged columns.
+
 Resolution is a TWO-STAGE process, and both stages must be generic — hardcoding
 either one recreates the bug this file used to document:
 

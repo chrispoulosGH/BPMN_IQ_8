@@ -120,6 +120,8 @@ const processChangeRadarRouter = require('./routes/processChangeRadar');
 app.use('/api/process-change-radar', processChangeRadarRouter);
 const processOptimizerRouter = require('./routes/processOptimizer');
 app.use('/api/process-optimizer', processOptimizerRouter);
+const integrationMapRouter = require('./routes/integrationMap');
+app.use('/api/integration-map', integrationMapRouter);
 const soxControlsRouter = require('./routes/soxControls');
 app.use('/api/sox-controls', soxControlsRouter);
 

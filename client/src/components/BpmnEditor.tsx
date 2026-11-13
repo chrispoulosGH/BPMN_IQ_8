@@ -53,6 +53,10 @@ export interface BpmnEditorHandle {
   // screen to recompute its gauges as the user edits, without a save/XML
   // round-trip).
   getTaskApplications: () => { taskId: string; taskName: string; apps: string[] }[];
+  // Select a task by name and scroll it into view (API sequence panel). On a
+  // composite canvas, sectionIndex picks the stacked section (0 = unprefixed,
+  // n = "stack_n_" element ids). Returns false if no task matched.
+  focusTaskByName: (taskName: string, sectionIndex?: number) => boolean;
 }
 
 interface BpmnEditorProps {
@@ -792,6 +796,28 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
           taskName: el.businessObject?.name || el.id,
           apps: getTaskAppsRef.current(el.businessObject),
         }));
+      },
+      focusTaskByName: (taskName: string, sectionIndex?: number) => {
+        const m = modelerRef.current;
+        if (!m) return false;
+        const norm = (value: string) => String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+        const target = norm(taskName);
+        const elementRegistry = m.get('elementRegistry');
+        const matches = elementRegistry.filter((el: any) => isActivityType(el.businessObject?.$type) && norm(el.businessObject?.name) === target);
+        if (!matches.length) return false;
+        const sectionOf = (el: any) => {
+          const prefix = /^stack_(\d+)_/.exec(String(el.id));
+          return prefix ? Number(prefix[1]) : 0;
+        };
+        const element = (typeof sectionIndex === 'number' ? matches.find((el: any) => sectionOf(el) === sectionIndex) : null) || matches[0];
+        try {
+          m.get('selection').select(element);
+          const canvas = m.get('canvas');
+          if (typeof canvas.scrollToElement === 'function') canvas.scrollToElement(element, { top: 120, bottom: 120, left: 160, right: 160 });
+        } catch {
+          return false;
+        }
+        return true;
       },
       fitViewport: () => {
         if (modelerRef.current) fitViewportWithTitleRoom(modelerRef.current);
@@ -3338,17 +3364,6 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
           );
         }) : null}
         <div ref={canvasRef} className="bpmn-canvas absolute inset-0" />
-        {/* New Diagram button on canvas */}
-        {!readOnly && onNewDiagram && (
-          <button
-            className="absolute bottom-4 left-4 z-20 flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium shadow-md transition-colors"
-            onClick={onNewDiagram}
-            title="New Diagram"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
-            New Diagram
-          </button>
-        )}
         {/* Sticky notes toolbar: "add a note" button, plus a minimize/maximize
             toggle for all notes currently on screen (shown only once at
             least one exists — see visibleNotes below). */}

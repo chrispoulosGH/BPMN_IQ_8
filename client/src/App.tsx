@@ -54,8 +54,15 @@ import {
   FireOutlined,
   ExperimentOutlined,
   HomeOutlined,
+  ApiOutlined,
 } from '@ant-design/icons';
 import LandingPage from './components/LandingPage';
+import IntegrationMap from './components/IntegrationMap';
+import ApiSequencePanel from './components/ApiSequencePanel';
+
+// API names encode their business flow ("Flow — Task API"); those flows' diagrams
+// all live in this framework (Diagram.neighborhoodName has one distinct value).
+const INTEGRATION_FLOWS_NEIGHBORHOOD = 'LLM AMI';
 import BpmnEditor, { EMPTY_DIAGRAM, type BpmnEditorHandle } from './components/BpmnEditor';
 import { composeStackedDiagramXml, type CompositeDiagramItem, type CompositeSectionTitle } from './utils/diagramComposite';
 import ProcessChangeRadar from './components/ProcessChangeRadar';
@@ -1345,6 +1352,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
       key: 'file',
       title: 'File',
       actions: [
+        { key: 'new', tooltip: 'New diagram', icon: <PlusOutlined />, onClick: handleNew, disabled: readOnly },
         { key: 'open', tooltip: 'Open BPMN file', icon: <UploadOutlined />, onClick: handleUploadLocal },
         { key: 'download', tooltip: 'Download BPMN file', icon: <DownloadOutlined />, onClick: handleDownloadLocal },
         { key: 'save-server', tooltip: 'Save BPMN file to server', icon: <SaveOutlined />, onClick: handleSaveToServer, disabled: readOnly },
@@ -3236,7 +3244,8 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                             }}
                           />
                         </div>
-                        <div className="min-h-0 min-w-0 flex-1">
+                        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                          <div className="min-h-0 min-w-0 flex-1">
                           <BpmnEditor
                             ref={editorRef}
                             searchHighlightTerm={diagramSearchTerm}
@@ -3326,6 +3335,14 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                           }
                         }}
                       />
+                          </div>
+                          <ApiSequencePanel
+                            diagramIds={selectedDiagramIds.length ? selectedDiagramIds : (activeDiagram?._id ? [activeDiagram._id] : [])}
+                            highlightTaskName={selectedDiagramTask?.name || null}
+                            onFocusTask={(taskName, sectionIndex) => {
+                              editorRef.current?.focusTaskByName(taskName, sectionIndex);
+                            }}
+                          />
                     </div>
                   </div>
                     </div>
@@ -3356,6 +3373,15 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                         children: <ProcessChangeRadar initialDomainFilter={radarDomainFocus} initialDiagramId={radarDiagramFocus} />,
                       },
                     ]}
+                  />
+                ),
+              },
+              {
+                key: 'integrationMap',
+                label: outerTabLabel('integrationMap', <span><ApiOutlined /> Integration Map</span>),
+                children: (
+                  <IntegrationMap
+                    onOpenBusinessFlows={(flows, label) => openDiagramsForBusinessFlows(INTEGRATION_FLOWS_NEIGHBORHOOD, flows, label)}
                   />
                 ),
               },

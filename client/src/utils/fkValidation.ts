@@ -5,6 +5,15 @@ export interface FkColumnTarget {
   targetTab: string;
   targetSubtab: string;
   targetField: string;
+  /** Optional trailing "(Role)", e.g. "Consumer" in "FK_X[Applications].APP_ID (Consumer)". */
+  role?: string;
+}
+
+// A trailing "(Role)" lets one row hold two links to the same target type
+// (e.g. provider and consumer app). It's not part of the target column name.
+export function splitFkRole(columnName: string): { field: string; role?: string } {
+  const match = String(columnName || '').trim().match(/^(.*?)\s*\(([^)]+)\)$/);
+  return match ? { field: match[1].trim(), role: match[2].trim() } : { field: String(columnName || '').trim() };
 }
 
 const validationCache = new Map<string, Promise<Set<string>>>();
@@ -22,10 +31,12 @@ export function normalizeFkValue(value: unknown) {
 export function parseFkColumnHeader(column: string): FkColumnTarget | null {
   const match = String(column || '').trim().match(/^FK_([^\[]+)\[([^\]]+)\]\.(.+)$/i);
   if (!match) return null;
+  const { field, role } = splitFkRole(match[3]);
   return {
     targetTab: match[1].trim(),
     targetSubtab: match[2].trim(),
-    targetField: match[3].trim(),
+    targetField: field,
+    ...(role ? { role } : {}),
   };
 }
 

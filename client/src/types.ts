@@ -817,3 +817,152 @@ export interface FlowScorecardsResponse {
   tcoYear: number | null;
   scorecards: FlowScorecard[];
 }
+
+// ── Integration Map (GET /api/integration-map) ───────────────────────────────
+export interface IntegrationMapApp {
+  id: string;
+  acronym: string;
+  name: string;
+  domain: string;
+  criticality: string;
+  providedApiCount: number;
+  consumedApiCount: number;
+  internalApiCount: number;
+}
+
+export interface IntegrationMapApi {
+  id: string;
+  name: string;
+  businessFlow: string;
+  task: string;
+  method: string;
+  type: string;
+  lifecycle: string;
+  endpoint: string;
+  /** Derived host server id (see IntegrationMapResponse.hostAssignmentNote). */
+  host: string;
+  /** Generated data object ids (see IntegrationMapResponse.dataObjectNote); '' = no request body. */
+  requestObject: string;
+  responseObject: string;
+}
+
+export interface IntegrationMapDataObjectField {
+  name: string;
+  type: string;
+  required: boolean;
+  pii: boolean;
+  financial: boolean;
+  restricted: boolean;
+}
+
+export interface IntegrationMapDataObject {
+  id: string;
+  name: string;
+  category: string;
+  domain: string;
+  sensitivity: string;
+  containsPii: boolean;
+  /** System-of-record app id. */
+  systemOfRecord: string;
+  fields: IntegrationMapDataObjectField[];
+}
+
+export interface IntegrationMapLink {
+  /** Provider app id. */
+  source: string;
+  /** Consumer app id. */
+  target: string;
+  count: number;
+  businessFlows: string[];
+  /** Data objects carried (request or response, acknowledgements excluded), most frequent first. */
+  dataObjects: Array<{ id: string; count: number }>;
+  apis: IntegrationMapApi[];
+}
+
+export interface IntegrationMapHost {
+  id: string;
+  name: string;
+  role: string;
+  city: string;
+  datacenter: string;
+  environment: string;
+}
+
+export interface IntegrationMapResponse {
+  generatedAt: string;
+  apps: IntegrationMapApp[];
+  links: IntegrationMapLink[];
+  hosts: Record<string, IntegrationMapHost>;
+  dataObjects: Record<string, IntegrationMapDataObject>;
+  dataObjectNote: string;
+  hostAssignmentNote: string;
+  internalApiCount: number;
+  unlinkedApiCount: number;
+}
+
+// ── API sequence for one business flow (GET /api/integration-map/sequence/:diagramId) ──
+export interface ApiSequenceParticipant {
+  id: string;
+  acronym: string;
+  name: string;
+  domain: string;
+  criticality: string;
+  unassigned?: boolean;
+}
+
+export interface ApiSequenceCall {
+  number: number;
+  id: string;
+  name: string;
+  method: string;
+  type: string;
+  lifecycle: string;
+  endpoint: string;
+  provider: string;
+  consumer: string;
+  host: string;
+  requestObject: string;
+  responseObject: string;
+  /** Participant ids: provider → consumer (the direction the data moves). */
+  from: string;
+  to: string;
+  internal: boolean;
+}
+
+export interface ApiSequenceStep {
+  taskId: string;
+  taskName: string;
+  taskType: string;
+  lane: string;
+  calls: ApiSequenceCall[];
+}
+
+export interface ApiSequenceFragment {
+  type: 'alt' | 'par' | 'opt';
+  gatewayType: string;
+  label: string;
+  branches: Array<{ label: string; steps: ApiSequenceStep[] }>;
+}
+
+export type ApiSequenceItem =
+  | { kind: 'step'; step: ApiSequenceStep }
+  | { kind: 'fragment'; fragment: ApiSequenceFragment };
+
+export interface ApiSequenceResponse {
+  diagramId: string;
+  diagramName: string;
+  businessFlow: string;
+  domain: string;
+  subdomain: string;
+  lanes: string[];
+  participants: ApiSequenceParticipant[];
+  items: ApiSequenceItem[];
+  callCount: number;
+  taskCount: number;
+  tasksWithoutApi: number;
+  fragmentCount: number;
+  dataObjects: Record<string, IntegrationMapDataObject>;
+  hosts: Record<string, IntegrationMapHost>;
+  directionNote: string;
+  dataObjectNote: string;
+}

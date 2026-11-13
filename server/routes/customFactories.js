@@ -601,7 +601,12 @@ function parseForeignKeyColumnHeader(header) {
     ? normalizedFieldName
     : `fk_${getComponentFieldName(targetColumnName || targetGroup || rawReference || 'reference')}`;
 
-  const targetColumnNameBase = getNormalizedText(targetColumnName).replace(/\s+qualifier$/i, '').trim();
+  // A trailing "(Role)" (e.g. "APP_ID (Consumer)") distinguishes two links to
+  // the same target type; it is not part of the target column name.
+  const roleMatch = getNormalizedText(targetColumnName).match(/^(.*?)\s*\(([^)]+)\)$/);
+  const targetColumnNameWithoutRole = roleMatch ? roleMatch[1].trim() : getNormalizedText(targetColumnName);
+  const role = roleMatch ? roleMatch[2].trim() : '';
+  const targetColumnNameBase = targetColumnNameWithoutRole.replace(/\s+qualifier$/i, '').trim();
 
   return {
     name: trimmedHeader,
@@ -610,8 +615,9 @@ function parseForeignKeyColumnHeader(header) {
     targetReference: rawReference,
     targetGroup,
     targetScope,
-    targetColumnName: getNormalizedText(targetColumnName),
+    targetColumnName: targetColumnNameWithoutRole,
     targetColumnNameBase,
+    ...(role ? { role } : {}),
   };
 }
 
@@ -839,6 +845,18 @@ function getRowValueByColumnName(row, columnName) {
 
   const matchingKey = Object.keys(row || {}).find((key) => String(key || '').trim().toLowerCase() === normalizedColumnName);
   return matchingKey ? row[matchingKey] : '';
+}
+
+// Same order the data-batch queries used to ask Mongo for:
+// neighborhoodName, dataType, name, uploadedAt (all ascending).
+function compareDataBatches(left, right) {
+  for (const key of ['neighborhoodName', 'dataType', 'name']) {
+    const diff = String(left?.[key] ?? '').localeCompare(String(right?.[key] ?? ''));
+    if (diff) return diff;
+  }
+  const leftTime = left?.uploadedAt ? new Date(left.uploadedAt).getTime() : 0;
+  const rightTime = right?.uploadedAt ? new Date(right.uploadedAt).getTime() : 0;
+  return leftTime - rightTime;
 }
 
 function escapeRegExp(text) {
@@ -1956,34 +1974,49 @@ router.get('/', async (req, res) => {
         uploadedAt: 1,
         rows: 1,
       };
-      const dataBatchFactories = await db.collection('dataBatches')
-        .find(typedDataQuery, { projection: batchProjection })
-        .sort({ neighborhoodName: 1, dataType: 1, name: 1, uploadedAt: 1 })
-        .toArray()
-        .catch(() => []);
+      // Sorted in Node, not by Mongo: these batch docs carry their full rows,
+      // and a large type (e.g. Software, ~480 batches) blows Mongo's 32MB
+      // in-memory sort limit. That error used to be swallowed by the catch,
+      // which made the route fall through to the legacy Data collection and
+      // return empty rows.
+      const loadSortedBatches = async (collectionName) => {
+        try {
+          const docs = await db.collection(collectionName)
+            .find(typedDataQuery, { projection: batchProjection })
+            .toArray();
+          return docs.sort(compareDataBatches);
+        } catch (error) {
+          console.error(`[custom-factories] ${collectionName} query failed for dataType="${requestedDataType}":`, error?.message || error);
+          return [];
+        }
+      };
+
+      const dataBatchFactories = await loadSortedBatches('dataBatches');
 
       if (dataBatchFactories.length) {
         return res.json(dataBatchFactories.map((factory) => serializeFactory(factory)));
       }
 
-      const dataComponentBatchFactories = await db.collection('dataComponentBatches')
-        .find(typedDataQuery, { projection: batchProjection })
-        .sort({ neighborhoodName: 1, dataType: 1, name: 1, uploadedAt: 1 })
-        .toArray()
-        .catch(() => []);
+      const dataComponentBatchFactories = await loadSortedBatches('dataComponentBatches');
 
       if (dataComponentBatchFactories.length) {
         return res.json(dataComponentBatchFactories.map((factory) => serializeFactory(factory)));
       }
 
+      // $and keeps typedDataQuery's own dataType $or; spreading it and then
+      // setting $or here used to silently drop the type filter.
       const dataFactories = await Data.find({
-        ...typedDataQuery,
-        $or: [
-          { loadDomain: 'data' },
-          { modelName: '' },
-          { modelName: { $exists: false } },
-          { dataType: { $nin: ['', null] } },
-          { sourceFileName: { $not: /\bmodel\s+data\.csv$/i } },
+        $and: [
+          typedDataQuery,
+          {
+            $or: [
+              { loadDomain: 'data' },
+              { modelName: '' },
+              { modelName: { $exists: false } },
+              { dataType: { $nin: ['', null] } },
+              { sourceFileName: { $not: /\bmodel\s+data\.csv$/i } },
+            ],
+          },
         ],
       }, {
         neighborhoodName: 1,

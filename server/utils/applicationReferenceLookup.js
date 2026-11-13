@@ -52,7 +52,13 @@ const FK_COLUMN_HEADER_REGEX = /^FK_([^\[]+)\[([^\]]+)\]\.(.+)$/i;
 function parseFkColumnKey(key) {
   const trimmed = normalizeValue(key);
   const bracketMatch = trimmed.match(FK_COLUMN_HEADER_REGEX);
-  if (bracketMatch) return { targetScope: bracketMatch[2].trim(), columnName: bracketMatch[3].trim() };
+  if (bracketMatch) {
+    // Optional trailing "(Role)", e.g. "APP_ID (Consumer)" — see FK-MAPPING-GUIDE.js.
+    const roleMatch = bracketMatch[3].trim().match(/^(.*?)\s*\(([^)]+)\)$/);
+    return roleMatch
+      ? { targetScope: bracketMatch[2].trim(), columnName: roleMatch[1].trim(), role: roleMatch[2].trim() }
+      : { targetScope: bracketMatch[2].trim(), columnName: bracketMatch[3].trim() };
+  }
 
   if (!/^FK_/i.test(trimmed)) return null;
   const parts = trimmed.slice(3).split('.').map((part) => part.trim()).filter(Boolean);
@@ -330,6 +336,9 @@ function findLinkedApplicationsFromFieldByValue(fieldByValue) {
     let candidateColumnName = normalizeValue(key);
     if (fk) {
       if (!isApplicationTargetScope(fk.targetScope)) continue; // FK column, but points at a different target
+      // Role-tagged links (e.g. an API's "(Consumer)" app) are secondary; the
+      // owning app is the plain FK, so "linked to this app" keeps its meaning.
+      if (fk.role) continue;
       candidateColumnName = fk.columnName;
     }
 

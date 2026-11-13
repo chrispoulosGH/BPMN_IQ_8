@@ -4,6 +4,7 @@ import { DeleteOutlined, EditOutlined, ExclamationCircleOutlined, FolderAddOutli
 import type { ColumnsType } from 'antd/es/table';
 import { enhanceColumnsWithSortAndFilters } from '../utils/tableEnhancer';
 import { encodeExactFactorySearch, parseFactorySearch } from '../utils/factorySearch';
+import { splitFkRole } from '../utils/fkValidation';
 
 import {
   createFactoryNeighborhood,
@@ -704,7 +705,7 @@ function NeighborhoodFactory({ canManageFactories, userRole, fixedNeighborhoodNa
           if (match) {
             targetTab = match[1];
             targetSubtab = match[2];
-            searchField = match[3];
+            searchField = splitFkRole(match[3]).field; // drop a trailing "(Role)"
           }
         }
 
