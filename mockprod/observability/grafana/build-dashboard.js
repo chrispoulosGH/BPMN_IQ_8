@@ -72,13 +72,13 @@ panels.push(stat('Median instance duration', `histogram_quantile(0.5, sum by (le
 y += 4;
 
 panels.push(timeseries('Instances finished by outcome (per hour)', [prom(`sum by (bpmn_process_outcome) (rate(bpmn_process_instances_total{${FLOW}}[$__rate_interval])) * 3600`, '{{bpmn_process_outcome}}')], grid(0, y, 12, 8), { overrides: outcomeOverrides, description: 'Follows the simulator\'s daily curve: quiet overnight, lunchtime and after-work peaks.' }));
-panels.push(timeseries('Instances in flight by flow', [prom(`sum by (bpmn_process_name) (bpmn_process_active_instances{${FLOW}})`, '{{bpmn_process_name}}')], grid(12, y, 12, 8)));
+panels.push(timeseries('Instances in flight by flow (top 10)', [prom(`topk(10, sum by (bpmn_process_name) (bpmn_process_active_instances{${FLOW}}))`, '{{bpmn_process_name}}')], grid(12, y, 12, 8)));
 y += 8;
 
 panels.push({
-  id: nextId++, type: 'bargauge', title: 'p95 task duration, including human work', datasource: PROM, gridPos: grid(0, y, 12, 11),
+  id: nextId++, type: 'bargauge', title: 'p95 task duration, including human work (slowest 25)', datasource: PROM, gridPos: grid(0, y, 12, 11),
   description: 'Slowest first. Human-lane tasks include the (compressed) think time before the API call.',
-  targets: [prom(`sort_desc(histogram_quantile(0.95, sum by (le, bpmn_task_name) (rate(bpmn_task_duration_seconds_bucket{${FLOW}}[${window}]))))`, '{{bpmn_task_name}}', { instant: true })],
+  targets: [prom(`topk(25, histogram_quantile(0.95, sum by (le, bpmn_task_name) (rate(bpmn_task_duration_seconds_bucket{${FLOW}}[${window}]))))`, '{{bpmn_task_name}}', { instant: true })],
   fieldConfig: { defaults: { unit: 's', decimals: 0, color: { mode: 'fixed', fixedColor: '#1f6feb' }, min: 0 }, overrides: [] },
   options: { orientation: 'horizontal', displayMode: 'basic', valueMode: 'text', showUnfilled: true, namePlacement: 'left', reduceOptions: { calcs: ['lastNotNull'], fields: '', values: false } },
 });

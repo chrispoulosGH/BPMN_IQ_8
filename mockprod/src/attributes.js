@@ -50,8 +50,8 @@ module.exports = {
   APP_NAME: 'app.name',
   APP_DOMAIN: 'app.domain',
   APP_CRITICALITY: 'app.criticality',
-  TASK_APP_ID: 'bpmn.task.application.id', // task span: the app the task runs in
-  TASK_APP_ACRONYM: 'bpmn.task.application.acronym',
+  TASK_APP_ID: 'bpmn.task.application.id', // task span: the app(s) the task runs in, from its diagram (string[])
+  TASK_APP_ACRONYM: 'bpmn.task.application.acronym', // string[]; may differ from api.provider.app_id
 
   // API
   API_ID: 'api.id',

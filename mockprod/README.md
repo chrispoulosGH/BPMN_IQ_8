@@ -13,6 +13,33 @@ The three flows form one car-purchase journey:
 | Customer Credit Application | 10 | F&I Manager, System, Customer | CREDIT-DECIDE, DEALER-NET |
 | Warranty Contract Execution | 11 | Warranty Salesman, Customer, Manager | WARRANTY-SALES, DEALER-NET, CREDIT-DECIDE, VSC-ADMIN, DIGITAL-RETAIL, FINANCE-HUB |
 
+### Every business flow (111)
+
+The catalog exports **every BPMN IQ diagram**, so all 110 modeled flows run, plus the undocumented upsell flow below.
+
+- **Customer journeys:** the car-purchase chain (Digital Retailing → upsell → Credit Application → Warranty) runs as journeys, `DAILY_JOURNEYS`.
+- **The other 107 flows run standalone**, each on its domain's clock:
+
+  | Profile | Domains | Hours | Per flow per day |
+  |---|---|---|---|
+  | dealership | Sales, F&I, Warranty, After-Sales, Marketing | dealership hours, busy Saturdays | ~24 |
+  | office | Corporate, Dealer Network, Engineering | weekdays 08–18 | ~6 |
+  | plant | Manufacturing & Supply Chain | three shifts, 24/7 | ~30 |
+  | always-on | Connected Vehicle & Mobility | 24/7, evening peak | ~36 |
+
+  - **Adjustments by flow name:** annual, strategic and budget flows run about 0.5 a day. Programs, audits, launches, campaigns and planning are ×0.4; recalls ×0.5.
+  - **Total:** about 2,000 standalone instances on an average day. `STANDALONE_DAILY_SCALE` scales it (0 = off).
+- **55 application services:** the 40 catalogued apps the flows use, plus 15 **uncatalogued** apps that diagrams name but the Applications catalog doesn't have (PLM-CORE, QMS-CENTRAL, PARTS-INVENTORY, HR-CENTRAL…). These host the 131 APIs that have no provider in the catalog, and carry `app.catalogued=false` and `api.provider.source="uncatalogued"`.
+  - 7 more provider-less APIs are hosted on the task's catalogued diagram app (`api.provider.source="diagram"`).
+  - Memory is about 2 GB for the simulator container.
+- **Shared routes:** 19 routes are shared by several APIs (flow variants). Each is registered once, and the engine's `x-api-id` header selects the API.
+- **Task application:** `bpmn.task.application.*` is the task's application(s) from its diagram (a string array). It can differ from `api.provider.app_id`, the app that provides the API the task calls.
+- **Burst commands:** `npm run burst -- all` starts one instance of every standalone flow. `npm run burst -- flows 5 "Battery Replacement Service"` starts instances of one flow.
+- **Verified** with one instance per flow:
+  - 108/111 flows rebuild from traces matching their source diagram on every check.
+  - The other 3 had only an abandoned instance, so their later tasks weren't observed yet.
+  - Discovery: 110 matched by diagram id, and only the upsell flow is discovered.
+
 ### A fourth, undocumented flow: Vehicle Feature & Package Upsell
 
 **Vehicle Feature & Package Upsell** also runs in mock production, but it has **no diagram in BPMN IQ**. It is a 12-task flow across Customer, Sales Consultant and System lanes that upsells leather, performance, color, technology, cold-weather and towing packages with incentives. Its applications are CRM-360, ANALYTICS-HUB, SALES-CONFIG, PRICING-ENGINE, DEALER-NET, DIGITAL-RETAIL, ACCESSORY-CFG, CREDIT-DECIDE and ORDER-MGMT, and it uses a new **Upsell Offer** data object.

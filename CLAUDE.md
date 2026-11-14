@@ -10,6 +10,55 @@
 ## Session log
 Newest entry first. Each entry: date, what was in flight, what's uncommitted/unresolved.
 
+### 2026-11-14 (3) — Live lineage: active flows → apps → APIs
+- **New `GET /api/live-lineage`** ([liveLineage.js](server/routes/liveLineage.js); `PROMETHEUS_URL` default `http://localhost:9090`; `?minutes=` 1–1440, `?domain=`, `?flow=`).
+  - Source: Tempo span metrics in Prometheus, server spans only, excluding `bpmn-process-engine` and the consumer `/inbound` hand-offs.
+  - Grouped by `bpmn_process_name, service, api_id, api_provider_source, span_name`.
+  - **Window math:** `clamp_min((x - x offset Nm) or x, 0)`, not `increase()`, so series born inside the window count from 0. Otherwise rarely-run flows vanish.
+  - **Enriched from BPMN IQ:** flow domain + `modeled` (has a diagram); app name + `catalogued`; API name/endpoint + `inCatalog`. Uncatalogued APIs take method/route from `span_name`. 5-min reference cache.
+- **Tempo:** span_metrics dimensions gained `api.id`, `api.provider.source` ([tempo.yaml](mockprod/observability/tempo/tempo.yaml); restart Tempo after changing).
+- **Client:** Integration Map is now sub-tabs **Catalog map** (existing) | **Live lineage** (new [LiveLineage.tsx](client/src/components/LiveLineage.tsx)).
+  - A d3-sankey of flow → app (serves the API) → API, width = calls in window.
+  - Controls: window 5 min–24 h, domain, top 10/25/50/all flows, 30 s auto-refresh.
+  - Hover or click a flow traces its own app→API links (per-flow link sets, not every link out of a shared app).
+  - Amber ⚑ = not in BPMN IQ (no diagram / uncatalogued app / API not in catalog); red dot = errors.
+  - A pinned flow gets a detail table and "Open in Business Processes".
+- **Verified in the browser:** 37 flows / 34 apps / 223 APIs in 1 h; the upsell flow pins to its 6 apps and 12 APIs; flags render. `tsc`: 3 baseline errors. Not committed.
+
+### 2026-11-14 (2) — Mock production simulates every flow (111)
+- **Export:** `export_mockprod_catalog.js` defaults to every diagram (`--flows=` still limits it).
+  - The server lookup and `pickHost` moved before the flow loop.
+  - Provider-less APIs (138, provider `UNASSIGNED`):
+    - 7 are hosted on the task's catalogued diagram app (`providerSource: 'diagram'`).
+    - 131 are hosted on 15 **uncatalogued** diagram apps (`UNCAT-<ACRONYM>`, `catalogued: false`; e.g. PLM-CORE, QMS-CENTRAL, PARTS-INVENTORY, HR-CENTRAL). 30 diagram app acronyms are missing from the Applications catalog in total.
+  - Result: 111 flows, 863 tasks, 874 calls, 55 apps. 1 task has no API: "Vehicle Subscription Service / Select Vehicle &#38; Plan", whose name is entity-encoded in the source so it never matched an API.
+- **appService:** routes are grouped by method+path (19 shared by variants), and the engine's `x-api-id` header picks the API. New attributes `api.provider.source`, resource `app.catalogued`.
+- **Engine:**
+  - The 4 car-purchase flows stay journey-only. The other 107 run **standalone** (`runStandalone`, `business.journey.type=standalone`, `TXN-…` ids).
+  - `POST /flows` takes `{count, name}` or `{all:true}`; `npm run burst -- flows N [name]` / `burst -- all`.
+  - **Fix:** `bpmn.task.application.*` is now the task's *diagram* apps (string array), not the API provider. They differ for many flows, which was the cause of 55 "task applications" DIFFs. `traceToBpmn` accepts array or string.
+- **scheduler.js `startFlowScheduler`:** per-domain profiles (dealership / office / plant / always-on) with hourly and weekday weights, plus volume adjusted by flow name. ~2,011 instances/day; `STANDALONE_DAILY_SCALE` (now passed through compose and .env.example), `MAX_ACTIVE_STANDALONE` 400.
+- **Dashboard:** task bar gauge `topk(25)`, in-flight `topk(10)`.
+- **Verified (WAIT_SCALE 0.1, one instance of every flow):**
+  - 2.1 GiB for 56 Node processes; all 111 flows seen in Tempo.
+  - `reconstruct --compare`: 108/111 all OK. The 3 DIFFs are flows whose only instance was abandoned.
+  - Discovery: 110 matched by diagramId, only the upsell discovered (2.5 s).
+- Pre-fix traces moved to `mockprod/data/traces-before-all-flows.jsonl` (git-ignored). Left running at default pacing. Not committed.
+
+### 2026-11-14 — Discovery matches by diagram id → process id → name
+- [discoveredProcesses.js](server/routes/discoveredProcesses.js) no longer matches observed flows to diagrams by name only.
+  - **Inputs:** per observed `bpmn.process.name`, a TraceQL `| select(span.bpmn.diagram.id, span.bpmn.process.id)` (20 root spans) collects the ids the traces carry.
+  - **`classifyFlow`** matches in order:
+    1. `bpmn.diagram.id` that exists (survives renames; a deleted diagram's id falls through);
+    2. `bpmn.process.id` = the `<process id>` of exactly one diagram (parsed from `Diagram.xml`);
+    3. normalized name/businessFlow of exactly one diagram.
+  - **`buildDiagramIndex`:** keeps process ids or names shared by several diagrams out of the lookup tables, so a generic `Process_1` can't false-match. Today all 110 process ids are unique.
+  - **Response:** gained `matches[]` (matchedBy, diagram, notes); each discovered flow has `matchNotes`. Both functions are exported for testing.
+- **Verified:** 8 rule cases pass (rename, process-id fallback, stale id, shared id, shared name…). Live: the 3 car-purchase flows match `by diagramId`; only the upsell is discovered.
+- **UI:** the Discovered tab shows an "Already modeled … by diagram id" box and a "Why new" row.
+- **Gotcha hit:** writing JS regexes through a Python non-raw string turned `\b` into backspace characters. Use `r"""…"""` or the Edit tool for anything with regex escapes.
+- `tsc`: 3 baseline errors. Not committed.
+
 ### 2026-11-13 (5) — Business Processes tab + Discovered Processes (upsell flow found from traces)
 - **New flow, not in BPMN IQ:** "Vehicle Feature & Package Upsell" (`Process_Vehicle_Feature_Package_Upsell`, Sales & Distribution › New Vehicle Sales).
   - 12 tasks, 3 lanes (Customer / Sales Consultant / System).

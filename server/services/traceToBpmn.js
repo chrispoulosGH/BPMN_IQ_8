@@ -111,8 +111,11 @@ function buildModels(spans) {
       task.count += 1;
       task.sequences.push(Number(ta['bpmn.task.sequence']) || 0);
       task.durationsMs.push(t.end - t.start);
-      const app = ta['bpmn.task.application.acronym'];
-      if (app) task.applications.set(app, (task.applications.get(app) || 0) + 1);
+      // A task can run in several applications (an array attribute); older spans carry one string.
+      const taskApps = ta['bpmn.task.application.acronym'];
+      for (const app of (Array.isArray(taskApps) ? taskApps : [taskApps]).filter(Boolean)) {
+        task.applications.set(app, (task.applications.get(app) || 0) + 1);
+      }
       // API server spans under this task (any depth), excluding /inbound hand-offs.
       const stack = [...(childrenOf.get(t.spanId) || [])];
       while (stack.length) {

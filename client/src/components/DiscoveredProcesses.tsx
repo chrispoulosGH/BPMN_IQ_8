@@ -25,6 +25,8 @@ interface DiscoveredProcessesProps {
   allApplications?: ApplicationItem[];
 }
 
+const MATCH_LABEL: Record<string, string> = { diagramId: 'diagram id', processId: 'BPMN process id', name: 'name' };
+
 const formatDuration = (ms: number) => (ms >= 60000 ? `${(ms / 60000).toFixed(1)} min` : ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`);
 const formatWhen = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '—');
 
@@ -145,6 +147,20 @@ export default function DiscoveredProcesses({ allApplications }: DiscoveredProce
             {data ? <> Observed {data.observedFlows.length} flows in the last {data.lookbackHours} h; {data.documentedFlowsObserved.length} already have diagrams.</> : null}
           </div>
 
+          {data?.matches?.some((m) => m.documented) ? (
+            <div className="mb-3 rounded-md border border-solid border-slate-200 bg-slate-50 px-2.5 py-2 text-xs">
+              <div className="mb-1 font-semibold uppercase tracking-wide text-[10px] text-slate-500">Already modeled</div>
+              {data.matches.filter((m) => m.documented).map((m) => (
+                <div key={m.name} className="flex items-baseline justify-between gap-2 py-0.5">
+                  <span className="truncate text-slate-700">{m.name}</span>
+                  <Tooltip title={m.diagram ? `Matches diagram "${m.diagram.name}" (${m.diagram.id})` : ''}>
+                    <span className="shrink-0 text-slate-500">by {MATCH_LABEL[m.matchedBy || ''] || m.matchedBy}</span>
+                  </Tooltip>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
           {error ? <Alert type="error" showIcon message="Discovery unavailable" description={error} className="mb-3" /> : null}
           {data && !data.discovered.length ? (
             <Empty description="No undiscovered processes: every flow seen in the traces already has a diagram." />
@@ -178,6 +194,11 @@ export default function DiscoveredProcesses({ allApplications }: DiscoveredProce
               <div className="mb-1 font-semibold uppercase tracking-wide text-[10px] text-slate-500">Evidence</div>
               <div className="mb-2 grid grid-cols-[96px_1fr] gap-y-1">
                 <span className="text-slate-500">Process id</span><span className="font-mono break-all">{selected.processId}</span>
+                <span className="text-slate-500">Why new</span>
+                <span>
+                  No BPMN IQ diagram matches its diagram id, process id or name.
+                  {selected.matchNotes?.length ? <span className="block text-slate-500">{selected.matchNotes.join('; ')}</span> : null}
+                </span>
                 <span className="text-slate-500">Outcomes</span><span className="flex flex-wrap gap-1">{outcomeTags}</span>
                 <span className="text-slate-500">Completion</span><span>{Math.round(selected.completionRate * 100)}%</span>
                 <span className="text-slate-500">First seen</span><span>{formatWhen(selected.firstSeen)}</span>

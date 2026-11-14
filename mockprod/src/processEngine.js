@@ -30,7 +30,7 @@ const api = require('@opentelemetry/api');
 const A = require('./attributes');
 const { catalog, appUrl, flowByName, isSystemLane, ENGINE_PORT } = require('./catalog');
 const { newJourneyContext, buildBody } = require('./payloads');
-const { startScheduler } = require('./scheduler');
+const { startScheduler, startFlowScheduler } = require('./scheduler');
 
 const tracer = api.trace.getTracer('bpmn-iq-mockprod/engine', '1.0.0');
 const meter = api.metrics.getMeter('bpmn-iq-mockprod/engine', '1.0.0');
@@ -50,6 +50,7 @@ meter.createObservableGauge('bpmn.process.active_instances', { description: 'Pro
     for (const flow of catalog.flows) result.observe(byFlow[flow.name] || 0, { [A.PROCESS_NAME]: flow.name });
   });
 
+const APP_ID_BY_ACRONYM = new Map(Object.values(catalog.applications).map((app) => [app.acronym, app.id]));
 const WAIT_SCALE = Number(process.env.WAIT_SCALE || 1);
 const ABANDON_RATE = Number(process.env.ABANDON_RATE || 0.03);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -83,6 +84,8 @@ async function invokeApi(call, journeyCtx) {
     'content-type': 'application/json',
     'x-sim-context': Buffer.from(JSON.stringify(journeyCtx)).toString('base64'),
     'x-request-id': crypto.randomUUID(),
+    // Disambiguates APIs that share a route on the same application.
+    'x-api-id': call.apiId,
   };
   let lastError = null;
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -105,7 +108,13 @@ async function invokeApi(call, journeyCtx) {
 }
 
 async function runTask(flow, task, sequence, journeyCtx, instanceId) {
-  const appInfo = catalog.applications[task.calls[0]?.provider] || {};
+  // The task's application(s) come from its diagram; the API it calls may be
+  // provided by a different app. Fall back to the API provider when the
+  // diagram names none.
+  const providerApp = catalog.applications[task.calls[0]?.provider] || {};
+  const taskAppAcronyms = (task.diagramApplications || []).filter(Boolean);
+  if (!taskAppAcronyms.length && providerApp.acronym) taskAppAcronyms.push(providerApp.acronym);
+  const taskAppIds = taskAppAcronyms.map((acronym) => APP_ID_BY_ACRONYM.get(acronym)).filter(Boolean);
   const incoming = task.incoming[0] || {};
   const outgoing = task.outgoing[0] || {};
   const taskAttrs = {
@@ -125,8 +134,8 @@ async function runTask(flow, task, sequence, journeyCtx, instanceId) {
       [A.INCOMING_FLOW_SOURCE_ID]: incoming.sourceId || '',
       [A.OUTGOING_FLOW_ID]: outgoing.id || '',
       [A.OUTGOING_FLOW_TARGET_ID]: outgoing.targetId || '',
-      [A.TASK_APP_ID]: appInfo.id || '',
-      [A.TASK_APP_ACRONYM]: appInfo.acronym || '',
+      [A.TASK_APP_ID]: taskAppIds,
+      [A.TASK_APP_ACRONYM]: taskAppAcronyms,
     },
   }, async (span) => {
     const started = Date.now();
@@ -247,6 +256,21 @@ const JOURNEY_TYPES = [
   { type: 'warranty-add-on', weight: 0.1, steps: [['Warranty Contract Execution', 1]] },
 ];
 let activeJourneys = 0;
+// Flows that only run inside customer journeys; every other flow runs standalone.
+const JOURNEY_FLOWS = new Set(JOURNEY_TYPES.flatMap((j) => j.steps.map(([name]) => name)));
+const STANDALONE_FLOWS = catalog.flows.filter((f) => !JOURNEY_FLOWS.has(f.name));
+let activeStandalone = 0;
+
+/** One instance of a flow outside any customer journey (its own business transaction). */
+async function runStandalone(flow) {
+  const journey = { id: `TXN-${crypto.randomUUID()}`, type: 'standalone', ctx: newJourneyContext(), step: 1 };
+  activeStandalone += 1;
+  try {
+    await runProcessInstance(flow, journey, null);
+  } finally {
+    activeStandalone -= 1;
+  }
+}
 
 function pickJourneyType(requested) {
   const named = JOURNEY_TYPES.find((j) => j.type === requested);
@@ -291,11 +315,31 @@ server.get('/healthz', (_req, res) => res.json({ ok: true }));
 server.get('/status', (_req, res) => {
   res.json({
     activeJourneys,
+    activeStandalone,
+    standaloneFlows: STANDALONE_FLOWS.length,
     activeInstances: [...activeInstances.entries()].map(([id, v]) => ({ id, ...v, runningSeconds: Math.round((Date.now() - v.startedAt) / 1000) })),
     flows: catalog.flows.map((f) => f.name),
     journeyTypes: JOURNEY_TYPES.map((j) => j.type),
   });
 });
+// Start standalone instances now: POST /flows {"count": 3, "name": "Battery Replacement Service"}
+// (no name = random standalone flows)
+server.post('/flows', (req, res) => {
+  if (req.body?.all) {
+    // One instance of every standalone flow (smoke test across the whole catalog).
+    for (const flow of STANDALONE_FLOWS) runStandalone(flow).catch((err) => console.error('[engine] instance failed', err));
+    return res.status(202).json({ started: STANDALONE_FLOWS.length, flow: 'all' });
+  }
+  const count = Math.min(Math.max(Number(req.body?.count) || 1, 1), 500);
+  const named = req.body?.name ? flowByName(req.body.name) : null;
+  if (req.body?.name && !named) return res.status(404).json({ error: `No flow named "${req.body.name}"` });
+  for (let i = 0; i < count; i += 1) {
+    const flow = named || STANDALONE_FLOWS[Math.floor(Math.random() * STANDALONE_FLOWS.length)];
+    runStandalone(flow).catch((err) => console.error('[engine] instance failed', err));
+  }
+  res.status(202).json({ started: count, flow: named?.name || 'random' });
+});
+
 // Start journeys now: POST /journeys {"count": 5, "type": "online-purchase"}
 server.post('/journeys', (req, res) => {
   const count = Math.min(Math.max(Number(req.body?.count) || 1, 1), 200);
@@ -305,5 +349,8 @@ server.post('/journeys', (req, res) => {
 
 server.listen(ENGINE_PORT, () => {
   console.log(`[engine] ${catalog.flows.length} flows on :${ENGINE_PORT}`);
-  if (process.env.SCHEDULER !== 'off') startScheduler({ startJourney: () => runJourney(), activeJourneys: () => activeJourneys });
+  if (process.env.SCHEDULER !== 'off') {
+    startScheduler({ startJourney: () => runJourney(), activeJourneys: () => activeJourneys });
+    startFlowScheduler({ flows: STANDALONE_FLOWS, startInstance: runStandalone, activeInstances: () => activeStandalone });
+  }
 });

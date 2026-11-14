@@ -60,6 +60,7 @@ import LandingPage from './components/LandingPage';
 import IntegrationMap from './components/IntegrationMap';
 import ApiSequencePanel from './components/ApiSequencePanel';
 import DiscoveredProcesses from './components/DiscoveredProcesses';
+import LiveLineage from './components/LiveLineage';
 
 // API names encode their business flow ("Flow — Task API"); those flows' diagrams
 // all live in this framework (Diagram.neighborhoodName has one distinct value).
@@ -3409,9 +3410,33 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
               {
                 key: 'integrationMap',
                 label: outerTabLabel('integrationMap', <span><ApiOutlined /> Integration Map</span>),
+                // Catalog map = how apps connect per the API catalog; Live lineage =
+                // which flows → apps → APIs are actually running (telemetry).
                 children: (
-                  <IntegrationMap
-                    onOpenBusinessFlows={(flows, label) => openDiagramsForBusinessFlows(INTEGRATION_FLOWS_NEIGHBORHOOD, flows, label)}
+                  <Tabs
+                    className="factory-tabs business-process-tabs"
+                    defaultActiveKey="catalog"
+                    destroyInactiveTabPane
+                    items={[
+                      {
+                        key: 'catalog',
+                        label: <span><ApiOutlined /> Catalog map</span>,
+                        children: (
+                          <IntegrationMap
+                            onOpenBusinessFlows={(flows, label) => openDiagramsForBusinessFlows(INTEGRATION_FLOWS_NEIGHBORHOOD, flows, label)}
+                          />
+                        ),
+                      },
+                      {
+                        key: 'live',
+                        label: <span><RadarChartOutlined /> Live lineage</span>,
+                        children: (
+                          <LiveLineage
+                            onOpenBusinessFlows={(flows, label) => openDiagramsForBusinessFlows(INTEGRATION_FLOWS_NEIGHBORHOOD, flows, label)}
+                          />
+                        ),
+                      },
+                    ]}
                   />
                 ),
               },

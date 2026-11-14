@@ -25,6 +25,8 @@ initTelemetry({
     'app.name': app.name,
     'app.domain': app.domain,
     'app.criticality': app.criticality || '',
+    // false = named in a BPMN IQ diagram but missing from the Applications catalog
+    'app.catalogued': app.catalogued !== false,
   },
 });
 
@@ -140,10 +142,20 @@ appServer.use(express.json({ limit: '1mb' }));
 appServer.get('/healthz', (_req, res) => res.json({ ok: true, app: app.acronym, incident: incidentActive() }));
 
 const provided = apisProvidedBy(APP_ID);
+// Several catalog APIs can share one method + path (flow variants). Register
+// each route once; the caller's x-api-id header picks which API is meant.
+const routes = new Map();
 for (const call of provided) {
-  const method = call.method.toLowerCase();
+  const key = `${call.method.toUpperCase()} ${call.endpoint}`;
+  if (!routes.has(key)) routes.set(key, []);
+  routes.get(key).push(call);
+}
+for (const [key, callsOnRoute] of routes) {
+  const method = callsOnRoute[0].method.toLowerCase();
   if (typeof appServer[method] !== 'function') continue;
-  appServer[method](call.endpoint, async (req, res) => {
+  appServer[method](callsOnRoute[0].endpoint, async (req, res) => {
+    const requestedApi = String(req.headers['x-api-id'] || '');
+    const call = callsOnRoute.find((c) => c.apiId === requestedApi) || callsOnRoute[0];
     const span = serverSpan();
     const host = catalog.hosts[call.host];
     const incident = incidentActive();
@@ -154,6 +166,8 @@ for (const call of provided) {
       [A.API_LIFECYCLE]: call.lifecycle,
       [A.API_PROVIDER_APP_ID]: call.provider,
       [A.API_CONSUMER_APP_ID]: call.consumer,
+      // catalog | diagram (task's app hosts a provider-less API) | uncatalogued
+      'api.provider.source': call.providerSource || 'catalog',
       [A.API_REQUEST_OBJECT]: objectName(call.requestObject),
       [A.API_RESPONSE_OBJECT]: objectName(call.responseObject),
       [A.APP_ID]: app.id,
@@ -234,4 +248,4 @@ appServer.post('/inbound/:objectId', async (req, res) => {
 });
 
 const port = portByApp.get(APP_ID);
-appServer.listen(port, () => console.log(`[${app.acronym}] ${provided.length} APIs on :${port}`));
+appServer.listen(port, () => console.log(`[${app.acronym}] ${provided.length} APIs on ${routes.size} routes, :${port}`));

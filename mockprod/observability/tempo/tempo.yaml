@@ -37,7 +37,8 @@ metrics_generator:
       dimensions: [bpmn.process.name]
     span_metrics:
       # Per-flow / per-task RED metrics from every span.
-      dimensions: [bpmn.process.name, bpmn.task.name, bpmn.lane.name]
+      # api.id + api.provider.source feed BPMN IQ's live lineage (flow → app → API).
+      dimensions: [bpmn.process.name, bpmn.task.name, bpmn.lane.name, api.id, api.provider.source]
 
 storage:
   trace:

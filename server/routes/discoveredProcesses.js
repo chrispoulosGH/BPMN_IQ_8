@@ -3,10 +3,13 @@
  *
  * Business processes observed in production telemetry that BPMN IQ has no
  * diagram for. Reads Grafana Tempo (TEMPO_URL, default http://localhost:3200):
- *   1. every bpmn.process.name value seen in the lookback window;
- *   2. minus the flows that already have a Diagram (by name or businessFlow);
- *   3. for each remaining flow, fetch its recent process-instance traces and
- *      rebuild the BPMN 2.0 model from the spans (services/traceToBpmn.js).
+ *   1. every bpmn.process.name value seen in the lookback window, with the
+ *      bpmn.diagram.id / bpmn.process.id values its root spans carry;
+ *   2. each flow is matched to a BPMN IQ diagram, strongest evidence first
+ *      (classifyFlow): diagram id → BPMN <process id> → normalized name;
+ *   3. flows with no match are "discovered": their recent process-instance
+ *      traces are fetched and the BPMN 2.0 model is rebuilt from the spans
+ *      (services/traceToBpmn.js).
  *
  * Query: ?hours=24 (lookback), ?fresh=1 (skip the 60 s cache).
  * 503 { code: 'TEMPO_UNREACHABLE' } when Tempo can't be reached.
@@ -43,17 +46,114 @@ async function mapLimit(items, limit, fn) {
   return out;
 }
 
+/** Every <process id> in a diagram's XML. */
+const processIdsFromXml = (xml) => [...String(xml || '').matchAll(/<(?:bpmn2?:)?process\b[^>]*\bid="([^"]+)"/gi)].map((m) => m[1]);
+
+/**
+ * Lookup tables over BPMN IQ's diagrams. A process id or name shared by
+ * several diagrams is ambiguous and kept out of its table (reported instead),
+ * so a generic id like "Process_1" can never produce a false match.
+ */
+function buildDiagramIndex(diagrams) {
+  const byDiagramId = new Map();
+  const processIdOwners = new Map();
+  const nameOwners = new Map();
+  const own = (map, key, diagram) => {
+    if (!key) return;
+    if (!map.has(key)) map.set(key, new Map());
+    map.get(key).set(String(diagram._id), diagram);
+  };
+  for (const d of diagrams) {
+    const summary = { _id: String(d._id), name: d.name, businessFlow: d.businessFlow || '' };
+    byDiagramId.set(summary._id, summary);
+    for (const pid of new Set(processIdsFromXml(d.xml))) own(processIdOwners, pid, summary);
+    for (const n of new Set([normalize(d.name), normalize(d.businessFlow)].filter(Boolean))) own(nameOwners, n, summary);
+  }
+  const unique = (owners) => new Map([...owners].filter(([, m]) => m.size === 1).map(([k, m]) => [k, [...m.values()][0]]));
+  const shared = (owners) => [...owners].filter(([, m]) => m.size > 1).map(([k]) => k);
+  return {
+    byDiagramId,
+    byProcessId: unique(processIdOwners),
+    byName: unique(nameOwners),
+    ambiguousProcessIds: new Set(shared(processIdOwners)),
+    ambiguousNames: new Set(shared(nameOwners)),
+  };
+}
+
+/**
+ * Is an observed flow already modeled in BPMN IQ? Strongest evidence first:
+ *   1. diagramId  — a bpmn.diagram.id on its spans is a diagram that exists
+ *                   (survives renames; a deleted diagram's id falls through)
+ *   2. processId  — its bpmn.process.id is the <process id> of exactly one diagram
+ *   3. name       — its normalized name matches exactly one diagram's name/businessFlow
+ * @param {{name: string, diagramIds: string[], processIds: string[]}} flow
+ */
+function classifyFlow(flow, index) {
+  for (const id of flow.diagramIds) {
+    const diagram = index.byDiagramId.get(id);
+    if (diagram) return { documented: true, matchedBy: 'diagramId', diagram };
+  }
+  for (const pid of flow.processIds) {
+    const diagram = index.byProcessId.get(pid);
+    if (diagram) return { documented: true, matchedBy: 'processId', diagram };
+  }
+  const diagram = index.byName.get(normalize(flow.name));
+  if (diagram) return { documented: true, matchedBy: 'name', diagram };
+  const notes = [];
+  if (flow.diagramIds.length) notes.push(`diagram id ${flow.diagramIds.join(', ')} no longer exists in BPMN IQ`);
+  const ambiguous = flow.processIds.filter((pid) => index.ambiguousProcessIds.has(pid));
+  if (ambiguous.length) notes.push(`process id ${ambiguous.join(', ')} is used by several diagrams`);
+  if (index.ambiguousNames.has(normalize(flow.name))) notes.push('name is shared by several diagrams');
+  return { documented: false, matchedBy: null, diagram: null, notes };
+}
+
+/** The diagram / process ids a flow's root spans carry (a sample of recent instances). */
+async function observedIdentity(flowName, window) {
+  const q = `{ name =~ "process .*" && span.bpmn.process.name = "${traceQlString(flowName)}" } | select(span.bpmn.diagram.id, span.bpmn.process.id)`;
+  const search = await tempoGet(`/api/search?q=${encodeURIComponent(q)}&limit=20&${window}`);
+  const diagramIds = new Set();
+  const processIds = new Set();
+  for (const trace of search.traces || []) {
+    for (const set of trace.spanSets || (trace.spanSet ? [trace.spanSet] : [])) {
+      for (const span of set.spans || []) {
+        for (const attr of span.attributes || []) {
+          const value = attr.value?.stringValue;
+          if (!value) continue;
+          if (attr.key === 'bpmn.diagram.id') diagramIds.add(value);
+          if (attr.key === 'bpmn.process.id') processIds.add(value);
+        }
+      }
+    }
+  }
+  return { name: flowName, diagramIds: [...diagramIds], processIds: [...processIds] };
+}
+
 async function discover(hours) {
   const end = Math.floor(Date.now() / 1000);
   const start = end - hours * 3600;
   const window = `start=${start}&end=${end}`;
 
   const tagValues = await tempoGet(`/api/v2/search/tag/${encodeURIComponent('span.bpmn.process.name')}/values?${window}`);
-  const observed = (tagValues.tagValues || []).map((t) => t.value).filter(Boolean);
+  const observedNames = (tagValues.tagValues || []).map((t) => t.value).filter(Boolean);
 
-  const diagrams = await Diagram.find({}, { name: 1, businessFlow: 1 }).lean();
-  const known = new Set(diagrams.flatMap((d) => [normalize(d.name), normalize(d.businessFlow)]).filter(Boolean));
-  const undocumented = observed.filter((name) => !known.has(normalize(name)));
+  const diagrams = await Diagram.find({}, { name: 1, businessFlow: 1, xml: 1 }).lean();
+  const index = buildDiagramIndex(diagrams);
+  const identities = await mapLimit(observedNames, 4, (name) => observedIdentity(name, window));
+  const matches = identities.map((flow) => {
+    const result = classifyFlow(flow, index);
+    return {
+      name: flow.name,
+      diagramIds: flow.diagramIds,
+      processIds: flow.processIds,
+      documented: result.documented,
+      matchedBy: result.matchedBy,
+      diagram: result.diagram ? { id: result.diagram._id, name: result.diagram.name } : null,
+      notes: result.notes || [],
+    };
+  });
+  const observed = observedNames;
+  const known = new Set(matches.filter((m) => m.documented).map((m) => m.name));
+  const undocumented = matches.filter((m) => !m.documented).map((m) => m.name);
 
   const discovered = [];
   for (const flowName of undocumented) {
@@ -69,8 +169,11 @@ async function discover(hours) {
 
     const startTimes = hits.map((h) => Number(BigInt(h.startTimeUnixNano || 0) / 1000000n)).filter(Boolean);
     const tasks = [...model.tasks.values()].sort((a, b) => median(a.sequences) - median(b.sequences));
+    const match = matches.find((m) => m.name === flowName);
     discovered.push({
       name: flowName,
+      // Why it counts as undocumented (e.g. its diagram id points at a deleted diagram).
+      matchNotes: match?.notes || [],
       processId: model.processId,
       domain: model.domain || '',
       subdomain: model.subdomain || '',
@@ -101,9 +204,11 @@ async function discover(hours) {
     tempoUrl: TEMPO_URL,
     lookbackHours: hours,
     observedFlows: observed,
-    documentedFlowsObserved: observed.filter((name) => known.has(normalize(name))),
+    documentedFlowsObserved: observed.filter((name) => known.has(name)),
+    // How each observed flow was matched (or not) to a BPMN IQ diagram.
+    matches,
     discovered,
-    note: 'A process is "discovered" when production traces carry a bpmn.process.name that has no diagram in BPMN IQ. Its model is rebuilt from the spans of up to '
+    note: 'A process is "discovered" when no BPMN IQ diagram matches it by diagram id, BPMN process id or name (in that order). Its model is rebuilt from the spans of up to '
       + `${MAX_TRACES_PER_FLOW} recent instances; only observed elements are drawn.`,
   };
 }
@@ -127,3 +232,5 @@ router.get('/', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.classifyFlow = classifyFlow;
+module.exports.buildDiagramIndex = buildDiagramIndex;

@@ -994,6 +994,19 @@ export interface DiscoveredProcess {
   sequenceFlowCount: number;
   /** BPMN 2.0 XML rebuilt from the traces. */
   xml: string;
+  /** Why no diagram matched (e.g. its diagram id points at a deleted diagram). */
+  matchNotes: string[];
+}
+
+export interface DiscoveredProcessMatch {
+  name: string;
+  diagramIds: string[];
+  processIds: string[];
+  documented: boolean;
+  /** Strongest evidence that matched it to a BPMN IQ diagram. */
+  matchedBy: 'diagramId' | 'processId' | 'name' | null;
+  diagram: { id: string; name: string } | null;
+  notes: string[];
 }
 
 export interface DiscoveredProcessesResponse {
@@ -1003,6 +1016,58 @@ export interface DiscoveredProcessesResponse {
   lookbackHours: number;
   observedFlows: string[];
   documentedFlowsObserved: string[];
+  matches: DiscoveredProcessMatch[];
   discovered: DiscoveredProcess[];
+  note: string;
+}
+
+// ── Live lineage (GET /api/live-lineage) ─────────────────────────────────────
+export interface LiveLineageFlow {
+  id: string;
+  name: string;
+  domain: string;
+  subdomain: string;
+  diagramId: string | null;
+  /** false = running in production but no BPMN IQ diagram. */
+  modeled: boolean;
+  calls: number;
+  errors: number;
+}
+
+export interface LiveLineageApp {
+  id: string;
+  acronym: string;
+  appId: string | null;
+  name: string;
+  domain: string;
+  /** false = not in the Applications catalog. */
+  catalogued: boolean;
+  calls: number;
+  errors: number;
+}
+
+export interface LiveLineageApi {
+  id: string;
+  apiId: string;
+  name: string;
+  method: string;
+  endpoint: string;
+  provider: string;
+  providerSource: string;
+  /** false = not in the API catalog. */
+  inCatalog: boolean;
+  calls: number;
+  errors: number;
+}
+
+export interface LiveLineageResponse {
+  generatedAt: string;
+  windowMinutes: number;
+  source: string;
+  flows: LiveLineageFlow[];
+  apps: LiveLineageApp[];
+  apis: LiveLineageApi[];
+  links: Array<{ flow: string; app: string; api: string; calls: number; errors: number }>;
+  domains: string[];
   note: string;
 }

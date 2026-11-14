@@ -4,7 +4,7 @@
  * task the API it calls, the provider/consumer applications, the (derived)
  * host server and the request/response data objects with their fields.
  *
- *   node scripts/export_mockprod_catalog.js                      # default 3 flows
+ *   node scripts/export_mockprod_catalog.js                      # every diagram
  *   node scripts/export_mockprod_catalog.js --flows="A|B|C" --out=../mockprod/catalog/catalog.json
  *
  * Re-run it after the diagrams or API data change; the simulator reads only
@@ -23,9 +23,9 @@ const Diagram = require('../models/Diagram');
 const { getIntegrationMapCached } = require('../routes/integrationMap');
 const { buildApiSequence, parseBpmn } = require('../services/apiSequence');
 
-const DEFAULT_FLOWS = ['Digital Retailing Journey', 'Customer Credit Application', 'Warranty Contract Execution'];
 const arg = (name) => (process.argv.find((a) => a.startsWith(`--${name}=`)) || '').split('=').slice(1).join('=');
-const flowNames = arg('flows') ? arg('flows').split('|').map((s) => s.trim()).filter(Boolean) : DEFAULT_FLOWS;
+// Default: every diagram in BPMN IQ. --flows="A|B" limits it.
+const requestedFlows = arg('flows') ? arg('flows').split('|').map((s) => s.trim()).filter(Boolean) : null;
 const outPath = path.resolve(__dirname, '..', arg('out') || '../mockprod/catalog/catalog.json');
 const discoveredPath = path.resolve(__dirname, '..', arg('discovered') || '../mockprod/catalog/discovered-flows.json');
 const HOST_ROLE_PREFERENCE = ['API Gateway', 'Integration Server', 'Application Server', 'Web Server'];
@@ -62,10 +62,51 @@ async function main() {
   const { data, apiIndex } = await getIntegrationMapCached(true);
   const appsById = new Map(data.apps.map((a) => [a.id, a]));
 
+  const extraHosts = {};
+  const extraObjects = {};
+  // Servers by owning app, to pick a host for APIs that have none recorded.
+  const serverDocs = await mongoose.connection.db.collection('canonicaldata').find(
+    { neighborhoodName: 'System Components', componentType: 'Servers' },
+    { projection: { values: 1 } },
+  ).toArray();
+  const serversByApp = new Map();
+  for (const doc of serverDocs) {
+    const v = doc.values || {};
+    const appId = String(v['FK_System Components[Applications].APP_ID'] || v['FK_System Component[Applications].APP_ID'] || '').trim();
+    if (!appId) continue;
+    if (!serversByApp.has(appId)) serversByApp.set(appId, []);
+    serversByApp.get(appId).push({
+      id: String(v['SERVER_ID Qualifier'] || '').trim(),
+      name: String(v['SERVER_NAME Component'] || '').trim(),
+      role: String(v['SERVER_ROLE Aggregate'] || '').trim(),
+      city: String(v['LOCATION_CITY Aggregate'] || '').trim(),
+      datacenter: String(v['LOCATION_DATACENTER Qualifier'] || '').trim(),
+      environment: String(v['NETWORK_ZONE Aggregate'] || '').trim(),
+    });
+  }
+  const pickHost = (appId, apiId) => {
+    const servers = (serversByApp.get(appId) || []).filter((s) => s.id).sort((a, b) => a.id.localeCompare(b.id));
+    for (const role of HOST_ROLE_PREFERENCE) {
+      const candidates = servers.filter((s) => s.role === role);
+      if (candidates.length) return candidates[hashString(apiId) % candidates.length];
+    }
+    return servers[0] || null;
+  };
+
+
   const flows = [];
   const usedApps = new Set();
   const usedHosts = new Set();
   const usedObjects = new Set();
+
+  const flowNames = requestedFlows || (await Diagram.find({}, { name: 1 }).sort({ name: 1 }).lean()).map((d) => d.name);
+  // Acronym → app id, for tasks whose API has no provider: the task's own
+  // diagram application hosts it instead.
+  const appIdByAcronym = new Map();
+  for (const app of data.apps) if (!appIdByAcronym.has(app.acronym)) appIdByAcronym.set(app.acronym, app.id);
+  const fallbackStats = { diagram: 0, uncatalogued: 0, dropped: 0 };
+  const uncataloguedApps = new Map(); // UNCAT-<acronym> -> app entry (in diagrams, not in the catalog)
+  const knownApp = (id) => Boolean(id) && id !== 'UNASSIGNED' && (appsById.has(id) || uncataloguedApps.has(id));
 
   for (const flowName of flowNames) {
     const diagram = await Diagram.findOne({ name: flowName }, { name: 1, businessFlow: 1, domain: 1, subdomain: 1, xml: 1, tasks: 1 }).lean();
@@ -78,21 +119,52 @@ async function main() {
     const steps = sequence.items.flatMap((item) => (item.kind === 'step' ? [item.step] : item.fragment.branches.flatMap((b) => b.steps)));
 
     const tasks = steps.map((step, index) => {
+      // The task's own diagram applications (fallback host for provider-less APIs).
+      const diagramTask = (diagram.tasks || []).find((t) => t.name === step.taskName);
       const incoming = sequenceFlows.filter((f) => f.target === step.taskId);
       const outgoing = sequenceFlows.filter((f) => f.source === step.taskId);
       const lane = laneByNode.get(step.taskId);
-      // The task runs in its diagram application; fall back to the API provider.
-      const diagramTask = (diagram.tasks || []).find((t) => t.name === step.taskName);
-      const calls = step.calls.map((call) => {
-        usedApps.add(call.provider); if (call.consumer) usedApps.add(call.consumer);
-        if (call.host) usedHosts.add(call.host);
+      const calls = step.calls.flatMap((call) => {
+        // Provider: the catalog's, else the task's diagram application.
+        let provider = call.provider;
+        let providerSource = 'catalog';
+        if (!knownApp(provider)) {
+          const diagramApps = (diagramTask?.applications || []).map((a) => a.name).filter(Boolean);
+          provider = diagramApps.map((acronym) => appIdByAcronym.get(acronym)).find(Boolean) || '';
+          providerSource = 'diagram';
+          if (!provider && diagramApps.length) {
+            // The diagram names an application the Applications catalog doesn't
+            // have. Production still runs it: simulate it as an uncatalogued app.
+            const acronym = diagramApps[0];
+            provider = `UNCAT-${acronym}`;
+            providerSource = 'uncatalogued';
+            if (!uncataloguedApps.has(provider)) {
+              uncataloguedApps.set(provider, { id: provider, acronym, name: '', domain: (diagram.domain || '').replace(/&amp;/g, '&'), criticality: '', catalogued: false });
+            }
+            fallbackStats.uncatalogued += 1;
+          } else if (!provider) {
+            fallbackStats.dropped += 1;
+            return [];
+          } else {
+            fallbackStats.diagram += 1;
+          }
+        }
+        const consumer = knownApp(call.consumer) ? call.consumer : provider;
+        let host = call.host;
+        if (!host || providerSource === 'diagram') {
+          const picked = pickHost(provider, call.id);
+          host = picked?.id || '';
+          if (picked) extraHosts[picked.id] = picked;
+        }
+        usedApps.add(provider); usedApps.add(consumer);
+        if (host && !extraHosts[host]) usedHosts.add(host);
         if (call.requestObject) usedObjects.add(call.requestObject);
         if (call.responseObject) usedObjects.add(call.responseObject);
-        return {
+        return [{
           apiId: call.id, apiName: call.name, method: call.method, endpoint: call.endpoint, apiType: call.type, lifecycle: call.lifecycle,
-          provider: call.provider, consumer: call.consumer || call.provider, internal: call.internal,
-          host: call.host, requestObject: call.requestObject, responseObject: call.responseObject,
-        };
+          provider, providerSource, consumer, internal: provider === consumer,
+          host, requestObject: call.requestObject, responseObject: call.responseObject,
+        }];
       });
       return {
         sequence: index + 1,
@@ -126,43 +198,13 @@ async function main() {
       sequenceFlows: sequenceFlows.map((f) => ({ id: f.id, sourceId: f.source, targetId: f.target, name: f.name })),
       tasks,
     });
-    console.log(`  ${flowName}: ${tasks.length} tasks, ${tasks.reduce((n, t) => n + t.calls.length, 0)} API calls, ${structure.lanes.length} lanes, process ${structure.processId}`);
+    if (requestedFlows) console.log(`  ${flowName}: ${tasks.length} tasks, ${tasks.reduce((n, t) => n + t.calls.length, 0)} API calls, ${structure.lanes.length} lanes, process ${structure.processId}`);
   }
 
   // ── Discovered flows (not in BPMN IQ) ──────────────────────────────────────
-  const extraHosts = {};
-  const extraObjects = {};
   if (fs.existsSync(discoveredPath)) {
     const discovered = JSON.parse(fs.readFileSync(discoveredPath, 'utf8'));
     Object.assign(extraObjects, discovered.dataObjects || {});
-    const serverDocs = await mongoose.connection.db.collection('canonicaldata').find(
-      { neighborhoodName: 'System Components', componentType: 'Servers' },
-      { projection: { values: 1 } },
-    ).toArray();
-    const serversByApp = new Map();
-    for (const doc of serverDocs) {
-      const v = doc.values || {};
-      const appId = String(v['FK_System Components[Applications].APP_ID'] || v['FK_System Component[Applications].APP_ID'] || '').trim();
-      if (!appId) continue;
-      if (!serversByApp.has(appId)) serversByApp.set(appId, []);
-      serversByApp.get(appId).push({
-        id: String(v['SERVER_ID Qualifier'] || '').trim(),
-        name: String(v['SERVER_NAME Component'] || '').trim(),
-        role: String(v['SERVER_ROLE Aggregate'] || '').trim(),
-        city: String(v['LOCATION_CITY Aggregate'] || '').trim(),
-        datacenter: String(v['LOCATION_DATACENTER Qualifier'] || '').trim(),
-        environment: String(v['NETWORK_ZONE Aggregate'] || '').trim(),
-      });
-    }
-    const pickHost = (appId, apiId) => {
-      const servers = (serversByApp.get(appId) || []).filter((s) => s.id).sort((a, b) => a.id.localeCompare(b.id));
-      for (const role of HOST_ROLE_PREFERENCE) {
-        const candidates = servers.filter((s) => s.role === role);
-        if (candidates.length) return candidates[hashString(apiId) % candidates.length];
-      }
-      return servers[0] || null;
-    };
-
     for (const def of discovered.flows || []) {
       const laneById = new Map(def.lanes.map((l) => [l.id, l]));
       const nodeIds = [def.startEvent.id, ...def.tasks.map((t) => t.id), def.endEvent.id];
@@ -229,6 +271,7 @@ async function main() {
     }
   }
 
+  console.log(`  provider-less APIs: ${fallbackStats.diagram} hosted on the task's catalogued diagram app, ${fallbackStats.uncatalogued} on ${uncataloguedApps.size} uncatalogued diagram apps, ${fallbackStats.dropped} dropped`);
   const pick = (ids, source) => Object.fromEntries([...ids].filter((id) => source[id]).map((id) => [id, source[id]]));
   const catalog = {
     generatedAt: new Date().toISOString(),
@@ -238,7 +281,7 @@ async function main() {
       dataObjects: data.dataObjectNote,
     },
     flows,
-    applications: Object.fromEntries([...usedApps].map((id) => [id, appsById.get(id) || { id, acronym: id, name: '', domain: '', criticality: '' }])),
+    applications: Object.fromEntries([...usedApps].map((id) => [id, appsById.get(id) || uncataloguedApps.get(id) || { id, acronym: id, name: '', domain: '', criticality: '' }])),
     hosts: { ...pick(usedHosts, data.hosts), ...extraHosts },
     dataObjects: { ...pick(usedObjects, data.dataObjects), ...pick(usedObjects, extraObjects) },
   };
