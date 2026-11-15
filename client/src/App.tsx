@@ -50,6 +50,7 @@ import {
   LogoutOutlined,
   SettingOutlined,
   RadarChartOutlined,
+  QuestionCircleOutlined,
   FundOutlined,
   FireOutlined,
   ExperimentOutlined,
@@ -60,6 +61,7 @@ import LandingPage from './components/LandingPage';
 import IntegrationMap from './components/IntegrationMap';
 import ApiSequencePanel from './components/ApiSequencePanel';
 import DiscoveredProcesses from './components/DiscoveredProcesses';
+import UndefinedProcesses from './components/UndefinedProcesses';
 import LiveLineage from './components/LiveLineage';
 
 // API names encode their business flow ("Flow — Task API"); those flows' diagrams
@@ -522,7 +524,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   // Which sub-tab of the "Process Changes" outer tab is showing.
   const [processChangeSubTab, setProcessChangeSubTab] = useState<'heatMap' | 'radar'>('heatMap');
   // Business Processes tab: modeled diagrams vs. processes discovered from traces.
-  const [businessProcessSubTab, setBusinessProcessSubTab] = useState<'processes' | 'discovered'>('processes');
+  const [businessProcessSubTab, setBusinessProcessSubTab] = useState<'processes' | 'discovered' | 'undefined'>('processes');
   const [activeAnalyticsTab, setActiveAnalyticsTab] = useState<string>('dashboard'); // inner Analytics sub-tabs
   const [activeAnalyticsModel, setActiveAnalyticsModel] = useState<string>('');
   const [activeAnalyticsTabsByModel, setActiveAnalyticsTabsByModel] = useState<Record<string, string>>({});
@@ -3186,7 +3188,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                   <Tabs
                     className="factory-tabs business-process-tabs"
                     activeKey={businessProcessSubTab}
-                    onChange={(key) => setBusinessProcessSubTab(key as 'processes' | 'discovered')}
+                    onChange={(key) => setBusinessProcessSubTab(key as 'processes' | 'discovered' | 'undefined')}
                     destroyInactiveTabPane
                     items={[
                       {
@@ -3375,6 +3377,16 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                         key: 'discovered',
                         label: <span><RadarChartOutlined /> Discovered Processes</span>,
                         children: <DiscoveredProcesses allApplications={allApplications} />,
+                      },
+                      {
+                        key: 'undefined',
+                        label: <span><QuestionCircleOutlined /> Undefined Processes</span>,
+                        children: (
+                          <UndefinedProcesses
+                            allApplications={allApplications}
+                            onOpenBusinessFlows={(flows, label) => openDiagramsForBusinessFlows(INTEGRATION_FLOWS_NEIGHBORHOOD, flows, label)}
+                          />
+                        ),
                       },
                     ]}
                   />

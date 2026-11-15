@@ -1071,3 +1071,75 @@ export interface LiveLineageResponse {
   domains: string[];
   note: string;
 }
+
+// ── Vehicles sold (GET /api/business-kpis/vehicles-sold) ─────────────────────
+export interface VehiclesSoldResponse {
+  generatedAt: string;
+  hours: number;
+  stepSeconds: number;
+  totalUnits: number;
+  newUnits: number;
+  usedUnits: number;
+  revenue: number;
+  channels: Array<{ channel: string; condition: string; units: number; revenue: number }>;
+  /** Bucket end times (ms), every step in the window. */
+  buckets: number[];
+  series: Array<{ channel: string; points: Array<{ t: number; units: number }> }>;
+  definition: string;
+}
+
+// ── Undefined processes (GET /api/undefined-processes) ───────────────────────
+export interface UndefinedProcessTask {
+  id: string;
+  name: string;
+  lane: string;
+  applications: string[];
+  apis: Array<{ label: string }>;
+  /** Established flow the step's API was built for ('' = not in the API catalog). */
+  sourceFlow: string;
+  observedCount: number;
+  medianGapMs: number;
+}
+
+export interface UndefinedProcess {
+  id: string;
+  name: string;
+  processId: string;
+  domain: string;
+  subdomain: string;
+  instancesAnalyzed: number;
+  firstSeen: string;
+  lastSeen: string;
+  lanes: Array<{ id: string; name: string }>;
+  applications: string[];
+  sourceFlows: string[];
+  closest: { flow: string; diagramId: string; score: number } | null;
+  variants: Array<{ count: number; steps: string[] }>;
+  tasks: UndefinedProcessTask[];
+  sampleSessions: string[];
+  xml: string;
+}
+
+export interface UndefinedProcessMatch {
+  flow: string;
+  diagramId: string;
+  domain: string;
+  conformant: number;
+  deviating: number;
+  meanScore: number;
+  deviations: Array<{ type: 'missing' | 'out-of-order' | 'repeated' | 'extra'; task: string; count: number }>;
+}
+
+export interface UndefinedProcessesResponse {
+  generatedAt: string;
+  windowHours: number;
+  idleMinutes: number;
+  caseIdAttribute: string;
+  stepsAnalysed: number;
+  unmappedSteps: number;
+  sessions: { total: number; inProgress: number; analysed: number; conformant: number; deviating: number; undefined: number };
+  matched: UndefinedProcessMatch[];
+  undefinedProcesses: UndefinedProcess[];
+  thresholds: { deviation: number };
+  note: string;
+}

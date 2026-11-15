@@ -35,6 +35,34 @@ const { startScheduler, startFlowScheduler } = require('./scheduler');
 const tracer = api.trace.getTracer('bpmn-iq-mockprod/engine', '1.0.0');
 const meter = api.metrics.getMeter('bpmn-iq-mockprod/engine', '1.0.0');
 const instancesCounter = meter.createCounter('bpmn.process.instances', { description: 'Process instances finished, by outcome', unit: '{instance}' });
+// Vehicles sold: emitted once per sale, by the task that completes it (see SALE_EVENTS).
+const vehiclesSold = meter.createCounter('business.vehicles.sold', { description: 'Vehicles sold (counted at delivery / wholesale completion)', unit: '{vehicle}' });
+const salesRevenue = meter.createCounter('business.sales.revenue', { description: 'Vehicle sale revenue', unit: 'USD' });
+
+/**
+ * Which task completes a vehicle sale, per flow. A sale is counted when the
+ * vehicle changes hands: delivery confirmation for new vehicles (online and
+ * in-store retail), fleet delivery, or wholesale completion for used units.
+ * Contracts, financing, warranty and upsell flows add to a sale but are not one.
+ */
+const SALE_EVENTS = {
+  'New Vehicle Delivery Experience': { task: 'Sign Delivery Confirmation', condition: 'new' },
+  'Fleet Order Fulfillment': { task: 'Complete Fleet Delivery', condition: 'new', channel: 'fleet', units: (ctx) => ctx.fleetUnits },
+  'Wholesale Vehicle Disposition': { task: 'Complete Wholesale Sale', condition: 'used', channel: 'wholesale' },
+};
+// Create every series a sale will use, at 0, with exactly the labels add()
+// uses below — otherwise Prometheus never sees a series' first sale (a whole
+// fleet order can be that first sale).
+for (const [flowName, channel, condition] of [
+  ['New Vehicle Delivery Experience', 'online', 'new'],
+  ['New Vehicle Delivery Experience', 'in-store', 'new'],
+  ['Fleet Order Fulfillment', 'fleet', 'new'],
+  ['Wholesale Vehicle Disposition', 'wholesale', 'used'],
+]) {
+  const labels = { [A.SALE_CHANNEL]: channel, [A.VEHICLE_CONDITION]: condition, [A.PROCESS_NAME]: flowName };
+  vehiclesSold.add(0, labels);
+  salesRevenue.add(0, labels);
+}
 const processDuration = meter.createHistogram('bpmn.process.duration', { description: 'Process instance duration', unit: 's' });
 const taskDuration = meter.createHistogram('bpmn.task.duration', { description: 'Task duration including human work', unit: 's' });
 // Create every flow × outcome series at 0, so Prometheus sees each counter's
@@ -165,6 +193,25 @@ async function runTask(flow, task, sequence, journeyCtx, instanceId) {
       if (result.attempts > 1) span.addEvent('bpmn.task.retried', { attempts: result.attempts, [A.API_ID]: call.apiId });
     }
     span.setAttribute(A.TASK_OUTCOME, outcome);
+    const sale = SALE_EVENTS[flow.name];
+    if (outcome === 'completed' && sale && sale.task === task.name) {
+      const channel = sale.channel || journeyCtx.channel || 'in-store';
+      const units = Math.max(1, Math.round(sale.units ? sale.units(journeyCtx) : 1));
+      const unitPrice = sale.condition === 'used' ? Math.round(journeyCtx.salePrice * 0.55) : journeyCtx.salePrice;
+      const saleAttrs = { [A.SALE_CHANNEL]: channel, [A.VEHICLE_CONDITION]: sale.condition };
+      span.setAttributes({ ...saleAttrs, [A.SALE_UNITS]: units, 'business.sale.completed': true });
+      span.addEvent('business.vehicle.sold', {
+        ...saleAttrs,
+        [A.SALE_UNITS]: units,
+        [A.DEAL_ID]: journeyCtx.dealId,
+        [A.VEHICLE_VIN]: journeyCtx.vin,
+        'business.vehicle.model': journeyCtx.modelCode,
+        'business.sale.unit_price': unitPrice,
+        'business.sale.amount': unitPrice * units,
+      });
+      vehiclesSold.add(units, { ...saleAttrs, [A.PROCESS_NAME]: flow.name });
+      salesRevenue.add(unitPrice * units, { ...saleAttrs, [A.PROCESS_NAME]: flow.name });
+    }
     span.addEvent(outcome === 'completed' ? 'bpmn.task.completed' : 'bpmn.task.failed');
     taskDuration.record((Date.now() - started) / 1000, { [A.PROCESS_NAME]: flow.name, [A.TASK_NAME]: task.name, [A.LANE_NAME]: task.laneName, [A.TASK_OUTCOME]: outcome });
     span.end();
@@ -187,6 +234,9 @@ async function runProcessInstance(flow, journey, previousRoot) {
     [A.JOURNEY_STEP]: journey.step,
     [A.CUSTOMER_ID]: journey.ctx.customerId,
     [A.DEALER_CODE]: journey.ctx.dealerCode,
+    [A.DEAL_ID]: journey.ctx.dealId,
+    [A.VEHICLE_VIN]: journey.ctx.vin,
+    [A.SALE_CHANNEL]: journey.ctx.channel,
   };
   const startEvent = flow.events.find((e) => e.type === 'startEvent') || {};
   const endEvent = flow.events.find((e) => e.type === 'endEvent') || {};
@@ -240,20 +290,31 @@ async function runProcessInstance(flow, journey, previousRoot) {
 }
 
 /**
- * Journeys — which flows a customer goes through, in order. A step with
- * `optional` is skipped (not ended) when it doesn't happen:
- *   online-purchase:     Digital Retailing → (60%, optional) Feature & Package Upsell
- *                        → (55%) Credit Application → (45%) Warranty
- *   dealership-finance:  (50%, optional) Upsell → Credit Application → (45%) Warranty
- *   warranty-add-on:     Warranty only
+ * Journeys — the flows one deal goes through, in order. Every flow of a
+ * journey carries the same business.deal.id and business.vehicle.vin. A step
+ * marked `optional` is skipped (not ended) when it doesn't happen, and a
+ * declined/abandoned optional step doesn't end the deal.
+ *   online-purchase:      Digital Retailing → [upsell 60%] → [credit 55%] → [warranty 45%] → New Vehicle Delivery
+ *   dealership-purchase:  Sales Contract Finalization → [upsell 50%] → [credit 65%] → [warranty 45%] → New Vehicle Delivery
+ *   fleet-purchase:       Fleet Customer Sales Process → Fleet Order Fulfillment
+ *   warranty-add-on:      Warranty only (a service-contract sale, not a vehicle sale)
+ * The vehicle is counted as sold at delivery (SALE_EVENTS).
  * "Vehicle Feature & Package Upsell" has no BPMN IQ diagram — BPMN IQ
  * discovers it from these traces (GET /api/discovered-processes).
  */
 const UPSELL = 'Vehicle Feature & Package Upsell';
+const DELIVERY = 'New Vehicle Delivery Experience';
 const JOURNEY_TYPES = [
-  { type: 'online-purchase', weight: 0.65, steps: [['Digital Retailing Journey', 1], [UPSELL, 0.6, 'optional'], ['Customer Credit Application', 0.55], ['Warranty Contract Execution', 0.45]] },
-  { type: 'dealership-finance', weight: 0.25, steps: [[UPSELL, 0.5, 'optional'], ['Customer Credit Application', 1], ['Warranty Contract Execution', 0.45]] },
-  { type: 'warranty-add-on', weight: 0.1, steps: [['Warranty Contract Execution', 1]] },
+  {
+    type: 'online-purchase', channel: 'online', weight: 0.45,
+    steps: [['Digital Retailing Journey', 1], [UPSELL, 0.6, 'optional'], ['Customer Credit Application', 0.55, 'optional'], ['Warranty Contract Execution', 0.45, 'optional'], [DELIVERY, 1]],
+  },
+  {
+    type: 'dealership-purchase', channel: 'in-store', weight: 0.4,
+    steps: [['Sales Contract Finalization', 1], [UPSELL, 0.5, 'optional'], ['Customer Credit Application', 0.65, 'optional'], ['Warranty Contract Execution', 0.45, 'optional'], [DELIVERY, 1]],
+  },
+  { type: 'fleet-purchase', channel: 'fleet', weight: 0.05, steps: [['Fleet Customer Sales Process', 1], ['Fleet Order Fulfillment', 1]] },
+  { type: 'warranty-add-on', channel: '', weight: 0.1, steps: [['Warranty Contract Execution', 1]] },
 ];
 let activeJourneys = 0;
 // Flows that only run inside customer journeys; every other flow runs standalone.
@@ -285,7 +346,7 @@ function pickJourneyType(requested) {
 
 async function runJourney(requestedType) {
   const def = pickJourneyType(requestedType);
-  const journey = { id: `JRN-${crypto.randomUUID()}`, type: def.type, ctx: newJourneyContext(), step: 0 };
+  const journey = { id: `JRN-${crypto.randomUUID()}`, type: def.type, ctx: { ...newJourneyContext(), channel: def.channel }, step: 0 };
   activeJourneys += 1;
   let previousRoot = null;
   try {

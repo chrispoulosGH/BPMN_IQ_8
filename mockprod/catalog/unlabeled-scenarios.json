@@ -1,0 +1,35 @@
+{
+  "_comment": "Traffic with NO business context (no bpmn.* / business.* baggage, no process or task spans), sent by src/unlabeledClient.js as 'dealer-workstation'. Each user action is its own trace; the only link between a session's actions is the session.id the applications record. BPMN IQ (GET /api/undefined-processes) groups sessions, maps each call to the API catalog, and compares the sequence with every established flow.",
+  "perDay": 160,
+  "weights": { "vacant": 0.45, "deviation": 0.35, "emergent": 0.2 },
+  "vacantNote": "vacant: an established flow, run exactly as modeled, with an empty header (no baggage).",
+  "deviationNote": "deviation: an established flow with one change: skip a step, swap two adjacent steps, or repeat a step (rework).",
+  "emergent": [
+    {
+      "name": "Self-Service Lease Buyout",
+      "description": "Lessees go from the lease-end notice straight to buying the car out, skipping the inspection, and finance the buyout through the credit flow.",
+      "steps": [
+        { "flow": "Lease Return & Disposition", "task": "Send Lease End Notice" },
+        { "flow": "Lease Return & Disposition", "task": "Present Customer Options" },
+        { "flow": "Lease Return & Disposition", "task": "Process Turn-In or Purchase" },
+        { "flow": "Customer Credit Application", "task": "Pull Credit Bureau Report" },
+        { "flow": "Customer Credit Application", "task": "Calculate Credit Score" },
+        { "flow": "Customer Credit Application", "task": "Select Best Financing Offer" },
+        { "flow": "Customer Credit Application", "task": "Generate Loan Documents" }
+      ]
+    },
+    {
+      "name": "Service-Lane Trade-Up",
+      "description": "While a customer's car is in for service, staff appraise it as a trade-in and present a new-vehicle offer with financing.",
+      "steps": [
+        { "flow": "Repair Order Completion", "task": "Perform Diagnostic Scan" },
+        { "flow": "Trade-In Appraisal Process", "task": "Pull Vehicle History Report" },
+        { "flow": "Trade-In Appraisal Process", "task": "Get Market Valuation Data" },
+        { "flow": "Trade-In Appraisal Process", "task": "Calculate Trade Value Offer" },
+        { "flow": "Lost Sales Recovery", "task": "Present New Offer" },
+        { "flow": "Customer Credit Application", "task": "Collect Customer Financial Info" },
+        { "flow": "Customer Credit Application", "task": "Pull Credit Bureau Report" }
+      ]
+    }
+  ]
+}

@@ -17,7 +17,7 @@ The three flows form one car-purchase journey:
 
 The catalog exports **every BPMN IQ diagram**, so all 110 modeled flows run, plus the undocumented upsell flow below.
 
-- **Customer journeys:** the car-purchase chain (Digital Retailing → upsell → Credit Application → Warranty) runs as journeys, `DAILY_JOURNEYS`.
+- **Customer journeys:** online, in-store and fleet purchases run as journeys (`DAILY_JOURNEYS`); see *Vehicles sold* below.
 - **The other 107 flows run standalone**, each on its domain's clock:
 
   | Profile | Domains | Hours | Per flow per day |
@@ -39,6 +39,57 @@ The catalog exports **every BPMN IQ diagram**, so all 110 modeled flows run, plu
   - 108/111 flows rebuild from traces matching their source diagram on every check.
   - The other 3 had only an abandoned instance, so their later tasks weren't observed yet.
   - Discovery: 110 matched by diagram id, and only the upsell flow is discovered.
+
+### Vehicles sold
+
+A vehicle counts as **sold when it changes hands**, once per deal, however many flows the deal went through:
+
+| Sale event (task that completes it) | Condition | Channel | Units |
+|---|---|---|---|
+| New Vehicle Delivery Experience (*Sign Delivery Confirmation*) | new | online / in-store, from the journey | 1 |
+| Fleet Order Fulfillment (*Complete Fleet Delivery*) | new | fleet | the order's size (5–60) |
+| Wholesale Vehicle Disposition (*Complete Wholesale Sale*) | used | wholesale | 1 |
+
+Contracts, financing, warranty, GAP and the upsell add to a sale but are not one.
+
+- **Journeys:**
+  - `online-purchase`: Digital Retailing → [upsell] → [credit] → [warranty] → delivery.
+  - `dealership-purchase`: Sales Contract Finalization → [upsell] → [credit] → [warranty] → delivery.
+  - `fleet-purchase`: Fleet Customer Sales Process → Fleet Order Fulfillment.
+  - `warranty-add-on`: warranty only (not a vehicle sale).
+- **Every span of a deal** carries `business.deal.id`, `business.vehicle.vin` and `business.sale.channel` (baggage).
+- **The completing task span** carries a `business.vehicle.sold` event (deal, VIN, model, channel, condition, units, price) and `business.sale.completed=true`.
+- **Metrics:** `business.vehicles.sold` and `business.sales.revenue` (USD) counters, labelled channel × condition × flow. Every series is created at 0 at startup so Prometheus sees each one's first sale.
+- **Where to see it:**
+  - the **Vehicles sold** row on the Grafana dashboard;
+  - the **Vehicles sold** tile on BPMN IQ's Dashboard tab (`GET /api/business-kpis/vehicles-sold?hours=24`);
+  - in Prometheus: `round(sum by (business_sale_channel) (increase(business_vehicles_sold_total{bpmn_process_name!=""}[1d])))`.
+- **Reconciled:** the counters match the sale events in the collector's raw span export exactly (50 deals, 90 vehicles, none counted twice).
+  - Don't count sales with Tempo *search*: after a Tempo restart it can miss traces written during its first minutes, even though they're stored (fetch by id works).
+
+### Traffic with no business context (Undefined Processes)
+
+`dealer-workstation` ([src/unlabeledClient.js](src/unlabeledClient.js)) simulates users calling the applications' APIs **with no business context**: no `bpmn.*`/`business.*` baggage and no process or task spans. Each action is its own trace. It runs about 160 sessions/day (`UNLABELED_PER_DAY`; `UNLABELED=off` disables it). Scenarios are in [catalog/unlabeled-scenarios.json](catalog/unlabeled-scenarios.json):
+
+| Scenario | Share | What it is |
+|---|---|---|
+| vacant | 45% | an established flow run exactly as modeled, empty header |
+| deviation | 35% | an established flow with one change: a skipped step, two steps swapped, or a repeated step (rework) |
+| emergent | 20% | a sequence no diagram has: *Self-Service Lease Buyout*, *Service-Lane Trade-Up* |
+
+**The case id.** With no baggage, the only thing linking one user's actions is the session: the client sends `x-session-id` and every app records `session.id` (OTel semconv). Process discovery needs *some* case id; without one, separate actions can't be stitched into instances.
+
+**What BPMN IQ does with it.** **Business Processes › Undefined Processes** calls `GET /api/undefined-processes`, which:
+1. reads spans with no `bpmn.process.name` from Tempo and groups them by `session.id`;
+2. maps each call to the API catalog (method + route);
+3. compares each session with all established flows by API sequence (longest common subsequence):
+   - an exact match → that flow, run with an empty header;
+   - ≥60% → that flow with named deviations;
+   - otherwise → clustered into an undefined process and rebuilt as BPMN, with application lanes and a closest-flow score.
+
+`npm run burst -- sessions 20 emergent` starts sessions now (control on :7099).
+
+**Verified:** 90 sessions → 40 conformant, 30 deviating (each with the right deviation), 20 undefined in 2 processes (14 + 6), which is the generated ground truth exactly.
 
 ### A fourth, undocumented flow: Vehicle Feature & Package Upsell
 

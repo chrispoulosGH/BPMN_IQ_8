@@ -61,8 +61,40 @@ const traceTable = (title, query, gridPos, description) => ({
 let y = 0;
 const panels = [];
 
-panels.push(row('Business flows', y)); y += 1;
 const window = '$__range';
+// ── Vehicles sold: counted when the vehicle changes hands (delivery, fleet
+// delivery, wholesale completion), once per deal — see SALE_EVENTS in the engine.
+panels.push(row('Vehicles sold', y)); y += 1;
+const SOLD = 'business_vehicles_sold_total';
+// Units in the range: increase() (reset-safe), rounded to whole vehicles.
+const soldIn = (selector = '') => `round(increase(${SOLD}${selector || '{bpmn_process_name!=""}'}[${window}]))`;
+panels.push(stat('Vehicles sold', `sum(${soldIn()}) or vector(0)`, grid(0, y, 5, 4), { decimals: 0, description: 'Units delivered in the selected time range: new (online, in-store, fleet) and used (wholesale). Fleet orders count every vehicle.' }));
+panels.push(stat('New', `sum(${soldIn('{business_vehicle_condition="new", bpmn_process_name!=""}')}) or vector(0)`, grid(5, y, 3, 4), { decimals: 0 }));
+panels.push(stat('Used', `sum(${soldIn('{business_vehicle_condition="used", bpmn_process_name!=""}')}) or vector(0)`, grid(8, y, 3, 4), { decimals: 0 }));
+panels.push(stat('Sales revenue', `sum(increase(business_sales_revenue_USD_total{bpmn_process_name!=""}[${window}])) or vector(0)`, grid(11, y, 4, 4), { unit: 'currencyUSD', decimals: 0 }));
+panels.push({
+  id: nextId++, type: 'bargauge', title: 'Vehicles sold by channel', datasource: PROM, gridPos: grid(15, y, 9, 4),
+  targets: [prom(`sum by (business_sale_channel) (${soldIn()})`, '{{business_sale_channel}}', { instant: true })],
+  fieldConfig: { defaults: { decimals: 0, min: 0, color: { mode: 'fixed', fixedColor: '#1f6feb' } }, overrides: [] },
+  options: { orientation: 'horizontal', displayMode: 'basic', valueMode: 'text', showUnfilled: true, namePlacement: 'left', reduceOptions: { calcs: ['lastNotNull'], fields: '', values: false } },
+});
+y += 4;
+panels.push({
+  id: nextId++, type: 'timeseries', title: 'Vehicles sold over time, by channel', datasource: PROM, gridPos: grid(0, y, 24, 7),
+  description: 'Whole vehicles sold in each interval (bars stack by channel). Retail follows dealership hours; fleet arrives in large orders.',
+  targets: [prom(`round(sum by (business_sale_channel) (increase(${SOLD}{bpmn_process_name!=""}[$__interval])))`, '{{business_sale_channel}}', { interval: '5m' })],
+  fieldConfig: {
+    defaults: {
+      unit: 'none', decimals: 0,
+      custom: { drawStyle: 'bars', fillOpacity: 80, lineWidth: 1, barAlignment: 0, showPoints: 'never', spanNulls: false, stacking: { mode: 'normal', group: 'A' }, axisSoftMin: 0 },
+    },
+    overrides: [],
+  },
+  options: { legend: { displayMode: 'list', placement: 'bottom' }, tooltip: { mode: 'multi', sort: 'desc' } },
+});
+y += 7;
+
+panels.push(row('Business flows', y)); y += 1;
 panels.push(stat('Instances completed', `sum(increase(bpmn_process_instances_total{${FLOW}, bpmn_process_outcome="completed"}[${window}])) or vector(0)`, grid(0, y, 4, 4), { color: OUTCOME_COLORS.completed, decimals: 0, description: 'Process instances that reached their end event in the selected time range.' }));
 panels.push(stat('Abandoned', `sum(increase(bpmn_process_instances_total{${FLOW}, bpmn_process_outcome="abandoned"}[${window}])) or vector(0)`, grid(4, y, 4, 4), { color: OUTCOME_COLORS.abandoned, decimals: 0, description: 'The customer dropped out at a customer-lane task.' }));
 panels.push(stat('Failed', `sum(increase(bpmn_process_instances_total{${FLOW}, bpmn_process_outcome="failed"}[${window}])) or vector(0)`, grid(8, y, 4, 4), { color: OUTCOME_COLORS.failed, decimals: 0, description: 'A task\'s API call still failed after retries.' }));

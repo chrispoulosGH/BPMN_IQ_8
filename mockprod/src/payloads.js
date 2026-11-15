@@ -66,6 +66,9 @@ function newJourneyContext() {
     orderId: id('ORD', 8),
     quoteId: id('QTE', 8),
     offerId: id('UPS', 8),
+    dealId: id('DEAL', 10),
+    // Fleet orders are for many vehicles; most fleet deals are 5-40 units.
+    fleetUnits: Math.max(5, Math.round(5 + Math.random() ** 2 * 55)),
     packageType: pick(PACKAGES).type,
   };
 }

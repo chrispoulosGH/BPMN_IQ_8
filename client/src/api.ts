@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { Diagram, DiagramMeta, DiagramNote, DiagramSoxControls, SoxControl, FlowScorecardsResponse, DiagramCreatePayload, DiagramUpdatePayload, DiagramValidationRequest, DiagramValidationReport, FileSaveResult, CapabilityMatchResult, TaskRecord, TaskCreatePayload, ReferenceData, RefItem, CapabilityItem, ActorItem, ServerItem, DatabaseItem, FactoryNeighborhoodSummary, CustomFactory, CustomFactoryRow, ModelCatalog, ModelCatalogRow, CatalogTreeResponse, CatalogTreeChildrenResponse, CatalogTreeSearchResponse, ProcessChangeRadarResponse, ProcessChangeSnapshot, ProcessOptimizationProposal, IntegrationMapResponse, ApiSequenceResponse, DiscoveredProcessesResponse, LiveLineageResponse } from './types';
+import type { Diagram, DiagramMeta, DiagramNote, DiagramSoxControls, SoxControl, FlowScorecardsResponse, DiagramCreatePayload, DiagramUpdatePayload, DiagramValidationRequest, DiagramValidationReport, FileSaveResult, CapabilityMatchResult, TaskRecord, TaskCreatePayload, ReferenceData, RefItem, CapabilityItem, ActorItem, ServerItem, DatabaseItem, FactoryNeighborhoodSummary, CustomFactory, CustomFactoryRow, ModelCatalog, ModelCatalogRow, CatalogTreeResponse, CatalogTreeChildrenResponse, CatalogTreeSearchResponse, ProcessChangeRadarResponse, ProcessChangeSnapshot, ProcessOptimizationProposal, IntegrationMapResponse, ApiSequenceResponse, DiscoveredProcessesResponse, LiveLineageResponse, VehiclesSoldResponse, UndefinedProcessesResponse } from './types';
 export type { RefItem, CapabilityItem, ActorItem, ServerItem, DatabaseItem, FactoryNeighborhoodSummary, CustomFactory, CustomFactoryRow, ModelCatalog, ModelCatalogRow, CatalogTreeResponse, CatalogTreeChildrenResponse, CatalogTreeSearchResponse };
 
 const api = axios.create({ baseURL: '/api', withCredentials: true });
@@ -788,8 +788,14 @@ export const getFlowScorecards = (): Promise<FlowScorecardsResponse> =>
 export const getIntegrationMap = (fresh = false): Promise<IntegrationMapResponse> =>
   api.get('/integration-map', { params: fresh ? { fresh: 1 } : undefined }).then((r) => r.data as IntegrationMapResponse);
 
+export const getVehiclesSold = (hours = 24): Promise<VehiclesSoldResponse> =>
+  api.get('/business-kpis/vehicles-sold', { params: { hours } }).then((r) => r.data as VehiclesSoldResponse);
+
 export const getLiveLineage = (minutes = 15, domain?: string): Promise<LiveLineageResponse> =>
   api.get('/live-lineage', { params: { minutes, ...(domain ? { domain } : {}) } }).then((r) => r.data as LiveLineageResponse);
+
+export const getUndefinedProcesses = (fresh = false, hours = 6, idleMinutes = 5): Promise<UndefinedProcessesResponse> =>
+  api.get('/undefined-processes', { params: { hours, idleMinutes, ...(fresh ? { fresh: 1 } : {}) } }).then((r) => r.data as UndefinedProcessesResponse);
 
 export const getDiscoveredProcesses = (fresh = false, hours = 24): Promise<DiscoveredProcessesResponse> =>
   api.get('/discovered-processes', { params: { hours, ...(fresh ? { fresh: 1 } : {}) } }).then((r) => r.data as DiscoveredProcessesResponse);

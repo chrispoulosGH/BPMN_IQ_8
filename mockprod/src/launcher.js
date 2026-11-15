@@ -43,6 +43,8 @@ async function main() {
   if (down.length) console.error(`[launcher] not healthy: ${down.join(', ')}`);
   start('bpmn-process-engine', 'processEngine.js', {});
   if (await waitHealthy(`http://${SERVICE_HOST}:${ENGINE_PORT}`)) console.log(`[launcher] ready — engine control API on http://localhost:${ENGINE_PORT}/status`);
+  // Users working without business context (no baggage): see unlabeledClient.js.
+  if (process.env.UNLABELED !== 'off') start('dealer-workstation', 'unlabeledClient.js', {});
 }
 
 const stop = () => {

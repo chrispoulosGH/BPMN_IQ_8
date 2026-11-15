@@ -70,6 +70,11 @@ module.exports = {
   JOURNEY_STEP: 'business.journey.step',
   CUSTOMER_ID: 'business.customer.id',
   DEALER_CODE: 'business.dealer.code',
+  DEAL_ID: 'business.deal.id', // one vehicle sale, across every flow it passes through
+  VEHICLE_VIN: 'business.vehicle.vin',
+  SALE_CHANNEL: 'business.sale.channel', // online | in-store | fleet | wholesale
+  VEHICLE_CONDITION: 'business.vehicle.condition', // new | used
+  SALE_UNITS: 'business.sale.units', // vehicles in this sale (fleet orders: many)
 
   // Simulator
   SIM_FAULT: 'sim.fault',

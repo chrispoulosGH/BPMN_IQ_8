@@ -10,6 +10,42 @@
 ## Session log
 Newest entry first. Each entry: date, what was in flight, what's uncommitted/unresolved.
 
+### 2026-11-15 — Undefined Processes (traffic with no business context)
+- **Simulator:** new `dealer-workstation` service ([unlabeledClient.js](mockprod/src/unlabeledClient.js), started by the launcher, control `POST :7099/sessions {count, scenario}`; `npm run burst -- sessions N [vacant|deviation|emergent]`).
+  - Calls app APIs with **no baggage and no process/task spans**; each action is its own trace. Only `x-session-id` links them, recorded by appService as `session.id`.
+  - Scenarios in [unlabeled-scenarios.json](mockprod/catalog/unlabeled-scenarios.json): vacant 45% (established flow, exact), deviation 35% (skip / swap / rework), emergent 20% (*Self-Service Lease Buyout*, *Service-Lane Trade-Up* — real catalog APIs in a cross-flow order).
+  - ~160 sessions/day (`UNLABELED_PER_DAY`).
+- **Server:**
+  - [processMining.js](server/services/processMining.js): `lcsAlign`, `classifyCase`, `clusterCases`. Score = LCS/max(len); conformant = 1.0 with equal length; deviating ≥ 0.6; clusters at ≥ 0.75. Deviations: missing / out-of-order / repeated / extra.
+  - [undefinedProcesses.js](server/routes/undefinedProcesses.js) `GET /api/undefined-processes?hours=6&idleMinutes=5&fresh=1`:
+    - Tempo spans with `session.id` grouped into cases.
+    - Steps mapped to the API catalog by `METHOD route`; established flows built via `buildApiSequence`, tasks without an API dropped.
+    - Matched cases are accounted per flow, with deviation tallies. Undefined clusters → a BPMN model (lanes = serving apps) → `toXml`.
+  - **Tempo gotcha:** TraceQL `span.x = nil` matches nothing on 2.10 (it can't select missing attributes), so `bpmn.process.name` is `select()`ed and filtered in Node.
+- **Client:** [UndefinedProcesses.tsx](client/src/components/UndefinedProcesses.tsx) is the third Business Processes sub-tab (`businessProcessSubTab` now includes `'undefined'`).
+  - Session summary, plus "Accounted to N established flows" (click opens the flow).
+  - Undefined process tiles; evidence (why undefined + closest flow %, built-from flows, variants, per-step source flow, seen count, median gap).
+  - The same BpmnEditor canvas; Grafana session link.
+- **Verified exactly against ground truth:** 90 sessions → 40 conformant / 30 deviating / 20 undefined in 2 clusters (14 + 6); 706 steps, 0 unmapped. Browser-checked. `tsc`: 3 baseline errors. Not committed.
+
+### 2026-11-14 (4) — Vehicles sold (sale = vehicle changes hands, once per deal)
+- **Engine ([processEngine.js](mockprod/src/processEngine.js)):**
+  - `SALE_EVENTS` maps flow → completing task: New Vehicle Delivery Experience / *Sign Delivery Confirmation* (new; online|in-store from the journey), Fleet Order Fulfillment / *Complete Fleet Delivery* (new, fleet, `ctx.fleetUnits` 5–60), Wholesale Vehicle Disposition / *Complete Wholesale Sale* (used, wholesale).
+  - On completion the task span gets `business.sale.completed`, channel, condition and units, plus a `business.vehicle.sold` event (deal, VIN, model, unit price, amount).
+  - Counters: `business.vehicles.sold`, `business.sales.revenue` (USD).
+- **Journeys reworked:** online-purchase and dealership-purchase (new; starts at Sales Contract Finalization) both end in New Vehicle Delivery; fleet-purchase (new); warranty-add-on. Middle steps are optional. Sales Contract Finalization, Delivery and the two fleet flows are now journey-only.
+- **Baggage gained** `business.deal.id`, `business.vehicle.vin`, `business.sale.channel`. Attributes: `DEAL_ID`, `VEHICLE_VIN`, `SALE_CHANNEL`, `VEHICLE_CONDITION`, `SALE_UNITS`.
+- **Counting gotchas found:**
+  1. **Zero-init must use exactly the label set `add()` uses.** The first build pre-created series without `bpmn.process.name`, so real series were born at their first sale and `increase()` missed it — fleet 50.5 vs 84.
+  2. Don't replace `increase()` with "now − offset": it breaks on counter resets (restart). Use `round(increase())`.
+  3. Tempo search after a Tempo restart missed traces written in its first ~2 min (36 of 50 sale spans), though fetch-by-id returned them. Count from the counters, not Tempo search.
+- **Reconciled exactly:** counters = raw collector file export since 20:01 (fleet 43, in-store 25, online 16, wholesale 6; 50 deals, 0 duplicates). Note: the file exporter rotates at 100 MB (`traces-<ts>-size.jsonl`).
+- **Server:** new [businessKpis.js](server/routes/businessKpis.js) `GET /api/business-kpis/vehicles-sold?hours=` (Prometheus; filters `bpmn_process_name!=""`; zero-filled `buckets`).
+- **Client:** [VehiclesSoldTile.tsx](client/src/components/VehiclesSoldTile.tsx) is the first section of the Dashboard tab: total / new / used / revenue, by channel, per-hour bars, 24 h / 7 d / 30 d.
+- **Grafana:** new top row "Vehicles sold" (stats, by-channel bar gauge, stacked 5-min bars of whole vehicles; the first `rate()*3600` chart was misleading).
+- **Data caveat:** the 24 h totals still include the first test run's undercounted sales (98 counted vs 140 actual); they age out.
+- `tsc`: 3 baseline errors. Not committed.
+
 ### 2026-11-14 (3) — Live lineage: active flows → apps → APIs
 - **New `GET /api/live-lineage`** ([liveLineage.js](server/routes/liveLineage.js); `PROMETHEUS_URL` default `http://localhost:9090`; `?minutes=` 1–1440, `?domain=`, `?flow=`).
   - Source: Tempo span metrics in Prometheus, server spans only, excluding `bpmn-process-engine` and the consumer `/inbound` hand-offs.

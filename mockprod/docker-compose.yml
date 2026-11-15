@@ -89,8 +89,10 @@ services:
       ABANDON_RATE: ${ABANDON_RATE:-0.03}
       INCIDENTS_PER_DAY_PER_APP: ${INCIDENTS_PER_DAY_PER_APP:-0.5}
       FORCE_INCIDENT_APP: ${FORCE_INCIDENT_APP:-}
+      UNLABELED_PER_DAY: ${UNLABELED_PER_DAY:-160}
     ports:
       - "7000:7000"
+      - "7099:7099" # dealer-workstation (unlabeled sessions) control
     restart: unless-stopped
 
 volumes:

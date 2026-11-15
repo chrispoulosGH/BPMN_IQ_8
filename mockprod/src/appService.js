@@ -179,6 +179,9 @@ for (const [key, callsOnRoute] of routes) {
       'app.host.datacenter': host?.datacenter || '',
       [A.SIM_INCIDENT]: incident,
     });
+    // The caller's session (OTel semconv session.id). For traffic without
+    // business context it's the only link between one user's actions.
+    if (req.headers['x-session-id']) span?.setAttribute('session.id', String(req.headers['x-session-id']));
     if (call.requestObject) recordBody(span, 'api.request.body', req.body, call.requestObject);
 
     const fail = (status, fault, message) => {
