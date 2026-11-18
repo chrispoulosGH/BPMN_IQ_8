@@ -1,0 +1,634 @@
+<title>MongoDB Collection Inventory — BPMN IQ</title>
+<style>
+  :root {
+    --bg: #F6F7F9;
+    --surface: #FFFFFF;
+    --surface-2: #EEF1F5;
+    --border: #DEE3EA;
+    --text: #1B2028;
+    --text-muted: #5B6472;
+    --text-faint: #8890A0;
+    --accent: #246E70;
+    --accent-soft: #E4F0EF;
+    --status-active-fg: #206142;
+    --status-active-bg: #E4F3E9;
+    --status-active-bd: #BBDFC9;
+    --status-legacy-fg: #9C3B22;
+    --status-legacy-bg: #FBEAE4;
+    --status-legacy-bd: #F0C5B4;
+    --status-cache-fg: #8A620F;
+    --status-cache-bg: #FBF1DC;
+    --status-cache-bd: #EAD394;
+    --status-debug-fg: #4B4F5E;
+    --status-debug-bg: #ECEDF2;
+    --status-debug-bd: #D3D6E0;
+    --shadow: 0 1px 2px rgba(20, 24, 34, 0.06), 0 4px 16px rgba(20, 24, 34, 0.05);
+    color-scheme: light;
+  }
+
+  :root[data-theme="dark"] {
+    --bg: #12151B;
+    --surface: #1A1E27;
+    --surface-2: #20242E;
+    --border: #2A2F3C;
+    --text: #E7EAF0;
+    --text-muted: #9098A8;
+    --text-faint: #6B7180;
+    --accent: #63C2C0;
+    --accent-soft: #1B3436;
+    --status-active-fg: #8FE3B1;
+    --status-active-bg: #17301F;
+    --status-active-bd: #2A5138;
+    --status-legacy-fg: #F0A583;
+    --status-legacy-bg: #34211A;
+    --status-legacy-bd: #5A3527;
+    --status-cache-fg: #EAC876;
+    --status-cache-bg: #332A15;
+    --status-cache-bd: #5A4A24;
+    --status-debug-fg: #B5BACB;
+    --status-debug-bg: #262A35;
+    --status-debug-bd: #383D4C;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 24px rgba(0, 0, 0, 0.35);
+    color-scheme: dark;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12151B;
+      --surface: #1A1E27;
+      --surface-2: #20242E;
+      --border: #2A2F3C;
+      --text: #E7EAF0;
+      --text-muted: #9098A8;
+      --text-faint: #6B7180;
+      --accent: #63C2C0;
+      --accent-soft: #1B3436;
+      --status-active-fg: #8FE3B1;
+      --status-active-bg: #17301F;
+      --status-active-bd: #2A5138;
+      --status-legacy-fg: #F0A583;
+      --status-legacy-bg: #34211A;
+      --status-legacy-bd: #5A3527;
+      --status-cache-fg: #EAC876;
+      --status-cache-bg: #332A15;
+      --status-cache-bd: #5A4A24;
+      --status-debug-fg: #B5BACB;
+      --status-debug-bg: #262A35;
+      --status-debug-bd: #383D4C;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 24px rgba(0, 0, 0, 0.35);
+      color-scheme: dark;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", "IBM Plex Sans", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 15px;
+    line-height: 1.55;
+  }
+
+  .mono {
+    font-family: ui-monospace, "SFMono-Regular", "IBM Plex Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    font-variant-numeric: tabular-nums;
+  }
+
+  a { color: var(--accent); }
+
+  .shell {
+    display: grid;
+    grid-template-columns: 260px minmax(0, 1fr);
+    max-width: 1180px;
+    margin: 0 auto;
+    min-height: 100vh;
+  }
+
+  /* ── Nav rail ────────────────────────────────────────────── */
+  nav.rail {
+    border-right: 1px solid var(--border);
+    padding: 28px 18px 40px;
+    position: sticky;
+    top: 0;
+    align-self: start;
+    max-height: 100vh;
+    overflow-y: auto;
+  }
+  nav.rail .brand {
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin: 0 0 4px;
+  }
+  nav.rail .brand-sub {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin: 0 0 22px;
+  }
+  nav.rail h3 {
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin: 20px 0 8px;
+    font-weight: 600;
+  }
+  nav.rail h3:first-of-type { margin-top: 0; }
+  nav.rail ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+  nav.rail a.navlink {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 8px;
+    border-radius: 6px;
+    text-decoration: none;
+    color: var(--text-muted);
+    font-size: 13px;
+    font-family: ui-monospace, "SFMono-Regular", "IBM Plex Mono", Menlo, Consolas, monospace;
+  }
+  nav.rail a.navlink:hover { background: var(--surface-2); color: var(--text); }
+  nav.rail .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .dot.active-dot { background: var(--status-active-fg); }
+  .dot.legacy-dot { background: var(--status-legacy-fg); }
+  .dot.cache-dot { background: var(--status-cache-fg); }
+  .dot.debug-dot { background: var(--status-debug-fg); }
+
+  /* ── Main content ────────────────────────────────────────── */
+  main { padding: 44px 48px 100px; min-width: 0; }
+
+  header.page-head { margin-bottom: 34px; }
+  header.page-head .eyebrow {
+    font-size: 12px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 700;
+    margin: 0 0 10px;
+  }
+  header.page-head h1 {
+    font-size: 32px;
+    letter-spacing: -0.01em;
+    margin: 0 0 12px;
+    text-wrap: balance;
+  }
+  header.page-head p.lede {
+    color: var(--text-muted);
+    max-width: 62ch;
+    margin: 0;
+    font-size: 15.5px;
+  }
+
+  .stat-row {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    margin: 28px 0 8px;
+  }
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    box-shadow: var(--shadow);
+  }
+  .stat-card .num {
+    font-family: ui-monospace, "SFMono-Regular", "IBM Plex Mono", Menlo, Consolas, monospace;
+    font-size: 26px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .stat-card .label {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+  .stat-card.active .num { color: var(--status-active-fg); }
+  .stat-card.legacy .num { color: var(--status-legacy-fg); }
+  .stat-card.cache .num { color: var(--status-cache-fg); }
+  .stat-card.debug .num { color: var(--status-debug-fg); }
+
+  section.block { margin: 48px 0; scroll-margin-top: 20px; }
+  section.block > h2 {
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    font-weight: 700;
+    margin: 0 0 6px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+  }
+  section.block > p.block-desc {
+    color: var(--text-muted);
+    font-size: 13.5px;
+    margin: 0 0 18px;
+    max-width: 70ch;
+  }
+
+  /* ── Findings callout ────────────────────────────────────── */
+  .findings {
+    background: var(--status-legacy-bg);
+    border: 1px solid var(--status-legacy-bd);
+    border-radius: 12px;
+    padding: 20px 22px;
+    margin: 30px 0 40px;
+  }
+  .findings h2 {
+    margin: 0 0 4px;
+    font-size: 15px;
+    color: var(--status-legacy-fg);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .findings > p.sub { margin: 0 0 14px; color: var(--text-muted); font-size: 13.5px; }
+  .findings ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 12px; }
+  .findings li { font-size: 14px; }
+  .findings li b { color: var(--text); }
+  .findings code { background: var(--surface); }
+
+  /* ── Collection cards ────────────────────────────────────── */
+  .coll-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin-bottom: 12px;
+    box-shadow: var(--shadow);
+    scroll-margin-top: 20px;
+  }
+  .coll-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  .coll-name {
+    font-family: ui-monospace, "SFMono-Regular", "IBM Plex Mono", Menlo, Consolas, monospace;
+    font-weight: 600;
+    font-size: 15.5px;
+  }
+  .coll-model {
+    font-size: 12.5px;
+    color: var(--text-faint);
+    margin-left: 10px;
+    font-weight: 400;
+  }
+  .badge {
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    padding: 3px 9px;
+    border-radius: 100px;
+    border: 1px solid transparent;
+    white-space: nowrap;
+  }
+  .badge.active { color: var(--status-active-fg); background: var(--status-active-bg); border-color: var(--status-active-bd); }
+  .badge.legacy { color: var(--status-legacy-fg); background: var(--status-legacy-bg); border-color: var(--status-legacy-bd); }
+  .badge.cache  { color: var(--status-cache-fg);  background: var(--status-cache-bg);  border-color: var(--status-cache-bd); }
+  .badge.debug  { color: var(--status-debug-fg);  background: var(--status-debug-bg);  border-color: var(--status-debug-bd); }
+
+  .coll-summary { color: var(--text-muted); font-size: 13.5px; margin: 8px 0 0; }
+
+  details.usage { margin-top: 12px; }
+  details.usage > summary {
+    cursor: pointer;
+    font-size: 12.5px;
+    color: var(--accent);
+    font-weight: 600;
+    list-style: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  details.usage > summary::-webkit-details-marker { display: none; }
+  details.usage > summary::before {
+    content: "▸";
+    font-size: 10px;
+    transition: transform 0.15s ease;
+  }
+  details.usage[open] > summary::before { transform: rotate(90deg); }
+  details.usage > summary .count { color: var(--text-faint); font-weight: 400; }
+
+  ul.usage-list {
+    margin: 10px 0 2px;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    border-left: 2px solid var(--border);
+  }
+  ul.usage-list li { padding: 0 0 0 12px; font-size: 13px; }
+  ul.usage-list .loc {
+    font-family: ui-monospace, "SFMono-Regular", "IBM Plex Mono", Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: var(--text-faint);
+    display: block;
+  }
+  ul.usage-list .purpose { color: var(--text-muted); }
+
+  footer.page-foot {
+    margin-top: 60px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border);
+    color: var(--text-faint);
+    font-size: 12.5px;
+  }
+
+  @media (max-width: 860px) {
+    .shell { grid-template-columns: 1fr; }
+    nav.rail { position: static; max-height: none; border-right: none; border-bottom: 1px solid var(--border); }
+    main { padding: 32px 20px 80px; }
+    .stat-row { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  }
+</style>
+
+<div class="shell">
+  <nav class="rail">
+    <p class="brand">BPMN IQ</p>
+    <p class="brand-sub">Collection inventory</p>
+
+    <h3>On this page</h3>
+    <ul>
+      <li><a class="navlink" href="#findings"><span class="dot legacy-dot"></span>Findings</a></li>
+    </ul>
+
+    <h3>Active — main flow</h3>
+    <ul id="nav-active"></ul>
+
+    <h3>Cache-only</h3>
+    <ul id="nav-cache"></ul>
+
+    <h3>Legacy / dead</h3>
+    <ul id="nav-legacy"></ul>
+  </nav>
+
+  <main>
+    <header class="page-head">
+      <p class="eyebrow">Server-side data layer · server/</p>
+      <h1>Every MongoDB collection this app touches, and why</h1>
+      <p class="lede">Built by tracing every Mongoose model in <code class="mono">server/models/</code> and every raw <code class="mono">db.collection()</code> call across routes, lib, and utils — then, for each one, every file that reads or writes it and what triggers that code path.</p>
+    </header>
+
+    <div class="stat-row">
+      <div class="stat-card active">
+        <div class="num mono">27</div>
+        <div class="label">Active in the main request flow</div>
+      </div>
+      <div class="stat-card cache">
+        <div class="num mono">1</div>
+        <div class="label">Cache-only, non-authoritative</div>
+      </div>
+      <div class="stat-card legacy">
+        <div class="num mono">4</div>
+        <div class="label">Legacy, dead, or orphaned</div>
+      </div>
+      <div class="stat-card debug">
+        <div class="num mono">30+</div>
+        <div class="label">Ad-hoc scripts / debug files, no mounted route</div>
+      </div>
+    </div>
+
+    <section class="findings" id="findings">
+      <h2>⚠ Three things worth fixing</h2>
+      <p class="sub">Found while tracing usage — none of these are what you asked for, but they're real and worth knowing about.</p>
+      <ol>
+        <li><b>A destructured model that's <code>undefined</code> at runtime, and it's now reachable.</b> <code class="mono">server/routes/referenceData.js:3</code> destructures <code class="mono">BusinessCapability</code> from <code class="mono">models/ReferenceData.js</code> — but that file's <code class="mono">module.exports</code> never defines it (only <code class="mono">BusinessFlow, Product, Application, Actor, Channel, Domain, Subdomain, LineOfBusiness</code>). Any request that hits the generic <code class="mono">/:collection</code> CRUD route with <code class="mono">businessCapabilities</code> calls <code class="mono">.find()</code> on <code class="mono">undefined</code> and throws. This router was previously never mounted — it got wired up in <code class="mono">server/index.js</code> during this session's earlier work on the application-lookup bug, so this path is live now where it wasn't before. <code class="mono">server/scripts/seed-capabilities-full.js</code> has the identical bug and would crash immediately if run.</li>
+        <li><b>Three files register a Mongoose model literally named <code>Actor</code>.</b> <code class="mono">models/Actor.js</code>, <code class="mono">models/Persona.js</code>, and <code class="mono">models/ReferenceData.js</code> all define one, and Mongoose's pluralization sends all three to the same <code class="mono">actors</code> collection. The guarded ones (<code class="mono">mongoose.models.Actor ||</code>) mean whichever is <code class="mono">require</code>'d first wins process-wide — currently <code class="mono">models/Actor.js</code>, since <code class="mono">server/index.js</code> loads it before <code class="mono">ReferenceData.js</code>. It works today by load-order accident, not by design.</li>
+        <li><b><code class="mono">models/Persona.js</code> is dead code.</b> Nothing in the codebase ever <code class="mono">require</code>'s it, so its (looser) Actor schema never registers and never runs.</li>
+      </ol>
+    </section>
+
+    <section class="block" id="group-active">
+      <h2><span class="dot active-dot"></span>Active — used in the main request-handling flow</h2>
+      <p class="block-desc">Reached by a mounted Express route on a normal user action (upload, page load, save, login). This is where correctness and performance actually matter.</p>
+      <!-- ACTIVE_CARDS -->
+    </section>
+
+    <section class="block" id="group-cache">
+      <h2><span class="dot cache-dot"></span>Cache-only, non-authoritative</h2>
+      <p class="block-desc">Recomputed from source data on every upload. Safe to drop and rebuild; never the source of truth.</p>
+      <!-- CACHE_CARDS -->
+    </section>
+
+    <section class="block" id="group-legacy">
+      <h2><span class="dot legacy-dot"></span>Legacy, dead, or orphaned</h2>
+      <p class="block-desc">Migrated away from at startup, or written once and never read again.</p>
+      <!-- LEGACY_CARDS -->
+    </section>
+
+    <section class="block" id="group-debug">
+      <h2><span class="dot debug-dot"></span>Debug- and script-only collections</h2>
+      <p class="block-desc">These collection names only ever appear inside <code class="mono">server/scripts/*</code>, top-level <code class="mono">_tmp_*.js</code> / <code class="mono">test_*.js</code> / <code class="mono">check_*.js</code> files, or one-off root scripts — never in a mounted route. Only four scripts are wired into <code class="mono">package.json</code> (<code class="mono">reseed:servers</code>, <code class="mono">enrich:server-notes</code>, <code class="mono">reseed:databases</code>, <code class="mono">enrich:database-notes</code>); the rest run manually, if at all.</p>
+      <p class="coll-summary">Covers: <code class="mono">businessflows</code> · <code class="mono">applications</code> · <code class="mono">servers</code> · <code class="mono">databaseinstances</code> · <code class="mono">diagrams</code> · <code class="mono">tasks</code> cost/migration one-offs, plus raw <code class="mono">canonicalcomponents</code> and <code class="mono">componentSearchIndex</code> inspection tools — all of which are otherwise covered above as actively-used collections; scripts are just an additional, non-authoritative access path onto the same data.</p>
+    </section>
+
+    <footer class="page-foot">
+      Traced by reading <code class="mono">server/models/*.js</code> and grepping every <code class="mono">db.collection()</code> call across <code class="mono">server/</code>. Spot-checked: the <code class="mono">BusinessCapability</code> bug, the three-way <code class="mono">Actor</code> model collision, and the <code class="mono">servers.js</code>/<code class="mono">databases.js</code> routes bypassing their own models were each independently re-verified against source.
+    </footer>
+  </main>
+</div>
+
+<script>
+(function () {
+  const ACTIVE = [
+    { name: 'actors', model: 'Actor (models/Actor.js)', summary: 'neighborhoodName, name, role, description, owner, state — unique per (neighborhood, name). Wins the 3-way Actor model collision (see Findings).', usage: [
+      ['server/index.js:29,122,132,221', 'included in startup neighborhood-backfill and index sync'],
+      ['server/routes/actors.js:57-129', 'full CRUD + full-text search behind /api/actors'],
+      ['server/routes/diagrams.js:653', 'looked up during diagram XML validation to check swim-lane actor names'],
+      ['server/routes/states.js:175', 'actor-name validation before a diagram draft→submitted transition'],
+      ['server/scripts/seed-states.js:12', 'one-off seed script'],
+    ]},
+    { name: 'canonicalcomponents', model: 'CanonicalComponent', summary: 'The materialized "flat fact" store for Model Components uploads: neighborhoodName, componentType, primaryKey, values (Mixed), parentRefs/childrenRefs.', usage: [
+      ['server/lib/materializer.js', 'written on every component-domain spreadsheet upload — one doc per row from dataComponentBatches'],
+      ['server/lib/resolveParentRefs.js', 'parentRefs/childrenRefs set after materialization'],
+      ['server/lib/generateFlowDiagrams.js', 'read to auto-generate BPMN diagrams from Business Process Flow → Task → Application, part of upload post-process'],
+      ['server/lib/buildComponentSummary.js', 'aggregated into ComponentSummary on every GET /api/components (fire-and-forget)'],
+      ['server/utils/searchIndexBuilder.js', 'streamed to rebuild ComponentSearchIndex after every upload'],
+      ['server/routes/customFactories.js:4014,4188,4204-4205', 'canonical-backed fallback reads for single-component GET and /canonical-paged'],
+      ['server/routes/customFactories.js:2447,2456,2503', 'deleted when a model/neighborhood is deleted'],
+      ['server/routes/canonical.js, server/routes/components.js', 'primary read paths for /api/canonical and /api/components'],
+    ]},
+    { name: 'canonicaldata', model: 'CanonicalData', summary: 'Same shape as CanonicalComponent plus dataType — the materialized store for "System Components" / data-domain uploads.', usage: [
+      ['server/lib/materializer.js', 'written during data-domain upload materialization'],
+      ['server/routes/customFactories.js:2582-2584', 'deleted on data-type delete'],
+      ['server/routes/canonical.js', 'read via ?domain=data on /api/canonical'],
+      ['server/utils/applicationReferenceLookup.js', 'primary source for resolving Applications reference records app-wide (dashboard, reports, tasks, states, diagrams, databases, servers, system-components)'],
+    ]},
+    { name: 'capabilities', model: 'Capability', summary: 'neighborhoodName, capabilityId, domainName, aspect, name, descriptions, tmfStatus — text-indexed.', usage: [
+      ['server/index.js:30,122,221', 'startup neighborhood backfill / index sync'],
+      ['server/routes/capabilities.js', 'full CRUD + search behind /api/capabilities'],
+      ['server/routes/states.js:239-241', 'used as a state-transition target collection'],
+      ['server/services/capabilityMatcher.js:142', 'read on every POST /api/capabilities/match (LLM-based BPMN → capability matching)'],
+      ['server/scripts/seed-capabilities*.js', 'one-off seed/backfill scripts'],
+    ]},
+    { name: 'components', model: 'Component', summary: 'The "legacy-shaped" per-type component store: neighborhoodName, modelName, name, componentType, columns, rows[]. Touched from nearly every domain area.', usage: [
+      ['server/lib/populateComponentsFromBatches.js', 'rebuilt from dataComponentBatches after every upload post-process'],
+      ['server/routes/customFactories.js', 'primary CRUD surface (/api/custom-factories/*): row edits, deletes, upload rollback'],
+      ['server/routes/diagrams.js, states.js, actors.js, tasks.js, dashboard.js', 'metadata validation, actor/application fallback lookups, cost aggregation'],
+      ['server/utils/flowCostSource.js', 'read on every dashboard/reports cost-by-flow request'],
+      ['server/services/ForeignKeyResolver.js', 'FK target resolution during upload validation'],
+      ['server/index.js:32,122,221,233', 'modelName backfill, neighborhood backfill, index sync; also the parts/customfactories legacy rename target'],
+    ]},
+    { name: 'componentSearchIndex', model: 'ComponentSearchIndex', summary: 'Precomputed search/lineage index over Component data: rowName, searchableTextLower, allValues, cachedHierarchies.', usage: [
+      ['server/utils/searchIndexBuilder.js', 'fully rebuilt after every component-domain upload/materialization'],
+      ['server/routes/customFactories.js', 'primary read path for /search/typeahead, /search/indexed, /search/global, /hierarchies/tree — the in-app search UI, hot path'],
+    ]},
+    { name: 'componentsummaries', model: 'ComponentSummary', summary: 'Cross-type summary per primary key: neighborhoodName, primaryKey, valuesByType (Mixed), sources[].', usage: [
+      ['server/lib/buildComponentSummary.js', 'upserted on every GET /api/components call (background, fire-and-forget)'],
+      ['server/routes/componentSummaries.js', 'read via /api/component-summaries'],
+    ]},
+    { name: 'Data', model: 'Data', summary: 'Same shape as Component.js, for the data domain (capital-D collection name).', usage: [
+      ['server/lib/materializer.js, populateComponentsFromBatches.js', 'legacy-shaped rebuild after data-domain upload'],
+      ['server/routes/customFactories.js:2001-2032,2582', 'data-domain factory listing fallback, and delete'],
+      ['server/utils/applicationReferenceLookup.js', 'fallback (3rd tier) source for application reference lookups'],
+    ]},
+    { name: 'dataSearchIndex', model: 'DataSearchIndex', summary: 'Same shape as ComponentSearchIndex, for the data domain.', usage: [
+      ['server/utils/searchIndexBuilder.js', 'rebuilt after every data-domain upload'],
+      ['server/routes/databases.js, servers.js', 'primary source for /api/databases and /api/servers — these routes are index-backed, not model-backed (see Findings-adjacent note below)'],
+      ['server/utils/applicationReferenceLookup.js', 'secondary (2nd tier) source for application reference lookups app-wide'],
+    ]},
+    { name: 'models', model: 'Model', summary: 'The "neighborhood" / model catalog: name, modelCatalogColumns/Rows, schemaFactories[] (hierarchy definition), tupleType.', usage: [
+      ['server/index.js:33,122,142-171,221,233,249', 'legacy factoryneighborhoods→models rename at startup; neighborhood backfill target'],
+      ['server/routes/customFactories.js', 'model/neighborhood creation, catalog listing, deletion'],
+      ['server/routes/diagrams.js:330,475', 'schemaFactories lookup to map diagram metadata fields to the right hierarchy level'],
+      ['server/routes/dashboard.js:550', 'model catalog rows used for value-stream sequencing'],
+      ['server/utils/searchIndexBuilder.js:39', 'schemaFactories used to infer parent/child type relationships when rebuilding the index'],
+    ]},
+    { name: 'sessions', model: 'Session', summary: 'token (unique), userId, userObjId, expiresAt (TTL index) — the login session store.', usage: [
+      ['server/index.js:84', 'queried on every single /api/* request via the session-guard middleware — the auth gate'],
+      ['server/routes/auth.js', 'created on login, deleted on logout, read on /api/auth/session and password change'],
+    ]},
+    { name: 'states', model: 'State', summary: 'name (unique), description, order — workflow-state lookup list.', usage: [
+      ['server/routes/states.js:203', 'read by GET /api/states, falls back to a hardcoded constant if empty'],
+      ['server/scripts/seed-states.js', 'one-off seed'],
+    ]},
+    { name: 'tasks', model: 'Task', summary: 'neighborhoodName, name, businessFlow, product, applications[], sequence, state.', usage: [
+      ['server/routes/tasks.js', 'full CRUD behind /api/tasks, with fallback derivation from Diagram/BusinessFlow if empty'],
+      ['server/routes/dashboard.js, states.js', 'risk aggregation, state-transition target'],
+      ['server/scripts/seed-tasks.js', 'one-off seed'],
+    ]},
+    { name: 'users', model: 'User', summary: 'userId (unique), scrypt-hashed password/salt, displayName, role.', usage: [
+      ['server/index.js:90', 'role resolved on every request via the session-guard middleware'],
+      ['server/routes/auth.js', 'login / auto-register, password change'],
+      ['server/routes/admin.js', 'user CRUD behind /api/admin (admin-only)'],
+      ['server/scripts/seed-roles-users.js', 'one-off seed'],
+    ]},
+    { name: 'diagrams', model: 'Diagram', summary: 'neighborhoodName, name, xml, tasks[] (embedded applications), capabilities[], lineage fields, status, changeHistory[]. The core BPMN diagram store.', usage: [
+      ['server/routes/diagrams.js', 'core CRUD/search/validate surface behind /api/diagrams — primary UI feature'],
+      ['server/lib/generateFlowDiagrams.js', 'auto-created/updated after every component-domain upload materialization'],
+      ['server/routes/dashboard.js, reports.js, tasks.js, states.js', 'cost/risk aggregation, task/application fallback derivation'],
+      ['server/utils/flowCostSource.js', 'flow-level cost derivation'],
+      ['server/routes/customFactories.js:2507', 'deleted (by lineage-field match) when a neighborhood’s components are deleted'],
+    ]},
+    { name: 'businessflows', model: 'BusinessFlow', summary: 'Reference-data record; embeds tasks/application annual costs.', usage: [
+      ['server/routes/tasks.js', '/api/reference/businessFlows and /api/tasks fallback'],
+      ['server/routes/referenceData.js, states.js', 'reference-data CRUD/lookup, state-transition support'],
+    ]},
+    { name: 'products, channels, domains, subdomains, lineofbusinesses', model: 'Product, Channel, Domain, Subdomain, LineOfBusiness', summary: 'Simple named-reference collections sharing a generic refSchema.', usage: [
+      ['server/routes/tasks.js, referenceData.js, diagrams.js, states.js', 'reference-data CRUD/lookup behind /api/reference/*, and diagram metadata validation'],
+      ['server/scripts/reseed-reference.js, seed-states.js, seed-tasks.js', 'one-off seeds'],
+    ]},
+    { name: 'applications', model: 'Application', summary: 'Richer reference schema (ITAP fields: correlationId, acronym, etc.).', usage: [
+      ['server/routes/reports.js, referenceData.js', 'mounted reference-data routes'],
+      ['largely superseded in the main flow', 'listApplicationReferences() (applicationReferenceLookup.js) prefers CanonicalData/DataSearchIndex/Data over this collection — it’s a fallback path in most call sites, not the primary one'],
+    ]},
+    { name: 'dataBatches', model: 'none — raw driver only', summary: 'Spreadsheet-upload staging area for the data domain ("System Components" uploads), before materialization.', usage: [
+      ['server/routes/customFactories.js (POST /api/custom-factories/upload)', 'written — one doc per uploaded factory when loadDomain=data'],
+      ['server/routes/customFactories.js:1920-1926,1981-1989', 'read as a fallback when listing factories/components'],
+      ['server/lib/materializer.js, routes/canonical.js', 'scanned to materialize into CanonicalData / serve canonical rows when canonical docs are absent'],
+      ['server/routes/customFactories.js:2580', 'deleted on data-type delete'],
+    ]},
+    { name: 'dataComponentBatches', model: 'none — raw driver only', summary: 'Spreadsheet-upload staging area for the component domain (Model Components uploads), before materialization.', usage: [
+      ['server/routes/customFactories.js:2786 (POST /api/custom-factories/upload)', 'written — one doc per uploaded factory when loadDomain=component'],
+      ['server/lib/materializer.js, populateComponentsFromBatches.js, resolveParentRefs.js', 'scanned during upload post-process to build CanonicalComponent, rebuild components, resolve parent/child links'],
+      ['server/routes/customFactories.js (many endpoints)', 'fallback/enrichment read path across list, aggregate, catalog, single-component fetch'],
+      ['server/routes/canonical.js', 'FK-column metadata fallback for /api/canonical/*/meta'],
+      ['server/routes/customFactories.js:2446,2502', 'deleted when a model/neighborhood is deleted'],
+    ]},
+    { name: 'roles', model: 'none — raw driver only', summary: 'Role → capability/permission mapping, read on essentially every gated request.', usage: [
+      ['server/routes/auth.js:59,91', 'read on every login and every /api/auth/session check, to attach role capabilities'],
+      ['server/routes/admin.js:12,27', 'read by the admin-write guard middleware and GET /api/admin/roles'],
+      ['server/routes/customFactories.js:256', 'read by requireAdminWrite, gating all model/neighborhood create/delete/upload endpoints'],
+      ['server/scripts/seed-roles-users.js', 'one-off seed — the only place role docs are written'],
+    ]},
+    { name: 'databaseinstances', model: 'DatabaseInstance', summary: 'CMDB-style database record: sourceKey, instanceName, vendor, linkedApplications[], healthNotes[]. Note: the actual /api/databases route bypasses this model — see dataSearchIndex above.', usage: [
+      ['server/routes/dashboard.js, reports.js', 'risk/vulnerability aggregation on dashboard and HTML reports'],
+      ['server/scripts/reseed-databases.js, enrich-database-notes.js', 'wired as npm scripts (ops-run, not part of request handling)'],
+    ]},
+    { name: 'servers', model: 'Server', summary: 'CMDB-style server record. Note: the actual /api/servers route bypasses this model — see dataSearchIndex above.', usage: [
+      ['server/routes/dashboard.js, reports.js', 'risk/vulnerability aggregation, same pattern as databaseinstances'],
+      ['server/scripts/reseed-servers.js, enrich-server-notes.js', 'wired as npm scripts (ops-run, not part of request handling)'],
+    ]},
+  ];
+
+  const CACHE = [
+    { name: 'dataTypeDistributions', model: 'none — raw driver only', summary: 'Cached column-value distribution summary (the "Aggregate"/"Aggregator" column tiles shown after a data upload). Recomputed every upload; never authoritative.', usage: [
+      ['server/routes/customFactories.js:2973-2977', 'written — computed at the end of every data-domain upload'],
+      ['server/routes/customFactories.js:2534 (GET /data/:dataType/distributions)', 'read by the UI’s post-upload summary panel'],
+      ['server/routes/customFactories.js:2581', 'deleted on data-type delete'],
+    ]},
+  ];
+
+  const LEGACY = [
+    { name: 'factoryneighborhoods', model: 'none — legacy, raw driver only', summary: 'Pre-rename name for the models collection.', usage: [
+      ['server/index.js:145-171 (migrateLegacyModelCollection)', 'runs once at every startup: renames to models, or merges + drops if models already exists. The app never writes new docs here.'],
+    ]},
+    { name: 'parts, customfactories', model: 'none — legacy, raw driver only', summary: 'Pre-rename names for the components collection.', usage: [
+      ['server/index.js:174-218 (migrateLegacyComponentCollection)', 'runs once at every startup: renames/merges into components, then drops. Same migration-only pattern as factoryneighborhoods.'],
+    ]},
+    { name: 'permissions', model: 'none — raw driver only', summary: 'Reference list of permission names.', usage: [
+      ['server/scripts/seed-roles-users.js:79-80', 'write-only — seeded once, never read anywhere else in the codebase. Effectively orphaned at runtime.'],
+    ]},
+  ];
+
+  function usageHtml(usage) {
+    return usage.map(([loc, purpose]) =>
+      '<li><span class="loc">' + esc(loc) + '</span><span class="purpose">' + purpose + '</span></li>'
+    ).join('');
+  }
+
+  function esc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function cardHtml(c, badgeClass, badgeLabel) {
+    return (
+      '<article class="coll-card" id="coll-' + slug(c.name) + '">' +
+        '<div class="coll-head">' +
+          '<div><span class="coll-name mono">' + esc(c.name) + '</span><span class="coll-model">' + esc(c.model) + '</span></div>' +
+          '<span class="badge ' + badgeClass + '">' + badgeLabel + '</span>' +
+        '</div>' +
+        '<p class="coll-summary">' + c.summary + '</p>' +
+        '<details class="usage"><summary>Usage sites <span class="count">(' + c.usage.length + ')</span></summary>' +
+          '<ul class="usage-list">' + usageHtml(c.usage) + '</ul>' +
+        '</details>' +
+      '</article>'
+    );
+  }
+
+  function slug(name) {
+    return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+  }
+
+  function navLink(c, dotClass) {
+    return '<li><a class="navlink" href="#coll-' + slug(c.name) + '"><span class="dot ' + dotClass + '"></span>' + esc(c.name.split(',')[0]) + '</a></li>';
+  }
+
+  document.querySelector('#group-active').insertAdjacentHTML('beforeend', ACTIVE.map((c) => cardHtml(c, 'active', 'Active')).join(''));
+  document.querySelector('#group-cache').insertAdjacentHTML('beforeend', CACHE.map((c) => cardHtml(c, 'cache', 'Cache')).join(''));
+  document.querySelector('#group-legacy').insertAdjacentHTML('beforeend', LEGACY.map((c) => cardHtml(c, 'legacy', 'Legacy')).join(''));
+
+  document.querySelector('#nav-active').innerHTML = ACTIVE.map((c) => navLink(c, 'active-dot')).join('');
+  document.querySelector('#nav-cache').innerHTML = CACHE.map((c) => navLink(c, 'cache-dot')).join('');
+  document.querySelector('#nav-legacy').innerHTML = LEGACY.map((c) => navLink(c, 'legacy-dot')).join('');
+})();
+</script>
