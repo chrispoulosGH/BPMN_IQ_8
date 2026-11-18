@@ -10,6 +10,9 @@
 #   jira-api-token       ← JIRA_API_TOKEN       (optional; Process Change Radar)
 #   entra-client-secret  ← ENTRA_CLIENT_SECRET  (set by 04-entra-auth.sh)
 set -euo pipefail
+# Git Bash on Windows rewrites args starting with "/" (resource IDs, mount paths) as
+# Windows paths; turn that off. No effect on Linux/macOS.
+export MSYS_NO_PATHCONV=1
 cd "$(dirname "$0")"
 source ./config.sh
 az account set --subscription "$SUBSCRIPTION_ID"

@@ -5,13 +5,21 @@
 # BPMN_FILES_DIR, and the Container Apps environment in the VNet.
 # Idempotent: re-running updates/keeps existing resources.
 set -euo pipefail
+# Git Bash on Windows rewrites args starting with "/" (resource IDs, mount paths) as
+# Windows paths; turn that off. No effect on Linux/macOS.
+export MSYS_NO_PATHCONV=1
 cd "$(dirname "$0")"
 source ./config.sh
 
 az account set --subscription "$SUBSCRIPTION_ID"
+# A new subscription has most resource providers unregistered; register every one
+# this deployment uses (steps 1-5). Already-registered ones return immediately.
+for ns in Microsoft.Web Microsoft.OperationalInsights Microsoft.Insights Microsoft.ContainerRegistry \
+          Microsoft.KeyVault Microsoft.Storage Microsoft.Network Microsoft.Compute Microsoft.ManagedIdentity Microsoft.App; do
+  echo "  provider $ns"
+  az provider register --namespace "$ns" --wait -o none
+done
 az extension add --name containerapp --upgrade --only-show-errors
-az provider register --namespace Microsoft.App --wait
-az provider register --namespace Microsoft.OperationalInsights --wait
 
 echo "== Resource group"
 az group create -n "$RG" -l "$LOCATION" -o none
@@ -31,21 +39,22 @@ echo "== Container Registry"
 az acr create -g "$RG" -n "$ACR" --sku Basic --admin-enabled false -o none
 
 echo "== Key Vault (RBAC)"
-az keyvault create -g "$RG" -n "$KEYVAULT" -l "$LOCATION" --enable-rbac-authorization true -o none
+az keyvault show -n "$KEYVAULT" -o none 2>/dev/null || \
+  az keyvault create -g "$RG" -n "$KEYVAULT" -l "$LOCATION" --enable-rbac-authorization true -o none
 # Let the person running this write secrets.
 ME=$(az ad signed-in-user show --query id -o tsv)
 KV_ID=$(az keyvault show -n "$KEYVAULT" --query id -o tsv)
 az role assignment create --assignee-object-id "$ME" --assignee-principal-type User \
-  --role "Key Vault Secrets Officer" --scope "$KV_ID" -o none 2>/dev/null || true
+  --role "Key Vault Secrets Officer" --scope "$KV_ID" -o none
 
 echo "== Managed identity for the app"
 az identity create -g "$RG" -n "$IDENTITY" -o none
 ID_PRINCIPAL=$(az identity show -g "$RG" -n "$IDENTITY" --query principalId -o tsv)
 ACR_ID=$(az acr show -n "$ACR" --query id -o tsv)
 az role assignment create --assignee-object-id "$ID_PRINCIPAL" --assignee-principal-type ServicePrincipal \
-  --role AcrPull --scope "$ACR_ID" -o none 2>/dev/null || true
+  --role AcrPull --scope "$ACR_ID" -o none
 az role assignment create --assignee-object-id "$ID_PRINCIPAL" --assignee-principal-type ServicePrincipal \
-  --role "Key Vault Secrets User" --scope "$KV_ID" -o none 2>/dev/null || true
+  --role "Key Vault Secrets User" --scope "$KV_ID" -o none
 
 echo "== Storage for BPMN_FILES_DIR"
 az storage account create -g "$RG" -n "$STORAGE" -l "$LOCATION" --sku Standard_LRS --kind StorageV2 \

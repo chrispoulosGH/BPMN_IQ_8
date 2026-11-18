@@ -12,6 +12,9 @@
 # Secrets come from Key Vault (02-secrets.sh) as Key Vault references resolved
 # with the app's user-assigned identity.
 set -euo pipefail
+# Git Bash on Windows rewrites args starting with "/" (resource IDs, mount paths) as
+# Windows paths; turn that off. No effect on Linux/macOS.
+export MSYS_NO_PATHCONV=1
 cd "$(dirname "$0")"
 source ./config.sh
 az account set --subscription "$SUBSCRIPTION_ID"
@@ -25,7 +28,13 @@ fi
 IMAGE="${ACR}.azurecr.io/${IMAGE_REPO}:${TAG}"
 
 echo "== Build $IMAGE in ACR"
-az acr build -r "$ACR" -t "${IMAGE_REPO}:${TAG}" -t "${IMAGE_REPO}:latest" "$REPO_ROOT" -o none
+# --no-logs: still waits for the build, but does not stream its log. Streaming crashes the
+# Windows Azure CLI on non-ASCII output (it cannot be switched to UTF-8). Logs: portal, or
+# az acr task logs / az acr task list-runs.
+RUN=$(az acr build -r "$ACR" -t "${IMAGE_REPO}:${TAG}" -t "${IMAGE_REPO}:latest" "$REPO_ROOT" --no-logs --query "{id:runId,status:status}" -o tsv)
+read -r RUN_ID RUN_STATUS <<<"$RUN"
+echo "  ACR run $RUN_ID: $RUN_STATUS"
+[[ "$RUN_STATUS" == "Succeeded" ]] || { echo "Image build failed; see: az acr task logs -r $ACR --run-id $RUN_ID"; exit 1; }
 
 ID_RES=$(az identity show -g "$RG" -n "$IDENTITY" --query id -o tsv)
 ID_CLIENT=$(az identity show -g "$RG" -n "$IDENTITY" --query clientId -o tsv)

@@ -7,6 +7,9 @@
 # (X-MS-CLIENT-PRINCIPAL-NAME) instead of its own login form.
 # Needs permission to create app registrations in Entra ID.
 set -euo pipefail
+# Git Bash on Windows rewrites args starting with "/" (resource IDs, mount paths) as
+# Windows paths; turn that off. No effect on Linux/macOS.
+export MSYS_NO_PATHCONV=1
 cd "$(dirname "$0")"
 source ./config.sh
 az account set --subscription "$SUBSCRIPTION_ID"

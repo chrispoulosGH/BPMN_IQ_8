@@ -10,6 +10,18 @@
 ## Session log
 Newest entry first. Each entry: date, what was in flight, what's uncommitted/unresolved.
 
+### 2026-11-18 (2) — Deployed to Azure (steps 1–3 run for real)
+- **Live:** https://app-bpmniq-prod.azurewebsites.net (rg-bpmniq-prod, eastus, sub "Azure subscription 1", PayAsYouGo; tenant 956647b9…, `az login --tenant` needed for MFA). Health OK, login page renders, AUTH_MODE=local, auto-register off.
+- Step 1 needed a **B1 quota request** (new subs start at 0). Step 2 stored mongo-uri + jira-api-token (read from server/.env, never echoed); no Anthropic key. `deploy/azure/app-settings.env` (git-ignored) has the non-secret JIRA_* settings.
+- Atlas allowlist: the user added all 31 `possibleOutboundIpAddresses`; it took a couple of minutes to apply (actual outbound IP was 48.206.128.110).
+- **Script fixes, uncommitted:**
+  - every script sets `MSYS_NO_PATHCONV=1`: Git Bash had mangled `--scope /subscriptions/…`, so **no role assignments were ever created** (hidden by `2>/dev/null || true`, now removed);
+  - `keyvault create` is skipped if the vault exists;
+  - `az acr build --no-logs` plus a status check: Windows az crashes streaming the "✓" in the build log, and PYTHONIOENCODING/PYTHONUTF8 don't help because az runs Python with `-I`.
+- Container logging (filesystem) was enabled by hand to read the app's stdout (Kudu `/api/vfs/LogFiles/*_default_docker.log`); not in 03-app.sh yet.
+- **Step 4 (Entra auth) deliberately not run, at the user's choice.** The site is public with local login (passwords optional), and test users exist. Step 5 (VM) not run.
+- Credentials exposed in chat this session: the user pasted the Atlas password; I printed the Jira token by mistake. The user chose to keep both as-is.
+
 ### 2026-11-18 — Azure target switched to App Service B1
 - Chris confirmed Atlas Cluster0 (`cluster0.5btmi1w.mongodb.net`) is the **M0 free tier on AWS us-east-1**, with no private endpoints. Per [azure-deploy-comparison.md](azure-deploy-comparison.md) that flips the target from Container Apps + NAT gateway to **App Service B1 + Atlas IP access list**. A "Decision" section was added to the doc; the doc itself was committed earlier as `9ea238d`.
 - [deploy/azure/](deploy/azure/) rewritten for App Service; `02-secrets.sh` and `05-mockprod-vm.sh` unchanged.
