@@ -1429,7 +1429,8 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
               setTaskApps(bo, current, m);
               popoverDirtyRef.current = true;
               rebuildAssigned();
-              renderList(searchInput.value);
+              // Re-query suggestions for the current text (renderList takes suggestions, not the query).
+              void refreshTypeahead(searchInput.value);
               renderAppOverlays(m);
             });
             tag.appendChild(x);
@@ -2368,7 +2369,7 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
             .map((name) => String(name || '').toLowerCase().trim())
             .filter(Boolean)
         );
-        const invalidSet = new Set(
+        const invalidSet = new Set<string>(
           taskElements
             .map((el: any) => String(el.businessObject.name || '').toLowerCase().trim())
             .filter((name: string) => name && !validTaskSet.has(name))

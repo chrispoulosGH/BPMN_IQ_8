@@ -17,3 +17,7 @@ server/node_modules/
 # Local tool state / secrets
 .claude/
 cookies_fktest.txt
+
+# Azure deployment: local config and settings (may contain names/endpoints)
+deploy/azure/config.sh
+deploy/azure/app-settings.env

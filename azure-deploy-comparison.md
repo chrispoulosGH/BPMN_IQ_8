@@ -52,7 +52,20 @@ Expected load: a few users and low request volume.
 
 If you stay on Container Apps, one cheap change: size the app in `03-app.sh` at 0.5 vCPU / 1 GiB. That roughly halves the compute cost at this traffic.
 
-## Recommendation
+## Decision (2026-11-18): App Service B1
+
+**Atlas facts, confirmed by Chris:** Cluster0 is the **free tier (M0)** on AWS us-east-1 (Virginia). It has **no private endpoints**.
+
+That is the case the recommendation below calls out as flipping the choice. Container Apps would need a NAT gateway just to give Atlas a fixed IP to allow. App Service B1 publishes outbound IPs that go straight into the Atlas IP access list.
+
+**Chosen:** App Service B1 (Linux) in **East US** (also Virginia), with the Atlas IP access list.
+
+- [deploy/azure/](deploy/azure/) now targets App Service.
+- The Container Apps scripts are kept in [deploy/azure/alt-container-apps/](deploy/azure/alt-container-apps/).
+- **Accepted trade-off:** each deploy restarts the app (no slots on B1).
+- **Revisit** if Atlas moves to a dedicated tier with a private endpoint, or if zero-downtime deploys become a requirement.
+
+## Original recommendation (before the Atlas tier was known)
 
 **Stay on Azure Container Apps.** Both targets run the image unchanged, and at a few users the compute bill is close: about $10–25 a month either way. Container Apps includes revision history and one-command rollback at your current tier, and it can scale to zero later. On App Service, zero-downtime deploys and quick rollback need deployment slots, which means moving from B1 (about $13) to Standard or Premium (about $55 or more). The deploy scripts and the tested image already target Container Apps. The one factor that could flip this is the database connection. Container Apps has no fixed outbound IP, so Atlas needs a NAT gateway or a private endpoint. If your Atlas cluster is a shared tier that only accepts an IP allowlist, and you don't want to pay for a NAT gateway, App Service B1 is the simpler and cheaper choice: allowlist its outbound IPs and accept a brief restart on each deploy.
 

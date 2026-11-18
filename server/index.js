@@ -37,8 +37,13 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27018/bpmn_iq';
 
-// Middleware
-app.use(cors({ origin: 'http://localhost:5173', credentials: true }));
+// Behind Azure's HTTPS ingress: trust X-Forwarded-* so secure cookies work.
+app.set('trust proxy', 1);
+
+// Middleware. In production the client is served from this same origin, so
+// CORS only matters for the Vite dev server (or origins listed in CORS_ORIGINS).
+const CORS_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:5173').split(',').map((o) => o.trim()).filter(Boolean);
+app.use(cors({ origin: CORS_ORIGINS, credentials: true }));
 app.use(express.json({ limit: '10mb' }));
 
 // Simple cookie parser (no external package needed)
@@ -132,6 +137,15 @@ const discoveredProcessesRouter = require('./routes/discoveredProcesses');
 app.use('/api/discovered-processes', discoveredProcessesRouter);
 const soxControlsRouter = require('./routes/soxControls');
 app.use('/api/sox-controls', soxControlsRouter);
+
+// Production: serve the built client (client/dist) from this server, with an
+// SPA fallback for client-side routes. In development Vite serves it instead.
+const CLIENT_DIST = path.resolve(process.env.CLIENT_DIST || path.join(__dirname, '..', 'client', 'dist'));
+if (require('fs').existsSync(path.join(CLIENT_DIST, 'index.html'))) {
+  app.use(express.static(CLIENT_DIST, { index: false, maxAge: '1h' }));
+  app.get(/^\/(?!api\/).*/, (_req, res) => res.sendFile(path.join(CLIENT_DIST, 'index.html')));
+  console.log(`Serving client from ${CLIENT_DIST}`);
+}
 
 // Connect to MongoDB then start server
 async function backfillNeighborhoods() {

@@ -1,0 +1,17 @@
+# Keep the BPMN IQ image small and free of secrets/local data.
+**/node_modules
+**/.env
+**/.env.*
+!**/.env.example
+.git
+.github
+.vscode
+.claude
+client/dist
+server/bpmn-files
+server/*.log
+mockprod
+scripts
+docs
+*.html
+*.png

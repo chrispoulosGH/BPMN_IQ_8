@@ -10,6 +10,54 @@
 ## Session log
 Newest entry first. Each entry: date, what was in flight, what's uncommitted/unresolved.
 
+### 2026-11-18 — Azure target switched to App Service B1
+- Chris confirmed Atlas Cluster0 (`cluster0.5btmi1w.mongodb.net`) is the **M0 free tier on AWS us-east-1**, with no private endpoints. Per [azure-deploy-comparison.md](azure-deploy-comparison.md) that flips the target from Container Apps + NAT gateway to **App Service B1 + Atlas IP access list**. A "Decision" section was added to the doc; the doc itself was committed earlier as `9ea238d`.
+- [deploy/azure/](deploy/azure/) rewritten for App Service; `02-secrets.sh` and `05-mockprod-vm.sh` unchanged.
+  - `config.example.sh`: `LOCATION=eastus`; PLAN/PLAN_SKU=B1/WEBAPP; `snet-app` 10.40.4.0/26.
+  - `01-foundation.sh`: `snet-app` delegated to Microsoft.Web/serverFarms; `az appservice plan create --is-linux`.
+  - `03-app.sh`:
+    - `az webapp create --container-image-name`; UAMI with `acrUseManagedIdentityCreds` / `acrUserManagedIdentityID`.
+    - `keyVaultReferenceIdentity`; KV-reference app settings; `WEBSITES_PORT` + `PORT` 3001.
+    - Always On, `healthCheckPath`, HTTPS only, Azure Files mount, VNet integration with `vnetRouteAllEnabled=false` (Atlas must use the public outbound IPs), diagnostic settings.
+    - Prints `possibleOutboundIpAddresses` as /32s for the Atlas allowlist.
+  - `04-entra-auth.sh`: client secret in Key Vault referenced by `MICROSOFT_PROVIDER_AUTHENTICATION_SECRET`; `az webapp auth microsoft update`, `az webapp auth update --action RedirectToLoginPage`; then `AUTH_MODE=easyauth`.
+- The Container Apps versions are in [deploy/azure/alt-container-apps/](deploy/azure/alt-container-apps/), with a README explaining why.
+- **Still `bash -n` only — not run against Azure.** Not committed (apart from the comparison doc).
+- M0 caveats documented in deploy/azure/README.md: 512 MB storage (~140 MB used), connection/throughput limits, **no backups**.
+
+### 2026-11-17 — Azure deployment prep (step 2 of the Azure outline)
+- **Build fix:** `client` builds with `tsc --noEmit && vite build`, so the 3 baseline tsc errors would have failed production builds. All fixed; **tsc is now 0 errors** (no more "3 baseline").
+  - `api.ts`: missing `ApplicationItem` import.
+  - `BpmnEditor.tsx`: `Set<string>` typing.
+  - `BpmnEditor.tsx` (a real bug): removing an app in the task popover called `renderList(searchInput.value)` with a string; now `refreshTypeahead(...)`.
+- **Server prod settings:**
+  - `trust proxy`.
+  - `CORS_ORIGINS` env (was hard-coded localhost:5173).
+  - Serves `client/dist` with an SPA fallback when present (`CLIENT_DIST`).
+  - Cookie `secure` in production (`COOKIE_SECURE` override).
+  - `ALLOW_AUTO_REGISTER` (default off in production).
+  - **`AUTH_MODE=easyauth`**: login takes the user id from `X-MS-CLIENT-PRINCIPAL-NAME` (Container Apps / App Service auth). Only safe when platform auth is on.
+  - New `GET /api/auth/config`. The Login page auto-signs-in in easyauth mode (one-time effect via `onLoginRef`) and hides "First time?" when auto-registration is off.
+- **Undeclared server deps found by the container build** (locally they resolved from higher-up node_modules): `@xmldom/xmldom` was devDependency-only (prod crash), and `mongodb` was required but undeclared. Both are now dependencies (0.9.10 / 6.20.0).
+- **Image:** root [Dockerfile](Dockerfile) (multi-stage: client build, server prod deps, node:22.17.0-alpine, non-root, `COPY --chown`, healthcheck) + [.dockerignore](.dockerignore) (no `.env`, node_modules, mockprod). Image ~319 MB.
+- **[deploy/azure/](deploy/azure/):** `config.example.sh` (→ git-ignored `config.sh`) plus:
+  - `01-foundation.sh`: RG, VNet (`snet-aca` delegated /23, `snet-vm`), Log Analytics, ACR, Key Vault RBAC, user-assigned identity with AcrPull + KV Secrets User, Azure Files `bpmn-files`, Container Apps env in the VNet + env storage `bpmnfiles`.
+  - `02-secrets.sh`: Key Vault secrets from the shell/prompt.
+  - `03-app.sh`: `az acr build` tagged with the git sha; YAML create/update with KV secret refs, env from git-ignored `app-settings.env`, Azure Files mount, probes. `AUTH_MODE=local` until platform auth is enabled.
+  - `04-entra-auth.sh`: app registration, platform auth with RedirectToLoginPage, then `AUTH_MODE=easyauth`.
+  - `05-mockprod-vm.sh`: Ubuntu VM at private 10.40.2.10 + data disk + Docker via cloud-init; NSG allows only VNet to 3000/3200/9090/4317/4318.
+  - README.md.
+- **The database is already MongoDB Atlas** (`server/.env` `MONGO_URI` = `cluster0.5btmi1w.mongodb.net/bpmn_iq`). The `127.0.0.1:27018` in code is only the fallback, so no migration is needed. All earlier "live DB" work, including the QA users from browser tests, went to Atlas.
+- **Validation:** scripts are `bash -n` clean only — **not run against Azure** (needs the user's subscription).
+  - The image (`bpmn-iq:local`) ran in production mode against Atlas in both auth modes.
+  - local: SPA served, `/api` 401 without a session, login OK, 110 flows shown.
+  - easyauth: no header → 401; with `x-ms-client-principal-name` the user id = header (body userId ignored); the UI auto-signs-in without the form.
+  - This created test users `containerqa` and `alex.tester@contoso.example` in Atlas.
+- Not committed.
+
+### 2026-11-15 (2) — Merged to main
+- At the user's request, `main` was fast-forwarded to `work/2026-11-10` (`304df4f`) and pushed. That brought in the 6 commits `df9aa43` → `304df4f`. All "Not committed" notes in the entries below up to 2026-11-15 are now committed and on `main`. Work continues on `work/2026-11-10`.
+
 ### 2026-11-15 — Undefined Processes (traffic with no business context)
 - **Simulator:** new `dealer-workstation` service ([unlabeledClient.js](mockprod/src/unlabeledClient.js), started by the launcher, control `POST :7099/sessions {count, scenario}`; `npm run burst -- sessions N [vacant|deviation|emergent]`).
   - Calls app APIs with **no baggage and no process/task spans**; each action is its own trace. Only `x-session-id` links them, recorded by appService as `session.id`.

@@ -6,11 +6,32 @@ const User = require('../models/User');
 const Session = require('../models/Session');
 
 const SESSION_DURATION_MS = 1000 * 60 * 60 * 8; // 8 hours
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+// Secure cookies in production (HTTPS ingress); COOKIE_SECURE overrides.
+const COOKIE_SECURE = process.env.COOKIE_SECURE ? process.env.COOKIE_SECURE === 'true' : IS_PRODUCTION;
+// AUTH_MODE=easyauth: Azure Container Apps / App Service authentication (e.g.
+// Microsoft Entra ID) signs the user in before the request reaches the app and
+// sets X-MS-CLIENT-PRINCIPAL-NAME. Only enable it when that platform auth is
+// on — it strips any client-supplied copy of the header.
+const EASY_AUTH = process.env.AUTH_MODE === 'easyauth';
+// First-login auto-registration: on in development, off in production unless enabled.
+const ALLOW_AUTO_REGISTER = process.env.ALLOW_AUTO_REGISTER ? process.env.ALLOW_AUTO_REGISTER === 'true' : !IS_PRODUCTION;
+
+// GET /api/auth/config — how the login page should behave (no session needed)
+router.get('/config', (_req, res) => {
+  res.json({ authMode: EASY_AUTH ? 'easyauth' : 'local', allowAutoRegister: EASY_AUTH || ALLOW_AUTO_REGISTER });
+});
 
 // POST /api/auth/login — authenticate user
 router.post('/login', async (req, res) => {
   try {
-    const { userId, password } = req.body;
+    let { userId, password } = req.body;
+    if (EASY_AUTH) {
+      // The platform already authenticated the user; use that identity.
+      const principal = String(req.headers['x-ms-client-principal-name'] || '').trim();
+      if (!principal) return res.status(401).json({ error: 'Not signed in. Sign in with your organization account.' });
+      userId = principal;
+    }
     if (!userId || !userId.trim()) {
       return res.status(400).json({ error: 'User ID is required.' });
     }
@@ -18,13 +39,16 @@ router.post('/login', async (req, res) => {
     let user = await User.findOne({ userId: userId.trim() });
 
     if (!user) {
-      // Auto-register on first login (password optional)
+      if (!EASY_AUTH && !ALLOW_AUTO_REGISTER) {
+        return res.status(401).json({ error: 'Unknown user.' });
+      }
+      // Auto-register on first login (password optional; none with platform auth)
       user = await User.create({
         userId: userId.trim(),
-        password: password || null,
+        password: EASY_AUTH ? null : (password || null),
         displayName: userId.trim(),
       });
-    } else {
+    } else if (!EASY_AUTH) {
       // Validate password if user has one set
       const valid = await user.comparePassword(password || '');
       if (!valid) {
@@ -50,7 +74,7 @@ router.post('/login', async (req, res) => {
     // Set cookie
     res.cookie('bpmn_iq_sid', token, {
       httpOnly: true,
-      secure: false,
+      secure: COOKIE_SECURE,
       maxAge: SESSION_DURATION_MS,
       sameSite: 'lax',
     });
