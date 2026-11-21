@@ -10,6 +10,22 @@
 ## Session log
 Newest entry first. Each entry: date, what was in flight, what's uncommitted/unresolved.
 
+### 2026-11-21 — Auto-deploy from main (GitHub Actions)
+- Before this, push did not deploy; only running `03-app.sh` by hand did. The user chose **main only**.
+- New [.github/workflows/deploy-azure.yml](.github/workflows/deploy-azure.yml): it runs on a push to main that touches client/, server/, Dockerfile, .dockerignore or the workflow itself, plus `workflow_dispatch` (main only). Steps:
+  - OIDC `azure/login@v2`;
+  - `az acr build` tagged `<sha7>` and `latest`, with `--build-arg GIT_SHA`;
+  - `az webapp config set --linux-fx-version DOCKER|…:<sha7>` (changes the image only, not settings);
+  - polls `/api/health` until `version` = sha7, for up to 15 min.
+  - concurrency group `deploy-azure-prod`, never cancelled.
+- The image now carries `APP_VERSION` (Dockerfile `ARG GIT_SHA`), and `/api/health` returns `{status, version}`. `03-app.sh` passes the build-arg too.
+- New [deploy/azure/06-github-deploy.sh](deploy/azure/06-github-deploy.sh). **Ran for real:**
+  - app registration `gh-bpmniq-deploy` (appId 2fb5c490…), with a federated credential `repo:chrispoulosGH/BPMN_IQ_8:ref:refs/heads/main`;
+  - Contributor on the ACR only, Website Contributor on the web app only;
+  - 6 `AZURE_*` repo variables, all identifiers with no secrets (verified).
+- Value Streams/Journeys now always opens the **LLM AMI** model on entry, by any path. It's an App.tsx effect on `activeOuterTab === 'valueStreams'` (`VALUE_STREAMS_DEFAULT_MODEL`); `activeValueStreamsModel` used to start as `''`. Browser-checked: locally LLM AMI is the only model tab and its pane renders. `tsc` 0 errors.
+- Committed and pushed to `main` at the user's request; that push is the workflow's first real run.
+
 ### 2026-11-18 (2) — Deployed to Azure (steps 1–3 run for real)
 - **Live:** https://app-bpmniq-prod.azurewebsites.net (rg-bpmniq-prod, eastus, sub "Azure subscription 1", PayAsYouGo; tenant 956647b9…, `az login --tenant` needed for MFA). Health OK, login page renders, AUTH_MODE=local, auto-register off.
 - Step 1 needed a **B1 quota request** (new subs start at 0). Step 2 stored mongo-uri + jira-api-token (read from server/.env, never echoed); no Anthropic key. `deploy/azure/app-settings.env` (git-ignored) has the non-secret JIRA_* settings.

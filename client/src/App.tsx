@@ -67,6 +67,7 @@ import LiveLineage from './components/LiveLineage';
 // API names encode their business flow ("Flow — Task API"); those flows' diagrams
 // all live in this framework (Diagram.neighborhoodName has one distinct value).
 const INTEGRATION_FLOWS_NEIGHBORHOOD = 'LLM AMI';
+const VALUE_STREAMS_DEFAULT_MODEL = 'LLM AMI';
 import BpmnEditor, { EMPTY_DIAGRAM, type BpmnEditorHandle } from './components/BpmnEditor';
 import { composeStackedDiagramXml, type CompositeDiagramItem, type CompositeSectionTitle } from './utils/diagramComposite';
 import ProcessChangeRadar from './components/ProcessChangeRadar';
@@ -530,6 +531,14 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   const [activeAnalyticsTabsByModel, setActiveAnalyticsTabsByModel] = useState<Record<string, string>>({});
   const [activeValueStreamsModel, setActiveValueStreamsModel] = useState<string>('');
   const [activeValueStreamsModeByModel, setActiveValueStreamsModeByModel] = useState<Record<string, 'valueStream' | 'journey'>>({});
+  // Entering Value Streams/Journeys (by any path) always opens the LLM AMI model,
+  // when it exists; the user can still switch models while on the tab.
+  useEffect(() => {
+    if (activeOuterTab !== 'valueStreams') return;
+    if (neighborhoodTabs.some((tab) => tab.name === VALUE_STREAMS_DEFAULT_MODEL)) {
+      setActiveValueStreamsModel(VALUE_STREAMS_DEFAULT_MODEL);
+    }
+  }, [activeOuterTab, neighborhoodTabs]);
   const [activeDiagramNeighborhoodName, setActiveDiagramNeighborhoodName] = useState<string | null>(null);
   const [activeDataTab, setActiveDataTab] = useState<string>('databases');
   const [deleteAllComponentsLoading, setDeleteAllComponentsLoading] = useState(false);
