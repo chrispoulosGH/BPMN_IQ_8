@@ -33,16 +33,24 @@ if ! az ad sp show --id "$APP_ID" -o none 2>/dev/null; then
 fi
 SP_OID=$(az ad sp show --id "$APP_ID" --query id -o tsv)
 
-SUBJECT="repo:${REPO}:ref:refs/heads/main"
-if [[ -z "$(az ad app federated-credential list --id "$APP_ID" --query "[?subject=='${SUBJECT}'].name" -o tsv)" ]]; then
-  az ad app federated-credential create --id "$APP_ID" --parameters "{
-    \"name\": \"github-main\",
-    \"issuer\": \"https://token.actions.githubusercontent.com\",
-    \"subject\": \"${SUBJECT}\",
-    \"audiences\": [\"api://AzureADTokenExchange\"]
-  }" -o none
-  echo "  federated credential for $SUBJECT"
-fi
+# GitHub may present the subject with names only (repo:owner/repo:...) or with
+# immutable numeric IDs (repo:owner@<ownerId>/repo@<repoId>:...), depending on the
+# repo/org setting. Trust both forms, for the main branch only.
+OWNER_ID=$(gh api "repos/${REPO}" -q .owner.id)
+REPO_ID=$(gh api "repos/${REPO}" -q .id)
+add_fic() {  # credential-name subject
+  if [[ -z "$(az ad app federated-credential list --id "$APP_ID" --query "[?subject=='$2'].name" -o tsv)" ]]; then
+    az ad app federated-credential create --id "$APP_ID" --parameters "{
+      \"name\": \"$1\",
+      \"issuer\": \"https://token.actions.githubusercontent.com\",
+      \"subject\": \"$2\",
+      \"audiences\": [\"api://AzureADTokenExchange\"]
+    }" -o none
+  fi
+  echo "  federated credential for $2"
+}
+add_fic github-main "repo:${REPO}:ref:refs/heads/main"
+add_fic github-main-ids "repo:${REPO%%/*}@${OWNER_ID}/${REPO##*/}@${REPO_ID}:ref:refs/heads/main"
 
 assign() {  # role scope
   if [[ -z "$(az role assignment list --assignee "$SP_OID" --role "$1" --scope "$2" --query "[0].id" -o tsv)" ]]; then
