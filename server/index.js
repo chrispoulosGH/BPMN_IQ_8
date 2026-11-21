@@ -60,7 +60,7 @@ app.use((req, _res, next) => {
 });
 
 // Health check (before auth guard so wait-on can reach it)
-app.get('/api/health', (_req, res) => res.json({ status: 'ok' }));
+app.get('/api/health', (_req, res) => res.json({ status: 'ok', version: process.env.APP_VERSION || 'dev' }));
 
 // Auth routes (no session guard)
 app.use('/api/auth', authRouter);

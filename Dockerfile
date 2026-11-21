@@ -23,7 +23,10 @@ RUN yarn install --frozen-lockfile --production --network-timeout 600000
 
 # ── 3. Runtime ────────────────────────────────────────────────────────────────
 FROM node:22.17.0-alpine
-ENV NODE_ENV=production \
+# Commit the image was built from; /api/health reports it so a deploy can confirm it is live.
+ARG GIT_SHA=unknown
+ENV APP_VERSION=$GIT_SHA \
+    NODE_ENV=production \
     PORT=3001 \
     CLIENT_DIST=/app/client/dist \
     BPMN_FILES_DIR=/data/bpmn-files

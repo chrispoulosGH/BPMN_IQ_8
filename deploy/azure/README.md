@@ -25,6 +25,7 @@ Run the scripts in order from bash (Git Bash, WSL or Azure Cloud Shell) after `a
 | 3 | `03-app.sh` | Builds the image in ACR (tagged with the git commit), creates or updates the web app with Key Vault references, health check, Always On, HTTPS only, Azure Files mount and VNet integration. **Prints the outbound IPs for the Atlas allowlist.** Re-run to deploy a new version. |
 | 4 | `04-entra-auth.sh` | Microsoft Entra ID sign-in (client secret in Key Vault), then switches the app to `AUTH_MODE=easyauth` |
 | 5 | `05-mockprod-vm.sh` | Ubuntu VM in the VNet for the mock-production stack (private IP, no public ports by default) |
+| 6 | `06-github-deploy.sh` | Lets GitHub Actions deploy pushes to `main`: an OIDC federated credential (main branch only, no secret), least-privilege roles on the registry and web app, and the repo variables the workflow reads |
 
 ## Atlas (free tier M0) — what to do
 
@@ -54,7 +55,9 @@ Run the scripts in order from bash (Git Bash, WSL or Azure Cloud Shell) after `a
 
 ## Releases and rollback on B1
 
-- **Releasing:** re-running step 3 swaps the image and **restarts** the app. With a few users, a short gap is acceptable.
+- **Releasing (automatic):** after step 6, every push to `main` that changes `client/`, `server/`, the `Dockerfile` or `.dockerignore` runs [.github/workflows/deploy-azure.yml](../../.github/workflows/deploy-azure.yml). It builds the image in ACR tagged with the commit, points the web app at it, and waits until `/api/health` reports that commit (`{"status":"ok","version":"<sha>"}`). Pushes to other branches never deploy. Run it by hand from the Actions tab or `gh workflow run deploy-azure.yml --ref main`.
+  - The workflow only changes the **image**. App settings, Key Vault references, the Azure Files mount and VNet integration are left as step 3 set them; re-run step 3 to change those.
+- **Releasing (by hand):** re-running step 3 swaps the image and **restarts** the app. With a few users, a short gap is acceptable.
 - **Rolling back:** check out the previous commit and re-run step 3. Or point the app straight at an older tag: `az webapp config container set -g <rg> -n <app> --container-image-name <acr>.azurecr.io/bpmn-iq:<tag>`.
 - **Zero-downtime swaps:** these need deployment slots, available from S1 / P0v3. Moving to one of those tiers changes the outbound IPs (see the Atlas section).
 

@@ -31,7 +31,7 @@ echo "== Build $IMAGE in ACR"
 # --no-logs: still waits for the build, but does not stream its log. Streaming crashes the
 # Windows Azure CLI on non-ASCII output (it cannot be switched to UTF-8). Logs: portal, or
 # az acr task logs / az acr task list-runs.
-RUN=$(az acr build -r "$ACR" -t "${IMAGE_REPO}:${TAG}" -t "${IMAGE_REPO}:latest" "$REPO_ROOT" --no-logs --query "{id:runId,status:status}" -o tsv)
+RUN=$(az acr build -r "$ACR" -t "${IMAGE_REPO}:${TAG}" -t "${IMAGE_REPO}:latest" --build-arg GIT_SHA="$TAG" "$REPO_ROOT" --no-logs --query "{id:runId,status:status}" -o tsv)
 read -r RUN_ID RUN_STATUS <<<"$RUN"
 echo "  ACR run $RUN_ID: $RUN_STATUS"
 [[ "$RUN_STATUS" == "Succeeded" ]] || { echo "Image build failed; see: az acr task logs -r $ACR --run-id $RUN_ID"; exit 1; }

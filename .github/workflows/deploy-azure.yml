@@ -1,0 +1,85 @@
+# Deploy BPMN IQ to Azure App Service on every push to main that changes the app.
+#
+# Builds the image in Azure Container Registry (tagged with the commit), points the
+# web app at it, then waits until /api/health reports that commit.
+#
+# Signs in to Azure with OIDC: no Azure secret is stored in GitHub. The federated
+# credential only trusts this repo's main branch (deploy/azure/06-github-deploy.sh
+# sets it up, plus the repository variables used below).
+#
+# Only the image changes. App settings, Key Vault references, storage mount and
+# VNet integration stay as 03-app.sh last set them; re-run 03-app.sh to change those.
+#
+# B1 has no deployment slots, so each deploy restarts the app (a short gap).
+# Rollback: point the app at an older image tag (see deploy/azure/README.md), or revert
+# the commit on main and let this workflow deploy the revert.
+name: Deploy to Azure
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - client/**
+      - server/**
+      - Dockerfile
+      - .dockerignore
+      - .github/workflows/deploy-azure.yml
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # OIDC token for azure/login
+  contents: read
+
+concurrency:
+  group: deploy-azure-prod
+  cancel-in-progress: false   # never kill a deploy half-way; queue the next one
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      RG: ${{ vars.AZURE_RG }}
+      ACR: ${{ vars.AZURE_ACR }}
+      WEBAPP: ${{ vars.AZURE_WEBAPP }}
+      IMAGE_REPO: bpmn-iq
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure sign-in (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build image in ACR
+        run: |
+          TAG="${GITHUB_SHA::7}"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          az acr build -r "$ACR" -t "${IMAGE_REPO}:${TAG}" -t "${IMAGE_REPO}:latest" \
+            --build-arg GIT_SHA="$TAG" .
+
+      - name: Deploy image (restarts the app)
+        run: |
+          az webapp config set -g "$RG" -n "$WEBAPP" \
+            --linux-fx-version "DOCKER|${ACR}.azurecr.io/${IMAGE_REPO}:${TAG}" -o none
+
+      - name: Wait for the new version to be healthy
+        run: |
+          HOST=$(az webapp show -g "$RG" -n "$WEBAPP" --query defaultHostName -o tsv)
+          URL="https://${HOST}/api/health"
+          echo "Waiting for $URL to report version $TAG"
+          for i in $(seq 1 60); do
+            BODY=$(curl -fsS --max-time 10 "$URL" 2>/dev/null || true)
+            if [[ "$BODY" == *"\"version\":\"${TAG}\""* ]]; then
+              echo "Live: $BODY"
+              echo "Deployed \`${TAG}\` to https://${HOST}" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "  attempt $i: ${BODY:-no response}"
+            sleep 15
+          done
+          echo "::error::Version $TAG did not come up within 15 minutes. Check the container log (Kudu LogFiles/*_default_docker.log)."
+          exit 1
