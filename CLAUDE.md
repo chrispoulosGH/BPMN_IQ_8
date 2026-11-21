@@ -24,7 +24,9 @@ Newest entry first. Each entry: date, what was in flight, what's uncommitted/unr
   - Contributor on the ACR only, Website Contributor on the web app only;
   - 6 `AZURE_*` repo variables, all identifiers with no secrets (verified).
 - Value Streams/Journeys now always opens the **LLM AMI** model on entry, by any path. It's an App.tsx effect on `activeOuterTab === 'valueStreams'` (`VALUE_STREAMS_DEFAULT_MODEL`); `activeValueStreamsModel` used to start as `''`. Browser-checked: locally LLM AMI is the only model tab and its pane renders. `tsc` 0 errors.
-- Committed and pushed to `main` at the user's request; that push is the workflow's first real run.
+- Committed and pushed to `main` at the user's request (`71dcd10`, `b258b02`).
+- **First run failed at sign-in with AADSTS700213.** GitHub presents this repo's OIDC subject in the immutable-ID form `repo:chrispoulosGH@43609839/BPMN_IQ_8@1310459794:ref:refs/heads/main`. `06-github-deploy.sh` now registers both forms (`8c8216b`).
+- The re-run succeeded in 5m16s. Live `/api/health` returns `{"status":"ok","version":"b258b02"}`.
 
 ### 2026-11-18 (2) — Deployed to Azure (steps 1–3 run for real)
 - **Live:** https://app-bpmniq-prod.azurewebsites.net (rg-bpmniq-prod, eastus, sub "Azure subscription 1", PayAsYouGo; tenant 956647b9…, `az login --tenant` needed for MFA). Health OK, login page renders, AUTH_MODE=local, auto-register off.
