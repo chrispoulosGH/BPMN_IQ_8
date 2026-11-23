@@ -2383,6 +2383,105 @@ const toNumberExpr = (field) => ({
 });
 
 /**
+ * Annual TCO per flow diagram: each application's run cost (catalog
+ * ANNUAL_COST + server MONTHLY_COST×12 + software ANNUAL_MAINTENANCE) allocated
+ * by share of task→application usage across all flows, plus the flow's own
+ * feature dev spend for the latest year. Returns tcoForDiagram(diagram) with
+ * a .latestYear property. Shared by /flow-scorecards and
+ * /api/business-kpis/flow-efficiency.
+ */
+function buildTcoCalculator({ diagrams, appRows, infraAgg, softwareAgg, featureDocs }) {
+  const appIdByAcronym = new Map();
+  const appAnnualByAcronym = new Map();
+  for (const row of appRows) {
+    const acronym = scorecardNorm(row.primaryKey);
+    appIdByAcronym.set(acronym, String(row.values?.['APP_ID Qualifier'] || ''));
+    appAnnualByAcronym.set(acronym, Number(row.values?.['ANNUAL_COST Qualifier']) || 0);
+  }
+  const infraByAppId = new Map(infraAgg.map((r) => [r._id, (r.monthly || 0) * 12]));
+  const softwareByAppId = new Map(softwareAgg.map((r) => [r._id, r.maintenance || 0]));
+  // Task-usage share: how many task→application uses each app has across all flows.
+  const usageTotal = new Map();
+  for (const d of diagrams) {
+    for (const t of d.tasks || []) {
+      for (const a of t.applications || []) {
+        const key = scorecardNorm(a.name);
+        if (key) usageTotal.set(key, (usageTotal.get(key) || 0) + 1);
+      }
+    }
+  }
+  const devByFlowYear = new Map(); // flow -> Map(year -> cost)
+  let latestYear = 0;
+  for (const doc of featureDocs) {
+    const flow = scorecardNorm(doc.businessFlow);
+    if (!devByFlowYear.has(flow)) devByFlowYear.set(flow, new Map());
+    const years = devByFlowYear.get(flow);
+    for (const feature of doc.features || []) {
+      const year = Number(feature.year);
+      if (!year) continue;
+      latestYear = Math.max(latestYear, year);
+      years.set(year, (years.get(year) || 0) + (Number(feature.devCost) || 0));
+    }
+  }
+
+  const tcoForDiagram = (d) => {
+    const usageHere = new Map();
+    for (const t of d.tasks || []) {
+      for (const a of t.applications || []) {
+        const key = scorecardNorm(a.name);
+        if (key) usageHere.set(key, (usageHere.get(key) || 0) + 1);
+      }
+    }
+    let appCost = 0; let infraCost = 0; let softwareCost = 0; let uncosted = 0;
+    for (const [key, uses] of usageHere) {
+      const share = uses / (usageTotal.get(key) || uses);
+      const appId = appIdByAcronym.get(key);
+      if (!appId) { uncosted += 1; continue; }
+      appCost += (appAnnualByAcronym.get(key) || 0) * share;
+      infraCost += (infraByAppId.get(appId) || 0) * share;
+      softwareCost += (softwareByAppId.get(appId) || 0) * share;
+    }
+    const flowKeys = [scorecardNorm(d.businessFlow), scorecardNorm(d.name)].filter(Boolean);
+    const devYears = flowKeys.map((k) => devByFlowYear.get(k)).find(Boolean) || null;
+    const devCost = devYears?.get(latestYear) || 0;
+    const devCostPrior = devYears?.get(latestYear - 1) || 0;
+    const runCost = appCost + infraCost + softwareCost;
+    return {
+      year: latestYear || null,
+      total: Math.round(runCost + devCost),
+      run: Math.round(runCost),
+      application: Math.round(appCost),
+      infrastructure: Math.round(infraCost),
+      software: Math.round(softwareCost),
+      development: Math.round(devCost),
+      developmentPriorYear: Math.round(devCostPrior),
+      priorYearTotal: Math.round(runCost + devCostPrior),
+      uncostedApplications: uncosted,
+    };
+  };
+  tcoForDiagram.latestYear = latestYear;
+  return tcoForDiagram;
+}
+
+/** Inputs for buildTcoCalculator, loaded from Mongo. */
+async function loadTcoInputs() {
+  const [diagrams, appRows, infraAgg, softwareAgg, featureDocs] = await Promise.all([
+    Diagram.find({}, { name: 1, domain: 1, subdomain: 1, businessFlow: 1, neighborhoodName: 1, 'tasks.name': 1, 'tasks.applications.name': 1 }).lean(),
+    CanonicalData.find({ neighborhoodName: SYSTEM_COMPONENTS_NEIGHBORHOOD, componentType: 'Applications' }, { primaryKey: 1, 'values.APP_ID Qualifier': 1, 'values.ANNUAL_COST Qualifier': 1 }).lean(),
+    CanonicalData.aggregate([
+      { $match: { neighborhoodName: SYSTEM_COMPONENTS_NEIGHBORHOOD, componentType: 'Servers' } },
+      { $group: { _id: fkAppIdFieldExpr(), monthly: { $sum: toNumberExpr('MONTHLY_COST_USD cost_grp_1') } } },
+    ]),
+    CanonicalData.aggregate([
+      { $match: { neighborhoodName: SYSTEM_COMPONENTS_NEIGHBORHOOD, componentType: 'Software' } },
+      { $group: { _id: fkAppIdFieldExpr(), maintenance: { $sum: toNumberExpr('ANNUAL_MAINTENANCE_USD cost_grp_1') } } },
+    ]),
+    ApplicationFeatureDevCost.find({}, { businessFlow: 1, 'features.year': 1, 'features.devCost': 1 }).lean(),
+  ]);
+  return { diagrams, appRows, infraAgg, softwareAgg, featureDocs };
+}
+
+/**
  * GET /api/dashboard/flow-scorecards
  * One scorecard per business process flow diagram, for the Dashboard tab's
  * per-flow tiles. Change exposure (live Jira) is NOT included — the client
@@ -2424,39 +2523,8 @@ router.get('/flow-scorecards', async (req, res) => {
     const securityByFlow = new Map(computeFlowSecurityRows(flowAppMap, assetAgg).map((r) => [scorecardNorm(r.businessFlow), r]));
     const defectByFlow = new Map(computeFlowDefectRows(flowAppMap, assetAgg).map((r) => [scorecardNorm(r.businessFlow), r]));
 
-    // ── TCO inputs ──
-    const appIdByAcronym = new Map();
-    const appAnnualByAcronym = new Map();
-    for (const row of appRows) {
-      const acronym = scorecardNorm(row.primaryKey);
-      appIdByAcronym.set(acronym, String(row.values?.['APP_ID Qualifier'] || ''));
-      appAnnualByAcronym.set(acronym, Number(row.values?.['ANNUAL_COST Qualifier']) || 0);
-    }
-    const infraByAppId = new Map(infraAgg.map((r) => [r._id, (r.monthly || 0) * 12]));
-    const softwareByAppId = new Map(softwareAgg.map((r) => [r._id, r.maintenance || 0]));
-    // Task-usage share: how many task→application uses each app has across all flows.
-    const usageTotal = new Map();
-    for (const d of diagrams) {
-      for (const t of d.tasks || []) {
-        for (const a of t.applications || []) {
-          const key = scorecardNorm(a.name);
-          if (key) usageTotal.set(key, (usageTotal.get(key) || 0) + 1);
-        }
-      }
-    }
-    const devByFlowYear = new Map(); // flow -> Map(year -> cost)
-    let latestYear = 0;
-    for (const doc of featureDocs) {
-      const flow = scorecardNorm(doc.businessFlow);
-      if (!devByFlowYear.has(flow)) devByFlowYear.set(flow, new Map());
-      const years = devByFlowYear.get(flow);
-      for (const feature of doc.features || []) {
-        const year = Number(feature.year);
-        if (!year) continue;
-        latestYear = Math.max(latestYear, year);
-        years.set(year, (years.get(year) || 0) + (Number(feature.devCost) || 0));
-      }
-    }
+    const tcoForDiagram = buildTcoCalculator({ diagrams, appRows, infraAgg, softwareAgg, featureDocs });
+    const latestYear = tcoForDiagram.latestYear;
 
     // ── SOX inputs ──
     const deviationsByControl = new Map();
@@ -2482,32 +2550,7 @@ router.get('/flow-scorecards', async (req, res) => {
       }
       const applications = [...new Set((d.tasks || []).flatMap((t) => (t.applications || []).map((a) => String(a.name || '').trim())).filter(Boolean))];
 
-      // TCO
-      let appCost = 0; let infraCost = 0; let softwareCost = 0; let uncosted = 0;
-      for (const [key, uses] of usageHere) {
-        const share = uses / (usageTotal.get(key) || uses);
-        const appId = appIdByAcronym.get(key);
-        if (!appId) { uncosted += 1; continue; }
-        appCost += (appAnnualByAcronym.get(key) || 0) * share;
-        infraCost += (infraByAppId.get(appId) || 0) * share;
-        softwareCost += (softwareByAppId.get(appId) || 0) * share;
-      }
-      const devYears = findBy(devByFlowYear);
-      const devCost = devYears?.get(latestYear) || 0;
-      const devCostPrior = devYears?.get(latestYear - 1) || 0;
-      const runCost = appCost + infraCost + softwareCost;
-      const tco = {
-        year: latestYear || null,
-        total: Math.round(runCost + devCost),
-        run: Math.round(runCost),
-        application: Math.round(appCost),
-        infrastructure: Math.round(infraCost),
-        software: Math.round(softwareCost),
-        development: Math.round(devCost),
-        developmentPriorYear: Math.round(devCostPrior),
-        priorYearTotal: Math.round(runCost + devCostPrior),
-        uncostedApplications: uncosted,
-      };
+      const tco = tcoForDiagram(d);
 
       // SOX
       const appKeys = new Set(usageHere.keys());
@@ -2556,3 +2599,6 @@ router.get('/flow-scorecards', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.buildTcoCalculator = buildTcoCalculator;
+module.exports.loadTcoInputs = loadTcoInputs;
+module.exports.scorecardNorm = scorecardNorm;

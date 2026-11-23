@@ -10,6 +10,70 @@
 ## Session log
 Newest entry first. Each entry: date, what was in flight, what's uncommitted/unresolved.
 
+### 2026-11-22 (3) — Dashboard: measure tiles + throughput per cost
+- **Dashboard tab** ([ExecutiveDashboard.tsx](client/src/components/ExecutiveDashboard.tsx)) now leads with [BusinessMetricTiles.tsx](client/src/components/BusinessMetricTiles.tsx):
+  - one tile per measure (the 11 from `/business-kpis/metrics`), each a column chart with quantity on y and time on x;
+  - axes and hover readout; 6 h / 24 h / 7 d / 30 d.
+  - It **replaces the Vehicles Sold widget** (`VehiclesSoldTile.tsx` deleted via `git rm`; `/vehicles-sold` and `getVehiclesSold` are kept).
+  - `DOMAIN_COLOR`, `Delta` and `bucketLabel` are now exported from BusinessMetrics.tsx.
+- **Throughput per cost:** new `GET /api/business-kpis/flow-efficiency?hours=` ([businessKpis.js](server/routes/businessKpis.js)).
+  - Per flow: completed instances per step (`bpmn_process_instances_total{outcome=completed}`) ÷ the flow's annual TCO prorated to the step, giving transactions per $1k.
+  - **Statistical normalisation (user asked):**
+    - each flow's index is rebased to its window average = 100;
+    - the trend is the OLS slope, and is favorable/unfavorable only when |t| ≥ 2, else steady;
+    - fewer than 6 observed steps = insufficient.
+  - Only whole steps are returned; steps without telemetry are null, not 0.
+  - The landscape is all costed flows together.
+- **TCO refactor:** TCO was extracted from `/flow-scorecards` into `buildTcoCalculator` + `loadTcoInputs` in [dashboard.js](server/routes/dashboard.js), exported as properties on the router. Scorecard output is unchanged. The upsell flow has no diagram, so it has no cost.
+- **Caveat:** cost is a fixed annual allocation, so within a window the index moves with throughput only.
+- **Client:** [FlowEfficiencyBoard.tsx](client/src/components/FlowEfficiencyBoard.tsx) has:
+  - landscape line chart (100 baseline, fitted trend line, hover);
+  - verdict counts, which act as a filter;
+  - table with sparkline, trend tag (icon + label + t-test tooltip), per $1k, completed, cost/txn and annual cost; unfavorable first; a flow click opens the flow.
+- **Verified:**
+  - trend statistics on synthetic series (up/down/noise/gaps/short);
+  - API live;
+  - browser screenshots;
+  - `tsc` 0 errors.
+- **Live data caveat:** Prometheus has no samples from ~14:00 to 17:36 on 11-22 (the PC likely slept), so every flow currently reads "not enough data" until about 6 whole steps accumulate.
+- Not committed.
+
+### 2026-11-22 (2) — Business Metrics & Analysis tab (10 new leadership measures)
+- **Engine ([processEngine.js](mockprod/src/processEngine.js) `BUSINESS_METRICS`):** each measure is counted once, when its flow's completing task succeeds. Counters: `business.outcomes` (units) and `business.outcome.value` (USD), labelled `business.metric`, `business.metric.dimension` and `bpmn.process.name`, all zero-initialised. Prometheus names: `business_outcomes_total`, `business_outcome_value_USD_total`.
+  | Measure | Counted at | Breakdown |
+  |---|---|---|
+  | designs released | New Model Development Program › Release for Production | segment |
+  | OTA updates delivered | Over-the-Air Software Update › Track Success & Failures | 400–4000 vehicles per wave |
+  | vehicles built | Vehicle Assembly Line Execution › Release for Final Test | 40–120 per lot; plant |
+  | safety certifications passed | Vehicle Safety Compliance Certification › Receive Certification | standard |
+  | vehicles passing final quality | End-of-Line Quality Inspection › Release to Shipping | plant |
+  | repair orders closed (+$) | Repair Order Completion › Close Repair Order | |
+  | warranty claims paid (+$) | Warranty Claim Submission › Receive Payment | lowerIsBetter |
+  | recall repairs completed | Recall Campaign Execution › Report Completion to OEM | |
+  | finance contracts funded (+$) | Finance Contract Funding › Reconcile Funding Amount | |
+  | connected subscriptions renewed (+$) | Connected Subscription Renewal › Activate Renewed Services | |
+- **Server:** `GET /api/business-kpis/metrics?hours=6|24|168|720` in [businessKpis.js](server/routes/businessKpis.js). Steps are 15 min / 1 h / 1 d / 1 d. It returns these 10 plus Vehicles Sold (channel = dimension), each with:
+  - total and the previous window's total (`null` when there's no prior data);
+  - USD value;
+  - dimensions;
+  - per-dimension series aligned to `buckets`, where a range point at t → the bucket at t − step.
+- **Client:** new outer tab `businessMetrics` "Business Metrics & Analysis" (after Dashboard), [BusinessMetrics.tsx](client/src/components/BusinessMetrics.tsx):
+  - 11 KPI tiles: total, delta vs prior (direction-aware), $ value, top breakdown, definition and source tooltip. A tile click toggles that measure in the chart.
+  - 3D chart in the FeatureCost3DChart style: X = measure grouped by domain, Z = time, Y = volume, stacked by dimension with seams and ribbons.
+    - Coloured by **domain** (6 dataviz-validated hues), because 11 measures exceeds the categorical limit.
+    - Default **Indexed (peak = 100)**, since scales differ by ~1000×; Actual counts is a toggle.
+    - Meshes are merged per measure×dimension (~40 traces, not ~900).
+  - Table view; 60 s auto-refresh; a 503 shows "start mockprod/stack.sh".
+- **Verified:** rebuilt the simulator and burst 6 of each flow. The API totals match the series sums. Browser screenshots are checked (tiles, chart, table). `tsc` 0 errors.
+- On Azure the tab shows the warning, because Prometheus (the mock-prod VM, step 5) isn't deployed. Not committed; pushing client/ or server/ to main auto-deploys.
+
+### 2026-11-22 — mockprod start/stop script
+- New [mockprod/stack.sh](mockprod/stack.sh) with `start|stop|restart|status|logs|down`, optional services or groups `sim`/`obs`, and `--build`.
+  - It starts Docker Desktop if it's down, then waits on the health URLs: collector 13133, Tempo `/ready`, Prometheus `/-/ready`, Grafana `/api/health`, engine 7000 and dealer workstation 7099 `/healthz`.
+  - Documented in the mockprod README.
+- **Tested for real:** start (Docker Desktop off at first), stop/start of `sim` only, full stop/start, and unknown names. A first draft validated names inside `$(…)`, so `start bogus` still started everything; that's fixed. The stack was left running.
+- Not committed.
+
 ### 2026-11-21 — Auto-deploy from main (GitHub Actions)
 - Before this, push did not deploy; only running `03-app.sh` by hand did. The user chose **main only**.
 - New [.github/workflows/deploy-azure.yml](.github/workflows/deploy-azure.yml): it runs on a push to main that touches client/, server/, Dockerfile, .dockerignore or the workflow itself, plus `workflow_dispatch` (main only). Steps:
