@@ -10,6 +10,10 @@
 ## Session log
 Newest entry first. Each entry: date, what was in flight, what's uncommitted/unresolved.
 
+### 2026-11-23 (2) — Pushed to main
+- Committed `c7edfd0` (telemetry snapshots), fast-forwarded and pushed `main`. The deploy succeeded in 5m17s; live `/api/health` returns version `c7edfd0`.
+- On Azure, Business Metrics, Throughput, Live Lineage and Discovered now return HTTP 200 from snapshots captured locally (each about 4 minutes old when checked). They stay current only while a local server runs with the mockprod stack up.
+
 ### 2026-11-23 — Telemetry views fall back to saved snapshots
 - **Why:** the analytics and dashboard views now work when Prometheus or Tempo can't be reached. That covers Azure, and a local run with the stack stopped.
 - **Store:** new `telemetrysnapshots` collection ([TelemetrySnapshot.js](server/models/TelemetrySnapshot.js)).
@@ -34,7 +38,6 @@ Newest entry first. Each entry: date, what was in flight, what's uncommitted/unr
   - A second server on :3011 with unreachable Prometheus/Tempo URLs served all 7 views from snapshots (lineage domain filter: 7 flows, same as live). An uncaptured window still returns 503.
   - Browser screenshots of Dashboard and Business Metrics show the notice.
   - `tsc` 0 errors.
-- Not committed.
 
 ### 2026-11-22 (4) — Pushed to main
 - Committed `6880f5c` (stack.sh), `1820edc` (Business Metrics tab + endpoints) and `45c5ef1` (Dashboard tiles + throughput per cost), then fast-forwarded and pushed `main`. The 2026-11-22 entries below are now committed.
