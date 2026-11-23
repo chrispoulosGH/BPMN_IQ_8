@@ -63,6 +63,49 @@ for (const [flowName, channel, condition] of [
   vehiclesSold.add(0, labels);
   salesRevenue.add(0, labels);
 }
+/**
+ * Business outcomes beyond vehicle sales: each is counted once, when the task
+ * that completes it succeeds. `units` is how many the instance produces (a
+ * shift's build lot, an OTA wave), `value` its USD amount where one applies,
+ * and `dimension` the breakdown leaders slice it by. The server's
+ * business-metrics route (server/routes/businessKpis.js) holds the labels.
+ */
+const pick = (list) => list[Math.floor(Math.random() * list.length)];
+const between = (lo, hi) => lo + Math.random() * (hi - lo);
+const BUSINESS_METRICS = [
+  { id: 'designs_released', flow: 'New Model Development Program', task: 'Release for Production',
+    dimensions: ['Sedan', 'SUV', 'Truck', 'EV'], units: () => 1 },
+  { id: 'ota_updates_delivered', flow: 'Over-the-Air Software Update', task: 'Track Success & Failures',
+    dimensions: ['Infotainment', 'Powertrain', 'ADAS', 'Battery Mgmt'], units: () => between(400, 4000) },
+  { id: 'vehicles_built', flow: 'Vehicle Assembly Line Execution', task: 'Release for Final Test',
+    dimensions: ['Detroit', 'Louisville', 'Chattanooga'], units: () => between(40, 120) },
+  { id: 'safety_certifications_passed', flow: 'Vehicle Safety Compliance Certification', task: 'Receive Certification',
+    dimensions: ['FMVSS', 'IIHS', 'Euro NCAP'], units: () => 1 },
+  { id: 'quality_inspections_passed', flow: 'End-of-Line Quality Inspection', task: 'Release to Shipping',
+    dimensions: ['Detroit', 'Louisville', 'Chattanooga'], units: () => between(35, 110) },
+  { id: 'repair_orders_closed', flow: 'Repair Order Completion', task: 'Close Repair Order',
+    dimensions: ['Customer Pay', 'Warranty', 'Internal'], units: () => 1, value: () => between(180, 1400) },
+  { id: 'warranty_claims_paid', flow: 'Warranty Claim Submission', task: 'Receive Payment',
+    dimensions: ['Powertrain', 'Electrical', 'Body', 'Emissions'], units: () => 1, value: () => between(250, 3200) },
+  { id: 'recall_repairs_completed', flow: 'Recall Campaign Execution', task: 'Report Completion to OEM',
+    dimensions: ['Airbag', 'Brakes', 'Software', 'Fuel System'], units: () => between(5, 40) },
+  { id: 'finance_contracts_funded', flow: 'Finance Contract Funding', task: 'Reconcile Funding Amount',
+    dimensions: ['Retail Loan', 'Lease', 'Special Finance'], units: () => 1, value: () => between(22000, 68000) },
+  { id: 'subscriptions_renewed', flow: 'Connected Subscription Renewal', task: 'Activate Renewed Services',
+    dimensions: ['Connected Basic', 'Connected Plus', 'Premium Bundle'], units: () => 1, value: () => between(99, 399) },
+];
+const METRIC_BY_TASK = new Map(BUSINESS_METRICS.map((m) => [`${m.flow}|${m.task}`, m]));
+const outcomesCounter = meter.createCounter('business.outcomes', { description: 'Business outcomes completed (designs released, vehicles built, claims paid…)', unit: '{outcome}' });
+const outcomeValue = meter.createCounter('business.outcome.value', { description: 'USD value of business outcomes', unit: 'USD' });
+// Zero-init with exactly the labels add() uses (see the sales counters above).
+for (const m of BUSINESS_METRICS) {
+  for (const dimension of m.dimensions) {
+    const labels = { 'business.metric': m.id, 'business.metric.dimension': dimension, [A.PROCESS_NAME]: m.flow };
+    outcomesCounter.add(0, labels);
+    if (m.value) outcomeValue.add(0, labels);
+  }
+}
+
 const processDuration = meter.createHistogram('bpmn.process.duration', { description: 'Process instance duration', unit: 's' });
 const taskDuration = meter.createHistogram('bpmn.task.duration', { description: 'Task duration including human work', unit: 's' });
 // Create every flow × outcome series at 0, so Prometheus sees each counter's
@@ -211,6 +254,16 @@ async function runTask(flow, task, sequence, journeyCtx, instanceId) {
       });
       vehiclesSold.add(units, { ...saleAttrs, [A.PROCESS_NAME]: flow.name });
       salesRevenue.add(unitPrice * units, { ...saleAttrs, [A.PROCESS_NAME]: flow.name });
+    }
+    const metric = METRIC_BY_TASK.get(`${flow.name}|${task.name}`);
+    if (outcome === 'completed' && metric) {
+      const units = Math.max(1, Math.round(metric.units()));
+      const value = metric.value ? Math.round(metric.value() * units) : 0;
+      const labels = { 'business.metric': metric.id, 'business.metric.dimension': pick(metric.dimensions), [A.PROCESS_NAME]: flow.name };
+      span.setAttributes({ ...labels, 'business.metric.units': units, ...(metric.value ? { 'business.metric.value': value } : {}) });
+      span.addEvent('business.outcome', { ...labels, 'business.metric.units': units, ...(metric.value ? { 'business.metric.value': value } : {}) });
+      outcomesCounter.add(units, labels);
+      if (metric.value) outcomeValue.add(value, labels);
     }
     span.addEvent(outcome === 'completed' ? 'bpmn.task.completed' : 'bpmn.task.failed');
     taskDuration.record((Date.now() - started) / 1000, { [A.PROCESS_NAME]: flow.name, [A.TASK_NAME]: task.name, [A.LANE_NAME]: task.laneName, [A.TASK_OUTCOME]: outcome });

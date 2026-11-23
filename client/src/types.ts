@@ -1143,3 +1143,73 @@ export interface UndefinedProcessesResponse {
   thresholds: { deviation: number };
   note: string;
 }
+
+export interface BusinessMetric {
+  id: string;
+  label: string;
+  unit: string;
+  domain: string;
+  dimensionLabel: string;
+  valueLabel?: string;
+  source: string;
+  definition: string;
+  lowerIsBetter?: boolean;
+  total: number;
+  /** null when the previous window has no data yet */
+  previousTotal: number | null;
+  value: number | null;
+  previousValue: number | null;
+  dimensions: { dimension: string; total: number }[];
+  /** one series per dimension, points aligned to BusinessMetricsResponse.buckets */
+  series: { dimension: string; points: number[] }[];
+}
+
+export interface BusinessMetricsResponse {
+  generatedAt: string;
+  hours: number;
+  stepSeconds: number;
+  /** bucket start times (ms) */
+  buckets: number[];
+  metrics: BusinessMetric[];
+}
+
+export type FlowEfficiencyVerdict = 'favorable' | 'unfavorable' | 'steady' | 'insufficient';
+export interface FlowEfficiencyTrend {
+  /** index points per step (least squares) */
+  slope: number | null;
+  /** slope / standard error; |t| >= 2 counts as a real trend */
+  t: number | null;
+  /** fitted change across the window, in index points (window average = 100) */
+  change: number | null;
+  verdict: FlowEfficiencyVerdict;
+  observedSteps: number;
+}
+export interface FlowEfficiencyRow {
+  name: string;
+  diagramId: string;
+  domain: string;
+  neighborhoodName: string | null;
+  /** annual TCO allocated to the flow (USD) */
+  annualCost: number;
+  /** completed instances per step, null where there is no telemetry */
+  completed: (number | null)[];
+  totalCompleted: number;
+  windowCost: number;
+  costPerTransaction: number | null;
+  /** completed transactions per $1,000 of cost, window average */
+  rawIndex: number | null;
+  /** throughput per cost rebased to window average = 100 */
+  index: (number | null)[];
+  trend: FlowEfficiencyTrend;
+}
+export interface FlowEfficiencyResponse {
+  generatedAt: string;
+  hours: number;
+  stepSeconds: number;
+  tcoYear: number | null;
+  buckets: number[];
+  landscape: { annualCost: number; completed: (number | null)[]; rawIndex: number | null; index: (number | null)[]; trend: FlowEfficiencyTrend };
+  counts: Record<FlowEfficiencyVerdict, number>;
+  flows: FlowEfficiencyRow[];
+  unmatched: { name: string; reason: string }[];
+}

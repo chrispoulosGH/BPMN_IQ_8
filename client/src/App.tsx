@@ -52,6 +52,7 @@ import {
   RadarChartOutlined,
   QuestionCircleOutlined,
   FundOutlined,
+  LineChartOutlined,
   FireOutlined,
   ExperimentOutlined,
   HomeOutlined,
@@ -73,6 +74,7 @@ import { composeStackedDiagramXml, type CompositeDiagramItem, type CompositeSect
 import ProcessChangeRadar from './components/ProcessChangeRadar';
 import ProcessChangeHeatMap from './components/ProcessChangeHeatMap';
 import ExecutiveDashboard from './components/ExecutiveDashboard';
+import BusinessMetrics from './components/BusinessMetrics';
 import QuantitativeModeling from './components/QuantitativeModeling';
 import DiagramBrowser from './components/DiagramBrowser';
 import NewDiagramDialog from './components/NewDiagramDialog';
@@ -3157,6 +3159,11 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                 // destroyInactiveTabPane means mounting here is a fresh fetch
                 // every visit, same as Process Change Radar below.
                 children: <ExecutiveDashboard onSelectDomain={handleDashboardDomainSelect} onOpenFlow={handleDashboardFlowOpen} onOpenChangeRadar={handleHeatMapFlowSelect} />,
+              },
+              {
+                key: 'businessMetrics',
+                label: outerTabLabel('businessMetrics', <span><LineChartOutlined /> Business Metrics &amp; Analysis</span>),
+                children: <BusinessMetrics />,
               },
               {
                 key: 'analytics',
