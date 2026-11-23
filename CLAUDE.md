@@ -10,6 +10,10 @@
 ## Session log
 Newest entry first. Each entry: date, what was in flight, what's uncommitted/unresolved.
 
+### 2026-11-22 (4) — Pushed to main
+- Committed `6880f5c` (stack.sh), `1820edc` (Business Metrics tab + endpoints) and `45c5ef1` (Dashboard tiles + throughput per cost), then fast-forwarded and pushed `main`. The 2026-11-22 entries below are now committed.
+- Auto-deploy run succeeded in 5m29s; live `/api/health` returns version `45c5ef1`. On Azure the new sections show the telemetry warning, because Prometheus isn't deployed there.
+
 ### 2026-11-22 (3) — Dashboard: measure tiles + throughput per cost
 - **Dashboard tab** ([ExecutiveDashboard.tsx](client/src/components/ExecutiveDashboard.tsx)) now leads with [BusinessMetricTiles.tsx](client/src/components/BusinessMetricTiles.tsx):
   - one tile per measure (the 11 from `/business-kpis/metrics`), each a column chart with quantity on y and time on x;
