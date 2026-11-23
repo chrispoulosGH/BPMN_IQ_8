@@ -8,6 +8,7 @@ import BpmnEditor from './BpmnEditor';
 import type { BpmnEditorHandle } from './BpmnEditor';
 import { getDiscoveredProcesses } from '../api';
 import type { ApplicationItem, DiscoveredProcess, DiscoveredProcessesResponse } from '../types';
+import SnapshotNotice from './SnapshotNotice';
 
 /**
  * Business Processes › Discovered Processes.
@@ -162,6 +163,7 @@ export default function DiscoveredProcesses({ allApplications }: DiscoveredProce
           ) : null}
 
           {error ? <Alert type="error" showIcon message="Discovery unavailable" description={error} className="mb-3" /> : null}
+          <SnapshotNotice snapshot={data?.snapshot} />
           {data && !data.discovered.length ? (
             <Empty description="No undiscovered processes: every flow seen in the traces already has a diagram." />
           ) : null}

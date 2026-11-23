@@ -5,6 +5,7 @@ import { InfoCircleOutlined, ReloadOutlined } from '@ant-design/icons';
 import { sankey as d3Sankey, sankeyLinkHorizontal, type SankeyLink, type SankeyNode } from 'd3-sankey';
 import { getLiveLineage } from '../api';
 import type { LiveLineageApi, LiveLineageApp, LiveLineageFlow, LiveLineageResponse } from '../types';
+import SnapshotNotice from './SnapshotNotice';
 
 /**
  * Integration Map › Live lineage: which business flows are running in
@@ -223,6 +224,7 @@ export default function LiveLineage({ onOpenBusinessFlows }: LiveLineageProps) {
       </div>
 
       {error ? <Alert type="error" showIcon message="Live lineage unavailable" description={error} className="mb-3" /> : null}
+      <SnapshotNotice snapshot={data?.snapshot} />
 
       {data ? (
         <div className="mb-3 flex flex-wrap gap-2 text-xs">

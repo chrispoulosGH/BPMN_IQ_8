@@ -4,6 +4,7 @@ import { ArrowDownOutlined, ArrowUpOutlined, InfoCircleOutlined, MinusOutlined, 
 import Plot from 'react-plotly.js';
 import { getBusinessMetrics } from '../api';
 import type { BusinessMetric, BusinessMetricsResponse } from '../types';
+import SnapshotNotice from './SnapshotNotice';
 
 /**
  * Business Metrics & Analysis: leadership measures derived from the business
@@ -262,6 +263,8 @@ export default function BusinessMetrics() {
           description={<span>{error} They come from the mock production telemetry; start it with <code>mockprod/stack.sh start</code>.</span>}
         />
       )}
+
+      <SnapshotNotice snapshot={data?.snapshot} className="" />
 
       {data && (
         <>

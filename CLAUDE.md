@@ -10,6 +10,32 @@
 ## Session log
 Newest entry first. Each entry: date, what was in flight, what's uncommitted/unresolved.
 
+### 2026-11-23 — Telemetry views fall back to saved snapshots
+- **Why:** the analytics and dashboard views now work when Prometheus or Tempo can't be reached. That covers Azure, and a local run with the stack stopped.
+- **Store:** new `telemetrysnapshots` collection ([TelemetrySnapshot.js](server/models/TelemetrySnapshot.js)).
+  - One row per view + parameters, latest only; the payload is gzipped JSON (≤10 KB each, 20 rows).
+  - It lives in Atlas, which local and Azure share, so snapshots captured locally show up on Azure.
+- **[telemetrySnapshots.js](server/services/telemetrySnapshots.js):**
+  - `liveOrSnapshot(view, params, compute)` saves on success (at most once a minute per key). When the source is unreachable it returns the saved data plus `snapshot: {capturedAt, source, reason}`. With no snapshot, the 503 stands.
+  - The background capture `startTelemetrySnapshotCapture()` runs every `TELEMETRY_SNAPSHOT_INTERVAL_MINUTES` (default 10; 0 = off). It probes `/-/ready` and `/ready` and recomputes each registered view's standard windows; where the stack is absent it writes nothing.
+  - `GET /api/telemetry-snapshots` lists the snapshots; `POST /api/telemetry-snapshots/capture` runs a capture now.
+- **Views covered:**
+  - business-kpis `metrics` / `flow-efficiency` (6 h / 24 h / 7 d / 30 d) and `vehicles-sold`;
+  - live-lineage (5 min – 24 h);
+  - undefined-processes (6 h / 24 h / 7 d);
+  - discovered-processes (24 h).
+- **Route refactors:**
+  - businessKpis.js handlers became `computeX(params)` + `sendView`.
+  - Live lineage snapshots the **raw** Prometheus rows (`fetchCalls`) and rebuilds via `buildLineage`, so the domain and flow filters work on a snapshot.
+  - Prometheus fetches have a 30 s timeout.
+- **Client:** new [SnapshotNotice.tsx](client/src/components/SnapshotNotice.tsx) (capture time + age) in all 6 views; `TelemetrySnapshotInfo` / `snapshot?` added to the response types.
+- **Verified:**
+  - A capture saved all 20 views.
+  - A second server on :3011 with unreachable Prometheus/Tempo URLs served all 7 views from snapshots (lineage domain filter: 7 flows, same as live). An uncaptured window still returns 503.
+  - Browser screenshots of Dashboard and Business Metrics show the notice.
+  - `tsc` 0 errors.
+- Not committed.
+
 ### 2026-11-22 (4) — Pushed to main
 - Committed `6880f5c` (stack.sh), `1820edc` (Business Metrics tab + endpoints) and `45c5ef1` (Dashboard tiles + throughput per cost), then fast-forwarded and pushed `main`. The 2026-11-22 entries below are now committed.
 - Auto-deploy run succeeded in 5m29s; live `/api/health` returns version `45c5ef1`. On Azure the new sections show the telemetry warning, because Prometheus isn't deployed there.

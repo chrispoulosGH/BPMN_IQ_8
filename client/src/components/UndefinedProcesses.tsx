@@ -7,6 +7,7 @@ import BpmnEditor from './BpmnEditor';
 import type { BpmnEditorHandle } from './BpmnEditor';
 import { getUndefinedProcesses } from '../api';
 import type { ApplicationItem, UndefinedProcess, UndefinedProcessesResponse } from '../types';
+import SnapshotNotice from './SnapshotNotice';
 
 /**
  * Business Processes › Undefined Processes.
@@ -139,6 +140,7 @@ export default function UndefinedProcesses({ allApplications, onOpenBusinessFlow
           </div>
 
           {error ? <Alert type="error" showIcon message="Analysis unavailable" description={error} className="mb-3" /> : null}
+          <SnapshotNotice snapshot={data?.snapshot} />
 
           {s ? (
             <div className="mb-3 rounded-md border border-solid border-slate-200 bg-slate-50 px-2.5 py-2 text-xs">

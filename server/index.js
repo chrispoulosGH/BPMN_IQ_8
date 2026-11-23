@@ -135,6 +135,14 @@ const undefinedProcessesRouter = require('./routes/undefinedProcesses');
 app.use('/api/undefined-processes', undefinedProcessesRouter);
 const discoveredProcessesRouter = require('./routes/discoveredProcesses');
 app.use('/api/discovered-processes', discoveredProcessesRouter);
+const telemetrySnapshots = require('./services/telemetrySnapshots');
+// The saved snapshots behind the telemetry views (fallback when Prometheus / Tempo are down).
+app.get('/api/telemetry-snapshots', async (req, res) => {
+  try { res.json(await telemetrySnapshots.listSnapshots()); } catch (err) { res.status(500).json({ error: err?.message || 'Failed' }); }
+});
+app.post('/api/telemetry-snapshots/capture', async (req, res) => {
+  try { res.json(await telemetrySnapshots.captureAll()); } catch (err) { res.status(500).json({ error: err?.message || 'Failed' }); }
+});
 const soxControlsRouter = require('./routes/soxControls');
 app.use('/api/sox-controls', soxControlsRouter);
 
@@ -279,6 +287,7 @@ mongoose
     await backfillNeighborhoods();
     await syncNeighborhoodIndexes();
     app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+    telemetrySnapshots.startTelemetrySnapshotCapture();
   })
   .catch((err) => {
     console.error('MongoDB connection error:', err.message);

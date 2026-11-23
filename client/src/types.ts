@@ -1009,8 +1009,24 @@ export interface DiscoveredProcessMatch {
   notes: string[];
 }
 
+/** server/services/telemetrySnapshots.js — when the view was last captured live. */
+export interface TelemetrySnapshotInfo {
+  capturedAt: string;
+  source: 'prometheus' | 'tempo';
+  reason: string;
+}
+
+/** server/services/telemetrySnapshots.js: when the view was last captured live. */
+export interface TelemetrySnapshotInfo {
+  capturedAt: string;
+  source: 'prometheus' | 'tempo';
+  reason: string;
+}
+
 export interface DiscoveredProcessesResponse {
   generatedAt: string;
+  /** Present when telemetry was unreachable and the last saved snapshot was served instead. */
+  snapshot?: TelemetrySnapshotInfo;
   source: string;
   tempoUrl: string;
   lookbackHours: number;
@@ -1062,6 +1078,8 @@ export interface LiveLineageApi {
 
 export interface LiveLineageResponse {
   generatedAt: string;
+  /** Present when telemetry was unreachable and the last saved snapshot was served instead. */
+  snapshot?: TelemetrySnapshotInfo;
   windowMinutes: number;
   source: string;
   flows: LiveLineageFlow[];
@@ -1075,6 +1093,8 @@ export interface LiveLineageResponse {
 // ── Vehicles sold (GET /api/business-kpis/vehicles-sold) ─────────────────────
 export interface VehiclesSoldResponse {
   generatedAt: string;
+  /** Present when telemetry was unreachable and the last saved snapshot was served instead. */
+  snapshot?: TelemetrySnapshotInfo;
   hours: number;
   stepSeconds: number;
   totalUnits: number;
@@ -1132,6 +1152,8 @@ export interface UndefinedProcessMatch {
 
 export interface UndefinedProcessesResponse {
   generatedAt: string;
+  /** Present when telemetry was unreachable and the last saved snapshot was served instead. */
+  snapshot?: TelemetrySnapshotInfo;
   windowHours: number;
   idleMinutes: number;
   caseIdAttribute: string;
@@ -1166,6 +1188,8 @@ export interface BusinessMetric {
 
 export interface BusinessMetricsResponse {
   generatedAt: string;
+  /** Present when telemetry was unreachable and the last saved snapshot was served instead. */
+  snapshot?: TelemetrySnapshotInfo;
   hours: number;
   stepSeconds: number;
   /** bucket start times (ms) */
@@ -1204,6 +1228,8 @@ export interface FlowEfficiencyRow {
 }
 export interface FlowEfficiencyResponse {
   generatedAt: string;
+  /** Present when telemetry was unreachable and the last saved snapshot was served instead. */
+  snapshot?: TelemetrySnapshotInfo;
   hours: number;
   stepSeconds: number;
   tcoYear: number | null;

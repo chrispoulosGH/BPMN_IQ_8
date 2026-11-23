@@ -4,6 +4,7 @@ import { BarChartOutlined, InfoCircleOutlined } from '@ant-design/icons';
 import { getBusinessMetrics } from '../api';
 import type { BusinessMetric, BusinessMetricsResponse } from '../types';
 import { DOMAIN_COLOR, Delta, bucketLabel } from './BusinessMetrics';
+import SnapshotNotice from './SnapshotNotice';
 
 /**
  * Dashboard › Business measures — one tile per leadership measure (the same
@@ -163,6 +164,7 @@ export default function BusinessMetricTiles() {
         <Segmented className="ml-auto" size="small" value={hours} onChange={(v) => setHours(Number(v))} options={WINDOWS} />
       </div>
       {error ? <Alert type="warning" showIcon message="Business telemetry unavailable" description={<>{error} Start it with <code>mockprod/stack.sh start</code>.</>} /> : null}
+      <SnapshotNotice snapshot={data?.snapshot} className="" />
       {data && !error ? (
         <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))' }}>
           {data.metrics.map((m) => <MeasureTile key={m.id} metric={m} buckets={data.buckets} stepSeconds={data.stepSeconds} />)}

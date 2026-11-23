@@ -18,6 +18,8 @@ const express = require('express');
 const Diagram = require('../models/Diagram');
 const { spansFromOtlp, buildModels, toXml, median } = require('../services/traceToBpmn');
 
+const { liveOrSnapshot, registerView, isUnreachable } = require('../services/telemetrySnapshots');
+
 const router = express.Router();
 const TEMPO_URL = (process.env.TEMPO_URL || 'http://localhost:3200').replace(/\/+$/, '');
 const MAX_TRACES_PER_FLOW = Number(process.env.DISCOVERY_MAX_TRACES || 60);
@@ -218,18 +220,21 @@ router.get('/', async (req, res) => {
   const fresh = String(req.query.fresh || '') === '1';
   try {
     if (!fresh && cache && cache.hours === hours && Date.now() - cache.at < CACHE_TTL_MS) return res.json(cache.data);
-    const data = await discover(hours);
+    const { data, snapshot } = await liveOrSnapshot('discovered-processes', { hours }, () => discover(hours));
+    if (snapshot) return res.json({ ...data, snapshot });
     cache = { at: Date.now(), hours, data };
     res.json(data);
   } catch (error) {
-    const unreachable = /fetch failed|ECONNREFUSED|Tempo \d+/.test(String(error?.message || error?.cause?.code || ''));
+    const unreachable = isUnreachable(error);
     console.error('[discovered-processes] failed:', error?.message || error);
     res.status(unreachable ? 503 : 500).json({
-      error: unreachable ? `Could not reach Grafana Tempo at ${TEMPO_URL}. Is the mock production stack running (mockprod: docker compose up -d)?` : (error?.message || 'Discovery failed'),
+      error: unreachable ? `Could not reach Grafana Tempo at ${TEMPO_URL}, and no saved snapshot of this view exists yet. Is the mock production stack running (mockprod/stack.sh start)?` : (error?.message || 'Discovery failed'),
       code: unreachable ? 'TEMPO_UNREACHABLE' : 'DISCOVERY_FAILED',
     });
   }
 });
+
+registerView('discovered-processes', { source: 'tempo', standardParams: [{ hours: 24 }], compute: ({ hours }) => discover(hours) });
 
 module.exports = router;
 module.exports.classifyFlow = classifyFlow;

@@ -23,6 +23,8 @@ const { buildApiSequence } = require('../services/apiSequence');
 const { classifyCase, clusterCases, DEVIATION_THRESHOLD } = require('../services/processMining');
 const { toXml, median } = require('../services/traceToBpmn');
 
+const { liveOrSnapshot, registerView, isUnreachable } = require('../services/telemetrySnapshots');
+
 const router = express.Router();
 const TEMPO_URL = (process.env.TEMPO_URL || 'http://localhost:3200').replace(/\/+$/, '');
 const MAX_STEPS = Number(process.env.UNDEFINED_MAX_STEPS || 5000);
@@ -273,17 +275,24 @@ router.get('/', async (req, res) => {
   try {
     const key = `${hours}|${idleMinutes}`;
     if (!fresh && cache && cache.key === key && Date.now() - cache.at < 60 * 1000) return res.json(cache.data);
-    const data = await discover(hours, idleMinutes);
+    const { data, snapshot } = await liveOrSnapshot('undefined-processes', { hours, idleMinutes }, () => discover(hours, idleMinutes));
+    if (snapshot) return res.json({ ...data, snapshot });
     cache = { at: Date.now(), key, data };
     res.json(data);
   } catch (error) {
-    const unreachable = /fetch failed|ECONNREFUSED|Tempo \d+/.test(String(error?.message || ''));
+    const unreachable = isUnreachable(error);
     console.error('[undefined-processes] failed:', error?.message || error);
     res.status(unreachable ? 503 : 500).json({
-      error: unreachable ? `Could not reach Grafana Tempo at ${TEMPO_URL}. Is the mock production stack running?` : (error?.message || 'Discovery failed'),
+      error: unreachable ? `Could not reach Grafana Tempo at ${TEMPO_URL}, and no saved snapshot of this view exists yet. Is the mock production stack running (mockprod/stack.sh start)?` : (error?.message || 'Discovery failed'),
       code: unreachable ? 'TEMPO_UNREACHABLE' : 'DISCOVERY_FAILED',
     });
   }
+});
+
+registerView('undefined-processes', {
+  source: 'tempo',
+  standardParams: [6, 24, 168].map((hours) => ({ hours, idleMinutes: 5 })),
+  compute: ({ hours, idleMinutes }) => discover(hours, idleMinutes),
 });
 
 module.exports = router;

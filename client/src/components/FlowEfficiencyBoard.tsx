@@ -4,6 +4,7 @@ import { ArrowDownOutlined, ArrowUpOutlined, DashboardOutlined, InfoCircleOutlin
 import { getFlowEfficiency } from '../api';
 import type { FlowEfficiencyResponse, FlowEfficiencyRow, FlowEfficiencyTrend, FlowEfficiencyVerdict } from '../types';
 import { bucketLabel } from './BusinessMetrics';
+import SnapshotNotice from './SnapshotNotice';
 
 /**
  * Dashboard › Throughput per cost — for each business process flow, completed
@@ -258,6 +259,7 @@ export default function FlowEfficiencyBoard({ onOpenFlow }: FlowEfficiencyBoardP
       </div>
 
       {error ? <Alert type="warning" showIcon message="Throughput telemetry unavailable" description={<>{error} Start it with <code>mockprod/stack.sh start</code>.</>} /> : null}
+      <SnapshotNotice snapshot={data?.snapshot} className="" />
 
       {data && !error ? (
         <>
