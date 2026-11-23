@@ -107,6 +107,20 @@ docker compose up -d --build  # collector + simulator
 npm run burst -- 10           # optional: start 10 journeys now, on top of scheduled traffic
 ```
 
+### Start / stop with `stack.sh`
+
+[stack.sh](stack.sh) wraps Compose (bash: Git Bash, WSL, Linux, macOS). It starts Docker Desktop if it isn't running, and waits until every endpoint answers.
+
+| Command | Does |
+|---|---|
+| `./stack.sh start [--build]` | start everything; `--build` rebuilds the simulator image |
+| `./stack.sh stop` | stop all containers; Tempo / Prometheus / Grafana data is kept |
+| `./stack.sh restart grafana` | restart one service |
+| `./stack.sh stop sim` / `start sim` | only the simulator (`mockprod`); groups: `sim`, `obs` (collector, Tempo, Prometheus, Grafana) |
+| `./stack.sh status` | containers, plus up/down for the collector, Tempo, Prometheus, Grafana, process engine (7000) and dealer workstation (7099) |
+| `./stack.sh logs mockprod` | follow logs |
+| `./stack.sh down` | remove containers and network; volumes are kept |
+
 - `OBSERVE_MODE=local` keeps telemetry in `./data` only.
 - `OBSERVE_MODE=observe` also exports to Observe.
 
