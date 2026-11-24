@@ -10,6 +10,9 @@
 ## Session log
 Newest entry first. Each entry: date, what was in flight, what's uncommitted/unresolved.
 
+### 2026-11-24 (10) — Landing heading subtitle 25% smaller, pushed
+- The "for Standard Motor Company" span went from `text-3xl sm:text-5xl` (30/48 px) to `text-[22px] sm:text-4xl` (22/36 px). Committed `c3549ad` and pushed to `main`; the deploy succeeded in 5m25s and live `/api/health` returns version `c3549ad`.
+
 ### 2026-11-24 (9) — Pushed to main
 - Committed `9da6b57` (full application record in the details card + landing heading), fast-forwarded and pushed `main`. The deploy succeeded in 5m22s; live `/api/health` returns version `9da6b57`, and the new record route returns 43 fields for CONNECTED-CAR on Azure.
 
