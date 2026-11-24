@@ -10,6 +10,31 @@
 ## Session log
 Newest entry first. Each entry: date, what was in flight, what's uncommitted/unresolved.
 
+### 2026-11-24 (2) — Landing page rebranded for Standard Motor Company (SMC)
+- **Framing:** the landing tab is now SMC's internal BPMN IQ site: an "Internal · SMC employees and contractors only" pill and "Every vehicle we design, build, sell and service runs on a process." The animated BPMN backdrop is kept.
+- **New [brand/SmcLogo.tsx](client/src/components/brand/SmcLogo.tsx):** `SmcMark` is an original badge whose S is a BPMN sequence flow (start event top-right → routed flow → amber end event). `SmcLogo tone=dark|light` adds the STANDARD / MOTOR COMPANY wordmark. It deliberately looks nothing like the historic Standard Motor Co. (UK) badge.
+- **New [brand/VehicleArt.tsx](client/src/components/brand/VehicleArt.tsx):** original vector side profiles.
+  - Bodies: `sedan|suv|pickup|ev`. Paints: silver, red, blue, green, graphite, white, amber.
+  - Finishes: `paint|primer|blueprint`, plus `lightsOn` and `shadow`. Ids come from `useId`.
+  - No photos and no real makes; real photos would need licensed images (e.g. in `client/public`).
+- **[LandingPage.tsx](client/src/components/LandingPage.tsx) sections:**
+  - **Hero:** logo + pill; the EV rides a sequence flow with a moving token (lg+ only).
+  - **"The vehicle lifecycle, as BPMN":** Design (blueprint) / Build (primer on a conveyor) / Sell (showroom) / Service (pickup on a lift) / Connect (EV with signal). Each card has 3 real flow names drawn as a mini BPMN strip and opens Value Streams.
+  - **"The 2027 lineup":** fictional Halcyon / Tessera / Ironbark / Lumen EV studio cards, each with 3 real flows; they open Business Processes.
+  - The rest: features and steps (copy mentions SMC), a CTA with a faint SUV, and a footer lockup.
+  - All 18 flow names were checked against `diagrams`.
+- **Verified:** screenshots at 1440 and 390 px (no horizontal overflow); `tsc` 0 errors. Not committed.
+- **Follow-up: "photo-realistic, more conventional".** The user chose upgraded renderings over stock photos (real photos would show real makes) or supplied photos.
+  - VehicleArt was redrawn at real-world proportions: a 4.9 m sedan, a compact crossover, a 5.8 m crew-cab pickup and an electric fastback.
+  - Rendering details:
+    - metallic paint as a computed gradient (sky → shoulder highlight → dark horizon → floor bounce) plus a blurred specular shoulder line;
+    - tinted glass with reflection streaks and chrome trim;
+    - dark wheel-arch gaps;
+    - alloy / aero / truck rims with brake disc and caliper;
+    - contact + ambient shadows; `reflection` prop (floor mirror via `<use>` + mask).
+  - The canvas is now 400×160 (ground y=140).
+  - Lineup paints: Halcyon blue, Tessera silver (now "Compact crossover"), Ironbark red ("Crew-cab pickup"), Lumen EV white.
+
 ### 2026-11-24 — Pushed to main
 - Committed `0b966fe` (user activity + password screens), fast-forwarded and pushed `main`. The deploy succeeded in 5m12s; live `/api/health` returns version `0b966fe`.
 - On Azure, `admin` signs in with its new password, and `/api/admin/activity/sessions` returns real client IPs (forwarded by App Service). The 2026-11-23 (3) entry below is now committed.
