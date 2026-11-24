@@ -20,6 +20,7 @@ import {
   normalizeApplicationLookupValue,
 } from '../utils/applicationMatching';
 import { mergeTaskApplicationNames } from '../utils/taskApplicationMigration';
+import ApplicationRecordDetails from './ApplicationRecordDetails';
 
 export const EMPTY_DIAGRAM = `<?xml version="1.0" encoding="UTF-8"?>
 <bpmn2:definitions xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -538,7 +539,7 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
       setSoxPanel(null);
       setSelectedApp(app);
       setPropsCollapsed(false);
-      setPropsWidth((w) => Math.max(w, 340));
+      setPropsWidth((w) => Math.max(w, 380));
     };
     const selectApplicationRef = useRef(selectApplication);
     selectApplicationRef.current = selectApplication;
@@ -3687,6 +3688,12 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
                         ))}
                       </tbody></table>
                     </div>
+                    {/* Every other field of the catalog record, grouped. */}
+                    <ApplicationRecordDetails
+                      key={`${meta?.correlationId || ''}|${selectedApp.name}`}
+                      appId={meta?.correlationId || null}
+                      appKey={meta?.acronym || selectedApp.name}
+                    />
                     {flags.length ? (
                       <div className="border-t border-gray-100 mt-3 pt-3">
                         <div className="text-xs text-gray-500 uppercase tracking-wide mb-1.5">Risk flags</div>

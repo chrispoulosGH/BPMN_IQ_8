@@ -265,6 +265,10 @@ export interface LinkedSystemComponentRecord {
   values: Record<string, unknown>;
 }
 
+// The full Applications catalog record (every column) for one application.
+export const getApplicationRecord = (appId?: string | null, key?: string | null): Promise<{ primaryKey: string; values: Record<string, unknown> }> =>
+  api.get('/system-components/applications/record', { params: { ...(appId ? { appId } : {}), ...(key ? { key } : {}) } }).then((r) => r.data);
+
 export const getSystemComponentLinkedTypes = (target: string = 'Applications'): Promise<string[]> =>
   api.get('/system-components/linked-types', { params: { target } }).then((r) => r.data.types || []);
 

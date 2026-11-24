@@ -526,8 +526,9 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
             <span className="lp-pulse-dot h-1.5 w-1.5 rounded-full bg-cyan-300" />
             Standard Motor Company · Business Process Intelligence
           </div>
-          <h1 className="lp-rise mt-6 max-w-[760px] text-4xl font-semibold leading-tight tracking-tight text-white sm:text-6xl" style={{ animationDelay: '0.15s' }}>
-            BPMN <span className="lp-gradient-text">IQ</span>
+          <h1 className="lp-rise mt-6 max-w-[1000px] text-4xl font-semibold leading-tight tracking-tight text-white sm:text-6xl" style={{ animationDelay: '0.15s' }}>
+            BPMN <span className="lp-gradient-text">IQ</span>{' '}
+            <span className="text-3xl font-medium text-slate-200 sm:text-5xl">for Standard Motor Company</span>
           </h1>
           <p className="lp-rise mt-4 max-w-[600px] text-xl font-medium text-slate-200 sm:text-2xl" style={{ animationDelay: '0.25s' }}>
             Every vehicle we design, build, sell and service runs on a process.

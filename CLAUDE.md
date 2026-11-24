@@ -10,6 +10,16 @@
 ## Session log
 Newest entry first. Each entry: date, what was in flight, what's uncommitted/unresolved.
 
+### 2026-11-24 (8) — Application details card shows the full catalog record
+- **Cause:** the card read `/api/tasks/reference/applications`. That endpoint maps an older column schema (applicationType, businessCriticality, lifecycle, owner…), which is **empty** for these apps. So the card showed only Status / App ID / Acronym, while the real `canonicaldata` Applications row has ~43 columns (`BUSINESS_DOMAIN Aggregator`, `APPLICATION_OWNER Qualifier`, `ANNUAL_COST Qualifier`, …).
+- **New `GET /api/system-components/applications/record?appId=&key=`** ([systemComponents.js](server/routes/systemComponents.js)) returns the full `values`. It matches APP_ID first (acronyms can be shared), then primaryKey, APP_ID, then name.
+- **New [ApplicationRecordDetails.tsx](client/src/components/ApplicationRecordDetails.tsx)**, rendered in BpmnEditor's application card on every canvas:
+  - Sections: Description (clamped to 4 lines, Show more), Overview, Ownership & users, Technology & integration, Data, security & compliance, Cost & lifecycle, and Other for any unlisted column.
+  - Labels drop the Qualifier/Aggregator/Component suffix and are humanized. Excel-serial `*_DATE` values become dates; COST is shown in USD; `*_HOURS` gets "h".
+  - FK_ and `__` columns and empty values are skipped. The card opens at least 380 px wide.
+- **Verified** on CONNECTED-CAR: 40 rows in 5 sections, dates and cost correct; screenshots checked; `tsc` 0 errors.
+- **Same commit:** the landing hero h1 now reads "BPMN IQ for Standard Motor Company". The "for …" part is a smaller span (`text-3xl sm:text-5xl`, medium weight, slate-200); h1 max width is now 1000 px. It's one line on desktop and wraps on phones.
+
 ### 2026-11-24 (7) — Pushed to main
 - Committed `ae558a8` (application click → details on every canvas), fast-forwarded and pushed `main`. The deploy succeeded in 5m30s; live `/api/health` returns version `ae558a8`.
 
