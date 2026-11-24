@@ -10,6 +10,9 @@
 ## Session log
 Newest entry first. Each entry: date, what was in flight, what's uncommitted/unresolved.
 
+### 2026-11-24 (9) — Pushed to main
+- Committed `9da6b57` (full application record in the details card + landing heading), fast-forwarded and pushed `main`. The deploy succeeded in 5m22s; live `/api/health` returns version `9da6b57`, and the new record route returns 43 fields for CONNECTED-CAR on Azure.
+
 ### 2026-11-24 (8) — Application details card shows the full catalog record
 - **Cause:** the card read `/api/tasks/reference/applications`. That endpoint maps an older column schema (applicationType, businessCriticality, lifecycle, owner…), which is **empty** for these apps. So the card showed only Status / App ID / Acronym, while the real `canonicaldata` Applications row has ~43 columns (`BUSINESS_DOMAIN Aggregator`, `APPLICATION_OWNER Qualifier`, `ANNUAL_COST Qualifier`, …).
 - **New `GET /api/system-components/applications/record?appId=&key=`** ([systemComponents.js](server/routes/systemComponents.js)) returns the full `values`. It matches APP_ID first (acronyms can be shared), then primaryKey, APP_ID, then name.
