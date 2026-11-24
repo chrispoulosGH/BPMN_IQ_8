@@ -430,6 +430,36 @@ const LINEUP: Array<{ name: string; type: string; body: VehicleBody; paint: Vehi
   { name: 'Lumen EV', type: 'Electric fastback', body: 'ev', paint: 'white', tagline: 'Connected from day one, updated over the air.', flows: ['Over-the-Air Software Update', 'Connected Subscription Renewal', 'Battery Replacement Service'] },
 ];
 
+/**
+ * Stock photo option (Unsplash License: free, no attribution required; files in
+ * client/public/stock). The landing page shows either these photos or the
+ * original SMC illustrations; the viewer's choice is remembered in this browser.
+ */
+const STOCK: Record<string, { src: string; alt: string; pos?: string }> = {
+  hero: { src: '/stock/hero-night.jpg', alt: '' },
+  design: { src: '/stock/design-clay.jpg', alt: 'Clay design model of a car', pos: '50% 62%' },
+  build: { src: '/stock/build-robots.jpg', alt: 'Robots welding car bodies on an assembly line' },
+  sell: { src: '/stock/sell-showroom.jpg', alt: 'A car in a dealership showroom', pos: '50% 55%' },
+  service: { src: '/stock/service-lift.jpg', alt: 'Underneath a car on a lift in a service bay' },
+  connect: { src: '/stock/connect-charging.jpg', alt: 'An electric vehicle charger plugged in', pos: '50% 45%' },
+  sedan: { src: '/stock/lineup-sedan.jpg', alt: 'Sedan', pos: '50% 60%' },
+  suv: { src: '/stock/lineup-suv.jpg', alt: 'SUV', pos: '50% 62%' },
+  pickup: { src: '/stock/lineup-pickup.jpg', alt: 'Pickup truck', pos: '50% 60%' },
+  ev: { src: '/stock/lineup-ev.jpg', alt: 'Electric vehicle', pos: '25% 65%' },
+};
+type Imagery = 'photos' | 'illustrations';
+const IMAGERY_KEY = 'bpmniq_landing_imagery';
+function useImagery(): [Imagery, (v: Imagery) => void] {
+  const [mode, setMode] = useState<Imagery>(() => {
+    try { return localStorage.getItem(IMAGERY_KEY) === 'illustrations' ? 'illustrations' : 'photos'; } catch { return 'photos'; }
+  });
+  const set = (v: Imagery) => {
+    setMode(v);
+    try { localStorage.setItem(IMAGERY_KEY, v); } catch { /* ignore */ }
+  };
+  return [mode, set];
+}
+
 const STEPS = [
   { n: '01', title: 'Model', body: 'Capture end-to-end SMC flows in BPMN 2.0, tied to the real application, API and infrastructure catalog.' },
   { n: '02', title: 'Analyze', body: 'Roll up cost, risk, compliance and change activity per flow, per capability and per domain.' },
@@ -449,6 +479,8 @@ const FlowStrip: React.FC<{ flows: string[] }> = ({ flows }) => (
 
 const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
   const reducedMotion = usePrefersReducedMotion();
+  const [imagery, setImagery] = useImagery();
+  const photos = imagery === 'photos';
 
   return (
     <div className="lp-root h-full w-full overflow-y-auto bg-slate-50">
@@ -456,12 +488,33 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
 
       {/* Hero */}
       <section className="relative isolate overflow-hidden" style={{ background: 'linear-gradient(160deg, #0b1630 0%, #0f2147 55%, #0b1630 100%)' }}>
-        <BpmnBackdrop animate={!reducedMotion} />
-        <div className="pointer-events-none absolute inset-0" style={{ background: 'linear-gradient(90deg, rgba(11,22,48,0.94) 0%, rgba(11,22,48,0.75) 42%, rgba(11,22,48,0.1) 75%)' }} />
+        {photos ? <img src={STOCK.hero.src} alt="" className="absolute inset-0 h-full w-full object-cover" style={{ objectPosition: '60% 55%' }} /> : null}
+        <div className={`absolute inset-0 ${photos ? 'opacity-40' : ''}`}><BpmnBackdrop animate={!reducedMotion} /></div>
+        <div
+          className="pointer-events-none absolute inset-0"
+          style={{
+            background: photos
+              ? 'linear-gradient(90deg, rgba(11,22,48,0.95) 0%, rgba(11,22,48,0.82) 40%, rgba(11,22,48,0.3) 75%, rgba(11,22,48,0.15) 100%)'
+              : 'linear-gradient(90deg, rgba(11,22,48,0.94) 0%, rgba(11,22,48,0.75) 42%, rgba(11,22,48,0.1) 75%)',
+          }}
+        />
 
         <div className="relative z-10 mx-auto max-w-[1200px] px-6 pt-6 sm:px-10">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <SmcLogo tone="dark" size={44} />
+            <span className="ml-auto inline-flex overflow-hidden rounded-full border border-solid border-white/25 text-xs" role="group" aria-label="Landing page imagery">
+              {(['photos', 'illustrations'] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setImagery(m)}
+                  aria-pressed={imagery === m}
+                  className={`cursor-pointer border-0 px-3 py-1 font-medium transition ${imagery === m ? 'bg-white text-slate-900' : 'bg-white/5 text-slate-200 hover:bg-white/15'}`}
+                >
+                  {m === 'photos' ? 'Photos' : 'Illustrations'}
+                </button>
+              ))}
+            </span>
             <span className="inline-flex items-center gap-2 rounded-full border border-solid border-amber-300/40 bg-amber-400/10 px-3 py-1 text-xs font-medium text-amber-100">
               <LockOutlined /> Internal · SMC employees and contractors only
             </span>
@@ -512,7 +565,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
         </div>
 
         {/* The hero car rides a sequence flow: start event → … → end event */}
-        <div className="lp-hero-car pointer-events-none absolute bottom-6 right-6 z-0 hidden w-[540px] lg:block xl:right-12" aria-hidden="true">
+        {!photos && <div className="lp-hero-car pointer-events-none absolute bottom-6 right-6 z-0 hidden w-[540px] lg:block xl:right-12" aria-hidden="true">
           <VehicleArt body="ev" paint="silver" lightsOn className="block w-full" />
           <svg viewBox="0 0 600 24" className="-mt-1 block w-full">
             <circle cx="14" cy="12" r="8" fill="#0b1630" stroke="#93c5fd" strokeWidth="1.6" />
@@ -525,7 +578,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
               </circle>
             )}
           </svg>
-        </div>
+        </div>}
       </section>
 
       {/* Lifecycle */}
@@ -547,7 +600,11 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
               className="lp-card group flex flex-col overflow-hidden rounded-xl border border-solid border-slate-200 bg-white p-0 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-sky-300 hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
               style={{ animationDelay: `${0.1 + i * 0.07}s` }}
             >
-              {s.scene}
+              {photos && STOCK[s.key] ? (
+                <span className="lp-scene lp-photo">
+                  <img src={STOCK[s.key].src} alt={STOCK[s.key].alt} loading="lazy" style={{ objectPosition: STOCK[s.key].pos }} />
+                </span>
+              ) : s.scene}
               <span className="flex flex-1 flex-col p-4">
                 <span className="flex items-center gap-2">
                   <span className="flex h-7 w-7 items-center justify-center rounded-md bg-sky-50 text-sm text-sky-600 ring-1 ring-sky-100">{s.icon}</span>
@@ -584,9 +641,15 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
                 className="lp-card group flex flex-col overflow-hidden rounded-xl border border-solid border-slate-200 bg-white p-0 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-sky-300 hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
                 style={{ animationDelay: `${0.1 + i * 0.07}s` }}
               >
-                <span className="lp-studio block">
-                  <VehicleArt body={v.body} paint={v.paint} reflection className="lp-studio-car" title={`SMC ${v.name}`} />
-                </span>
+                {photos ? (
+                  <span className="lp-studio lp-photo block">
+                    <img src={STOCK[v.body].src} alt={`SMC ${v.name}`} loading="lazy" style={{ objectPosition: STOCK[v.body].pos }} />
+                  </span>
+                ) : (
+                  <span className="lp-studio block">
+                    <VehicleArt body={v.body} paint={v.paint} reflection className="lp-studio-car" title={`SMC ${v.name}`} />
+                  </span>
+                )}
                 <span className="flex flex-1 flex-col p-5">
                   <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">SMC · {v.type}</span>
                   <span className="mt-1 text-xl font-semibold tracking-tight text-slate-900">{v.name}</span>
@@ -607,7 +670,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
               </button>
             ))}
           </div>
-          <p className="mt-4 text-xs text-slate-400">Model names and illustrations are for internal demonstration.</p>
+          <p className="mt-4 text-xs text-slate-400">Model names and imagery are for internal demonstration.{photos ? ' Photos: Unsplash (Unsplash License).' : ''}</p>
         </div>
       </section>
 
@@ -784,6 +847,9 @@ const LANDING_CSS = `
 .lp-root .lp-studio { position: relative; height: 150px; background: linear-gradient(180deg, #f8fafc 0%, #e2e8f0 62%, #cbd5e1 63%, #f1f5f9 100%); }
 .lp-root .lp-studio-car { position: absolute; left: 5%; bottom: 2px; width: 90%; transition: transform .4s cubic-bezier(.2,.7,.2,1); }
 .lp-root .group:hover .lp-studio-car { transform: translateX(6px); }
+.lp-root .lp-photo { overflow: hidden; }
+.lp-root .lp-photo img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transition: transform .6s cubic-bezier(.2,.7,.2,1); }
+.lp-root .group:hover .lp-photo img { transform: scale(1.04); }
 .lp-root .lp-hero-car { filter: drop-shadow(0 18px 30px rgba(0,0,0,.45)); }
 /* a flow list drawn as a mini BPMN strip */
 .lp-root .lp-flowstrip { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; position: relative; padding-left: 2px; }

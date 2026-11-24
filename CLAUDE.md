@@ -10,6 +10,14 @@
 ## Session log
 Newest entry first. Each entry: date, what was in flight, what's uncommitted/unresolved.
 
+### 2026-11-24 (4) — Stock photo preview on the landing page
+- The user asked to see the page with stock car photos. I added 10 free Unsplash-License photos (downloaded via `unsplash.com/photos/<id>/download?w=1200`; that endpoint returns 403 for paid Unsplash+ images) to `client/public/stock/`, resized and compressed (599 KB in total).
+  - Hero: night motion blur. Design: clay model. Build: robot line. Sell: showroom. Service: under a car on a lift. Connect: a charger.
+  - Lineup: sedan, white SUV, dark pickup at dusk, EV charging.
+- LandingPage has a **Photos | Illustrations** switch in the hero (localStorage `bpmniq_landing_imagery`, default Photos). In photo mode, the hero photo sits under the dimmed BPMN backdrop and the vector hero car is hidden. Scene and lineup cards use `object-fit: cover` images that zoom slightly on hover. The note credits Unsplash.
+- **Caveat:** real makes are visible (e.g. a BMW in the showroom, a Hyundai SUV, a Ram-style pickup) under the fictional SMC model names.
+- Verified by screenshot (no broken images); `tsc` 0 errors. **The user chose to keep the photos (default) with the switch.**
+
 ### 2026-11-24 (3) — Pushed to main
 - Committed `0a6c06c` (SMC landing page, logo, vehicle renderings), fast-forwarded and pushed `main`. The deploy succeeded in 5m45s; live `/api/health` returns version `0a6c06c`. The 2026-11-24 (2) entry below is now committed.
 
