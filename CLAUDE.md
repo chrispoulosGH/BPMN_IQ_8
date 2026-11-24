@@ -10,6 +10,9 @@
 ## Session log
 Newest entry first. Each entry: date, what was in flight, what's uncommitted/unresolved.
 
+### 2026-11-24 (5) — Pushed to main
+- Committed `b3ce6bc` (stock photos + Photos | Illustrations switch), fast-forwarded and pushed `main`. The deploy succeeded in 5m14s; live `/api/health` returns version `b3ce6bc`, and `/stock/hero-night.jpg` is served (200, image/jpeg).
+
 ### 2026-11-24 (4) — Stock photo preview on the landing page
 - The user asked to see the page with stock car photos. I added 10 free Unsplash-License photos (downloaded via `unsplash.com/photos/<id>/download?w=1200`; that endpoint returns 403 for paid Unsplash+ images) to `client/public/stock/`, resized and compressed (599 KB in total).
   - Hero: night motion blur. Design: clay model. Build: robot line. Sell: showroom. Service: under a car on a lift. Connect: a charger.
