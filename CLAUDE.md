@@ -10,6 +10,10 @@
 ## Session log
 Newest entry first. Each entry: date, what was in flight, what's uncommitted/unresolved.
 
+### 2026-11-24 — Pushed to main
+- Committed `0b966fe` (user activity + password screens), fast-forwarded and pushed `main`. The deploy succeeded in 5m12s; live `/api/health` returns version `0b966fe`.
+- On Azure, `admin` signs in with its new password, and `/api/admin/activity/sessions` returns real client IPs (forwarded by App Service). The 2026-11-23 (3) entry below is now committed.
+
 ### 2026-11-23 (3) — User sessions and activity, admin User Activity page
 - **Why:** the `sessions` row is a login cookie (8 h TTL, deleted on logout), so there was no history. Admins can now see who signed in and what they did.
 - **Store** (Atlas, shared with Azure):
@@ -49,7 +53,6 @@ Newest entry first. Each entry: date, what was in flight, what's uncommitted/unr
   - a non-admin setting a password → 403 (recorded as a failed change);
   - an admin reset works.
   - Both dialogs screenshot-checked; `tsc` 0 errors.
-- Not committed.
 
 ### 2026-11-23 (2) — Pushed to main
 - Committed `c7edfd0` (telemetry snapshots), fast-forwarded and pushed `main`. The deploy succeeded in 5m17s; live `/api/health` returns version `c7edfd0`.
