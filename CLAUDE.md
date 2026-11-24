@@ -10,6 +10,9 @@
 ## Session log
 Newest entry first. Each entry: date, what was in flight, what's uncommitted/unresolved.
 
+### 2026-11-24 (7) — Pushed to main
+- Committed `ae558a8` (application click → details on every canvas), fast-forwarded and pushed `main`. The deploy succeeded in 5m30s; live `/api/health` returns version `ae558a8`.
+
 ### 2026-11-24 (6) — Application click → details card on every canvas
 - The user asked that a left click on an application on any canvas show its details in the right column. Tested all 6 canvases in the browser:
   - Business Processes, Discovered and Undefined already worked.
