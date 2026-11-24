@@ -52,6 +52,8 @@ import {
   RadarChartOutlined,
   QuestionCircleOutlined,
   FundOutlined,
+  TeamOutlined,
+  KeyOutlined,
   LineChartOutlined,
   FireOutlined,
   ExperimentOutlined,
@@ -97,6 +99,9 @@ import ValueStreamsMatrix, { type BusinessFlowSelection, type DomainSelection, t
 import ReportsPanel from './components/ReportsPanel';
 import Login from './components/Login';
 import AdminPanel from './components/AdminPanel';
+import ChangePasswordModal from './components/ChangePasswordModal';
+import UserActivityPage from './components/UserActivityPage';
+import { trackActivity, flushActivity, resetActivityTracker } from './utils/activityTracker';
 import GlobalComponentSearch from './components/GlobalComponentSearch';
 import ComponentSearch from './components/ComponentSearch';
 import { encodeExactFactorySearch } from './utils/factorySearch';
@@ -463,7 +468,9 @@ export default function App() {
   };
 
   const handleLogout = async () => {
+    await flushActivity();
     await logout().catch(() => {});
+    resetActivityTracker();
     setAuthUser(null);
   };
 
@@ -484,6 +491,25 @@ export default function App() {
   return <AuthenticatedApp user={authUser} onLogout={handleLogout} />;
 }
 
+// Readable page names for activity tracking.
+const OUTER_TAB_NAMES: Record<string, string> = {
+  landing: 'BPMN IQ home',
+  execDashboard: 'Dashboard',
+  businessMetrics: 'Business Metrics & Analysis',
+  analytics: 'Analytics',
+  reports: 'Reports',
+  valueStreams: 'Value Streams/Journeys',
+  bpmn: 'Business Processes',
+  processChanges: 'Process Changes',
+  integrationMap: 'Integration Map',
+  quantitativeModeling: 'Quantitative Modeling',
+  data: 'System Components',
+  searchAll: 'SearchAll',
+  neighborhoods: 'Frameworks',
+  userActivity: 'User Activity',
+};
+const BUSINESS_PROCESS_SUB_TAB_NAMES: Record<string, string> = { processes: 'Processes', discovered: 'Discovered Processes', undefined: 'Undefined Processes' };
+
 function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: string; displayName: string; role?: string | null; capabilities?: { function: string; permission: string }[] }; onLogout: () => void }) {
   const { message, modal } = AntApp.useApp();
   const [neighborhoodTabs, setNeighborhoodTabs] = useState<FactoryNeighborhoodSummary[]>([]);
@@ -497,6 +523,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   const readOnly = !(user.capabilities?.some(c => c.permission !== 'Read'));
   const canEditFactories = !readOnly;
   const [showAdmin, setShowAdmin] = useState(false);
+  const [showChangePassword, setShowChangePassword] = useState(false);
   const [showGlobalComponentSearch, setShowGlobalComponentSearch] = useState(false);
   const [componentSearchTerms, setComponentSearchTerms] = useState<Record<string, string>>({}); // Key: ${neighborhoodName}:${componentId}
   const [activeNeighborhoodTab, setActiveNeighborhoodTab] = useState<string>('');
@@ -543,6 +570,18 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   }, [activeOuterTab, neighborhoodTabs]);
   const [activeDiagramNeighborhoodName, setActiveDiagramNeighborhoodName] = useState<string | null>(null);
   const [activeDataTab, setActiveDataTab] = useState<string>('databases');
+  // Page views for the admin User Activity page (utils/activityTracker.ts).
+  useEffect(() => {
+    const page = OUTER_TAB_NAMES[activeOuterTab] || activeOuterTab;
+    const sub = activeOuterTab === 'bpmn' ? BUSINESS_PROCESS_SUB_TAB_NAMES[businessProcessSubTab]
+      : activeOuterTab === 'processChanges' ? (processChangeSubTab === 'radar' ? 'Radar' : 'Heat Map')
+      : activeOuterTab === 'data' ? activeDataTab
+      : activeOuterTab === 'analytics' ? activeAnalyticsModel
+      : activeOuterTab === 'valueStreams' ? activeValueStreamsModel
+      : (activeOuterTab === 'neighborhoods' || activeOuterTab === 'searchAll') ? activeNeighborhoodTab
+      : '';
+    trackActivity('view', `Viewed ${page}${sub ? ` › ${sub}` : ''}`);
+  }, [activeOuterTab, businessProcessSubTab, processChangeSubTab, activeDataTab, activeAnalyticsModel, activeValueStreamsModel, activeNeighborhoodTab]);
   const [deleteAllComponentsLoading, setDeleteAllComponentsLoading] = useState(false);
   const [deleteComponentTypeLoading, setDeleteComponentTypeLoading] = useState<string | null>(null);
   const getModelCatalogTabKey = useCallback((modelName: string) => `modelCatalog:${modelName}`, []);
@@ -700,7 +739,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   const [factoryDropTarget, setFactoryDropTarget] = useState<{ key: string; side: 'before' | 'after' } | null>(null);
 
   // Value Streams/Journeys, Analytics, Diagrams, Reports, Frameworks, System Components, SearchAll
-  const OUTER_TAB_KEYS = ['valueStreams', 'analytics', 'bpmn', 'reports', 'neighborhoods', 'data', 'searchAll'];
+  const OUTER_TAB_KEYS = ['valueStreams', 'analytics', 'bpmn', 'reports', 'neighborhoods', 'data', 'searchAll', 'userActivity'];
   const ANALYTICS_TAB_KEYS = ['dashboard', 'reports'];
   const DATA_TAB_KEYS = ['databases', 'applications', 'servers'];
 
@@ -3121,6 +3160,9 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
           <Tooltip title={`Signed in as ${user.userId}`}>
             <span className="text-gray-400 text-xs mr-1"><UserOutlined /> {user.userId}</span>
           </Tooltip>
+          <Tooltip title="Change password">
+            <Button type="text" icon={<KeyOutlined />} onClick={() => setShowChangePassword(true)} className="toolbar-btn" size="small" aria-label="Change password" />
+          </Tooltip>
           {hasAdminAccess && (
             <Tooltip title="User Administration">
               <Button type="text" icon={<SettingOutlined />} onClick={() => setShowAdmin(true)} className="toolbar-btn" size="small" />
@@ -3255,6 +3297,10 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                               if ((selected as any).neighborhoodName) {
                                 setApiNeighborhoodScope((selected as any).neighborhoodName);
                               }
+                              const closing = selectedDiagramIds.includes(id);
+                              trackActivity(closing ? 'action' : 'view', closing ? 'Closed a diagram' : 'Opened a diagram', {
+                                target: { kind: 'diagram', id, name: String(selected?.name || '').replace(/&amp;/g, '&') },
+                              });
                               await toggleCanvasDiagram(id, (selected as any).neighborhoodName || neighborhoodName);
                             }}
                             onDiagramDeleted={(id, deletedNeighborhoodName) => {
@@ -3590,6 +3636,12 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                   </div>
                 ),
               },
+              // Admins only: who signed in and what they did.
+              ...(hasAdminAccess ? [{
+                key: 'userActivity',
+                label: outerTabLabel('userActivity', <span><TeamOutlined /> User Activity</span>),
+                children: renderScrollablePane(<UserActivityPage />),
+              }] : []),
             ].sort((a, b) => outerTabOrder.indexOf(a.key) - outerTabOrder.indexOf(b.key))}
           />
         </Content>
@@ -3774,6 +3826,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
       />
 
       {hasAdminAccess && <AdminPanel open={showAdmin} onClose={() => setShowAdmin(false)} />}
+      <ChangePasswordModal open={showChangePassword} onClose={() => setShowChangePassword(false)} />
       <GlobalComponentSearch
         open={showGlobalComponentSearch}
         neighborhoodName={activeNeighborhoodTab}

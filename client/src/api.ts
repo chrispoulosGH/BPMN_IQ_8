@@ -833,3 +833,58 @@ export default api;
 
 export const getFlowEfficiency = (hours = 24): Promise<FlowEfficiencyResponse> =>
   api.get('/business-kpis/flow-efficiency', { params: { hours } }).then((r) => r.data as FlowEfficiencyResponse);
+
+// ─── User activity (server/services/activityLog.js) ───
+export interface ActivityEventInput {
+  kind: 'view' | 'action';
+  action: string;
+  detail?: string;
+  target?: { kind: string; id: string; name?: string };
+  at: number;
+}
+export const postActivity = (events: ActivityEventInput[]): Promise<{ recorded: number }> =>
+  api.post('/activity', { sentAt: Date.now(), events }).then((r) => r.data);
+
+export interface UserSessionSummary {
+  id: string;
+  userId: string;
+  displayName: string;
+  role: string | null;
+  authMode: string;
+  loginAt: string;
+  lastActivityAt: string;
+  logoutAt: string | null;
+  expiresAt: string;
+  status: 'active' | 'idle' | 'signed out' | 'expired';
+  durationMs: number;
+  ip: string;
+  userAgent: string;
+  activityCount: number;
+  viewCount: number;
+  changeCount: number;
+}
+export interface UserActivityEvent {
+  id: string;
+  at: string;
+  kind: 'auth' | 'view' | 'change' | 'action';
+  action: string;
+  detail: string;
+  method: string;
+  path: string;
+  status: number | null;
+  durationMs: number | null;
+  target: { kind: string; id: string; name: string } | null;
+}
+export interface UserSessionsResponse {
+  generatedAt: string;
+  days: number;
+  summary: { users: number; sessions: number; activeNow: number; views: number; changes: number; failedSignIns: number };
+  loginsByDay: Record<string, number>;
+  sessions: UserSessionSummary[];
+  failedSignIns: { id: string; userId: string; at: string; reason: string; ip: string }[];
+  users: string[];
+}
+export const getUserSessions = (days = 7, userId?: string): Promise<UserSessionsResponse> =>
+  api.get('/admin/activity/sessions', { params: { days, ...(userId ? { userId } : {}) } }).then((r) => r.data);
+export const getUserSessionDetail = (id: string): Promise<{ session: UserSessionSummary; activities: UserActivityEvent[] }> =>
+  api.get(`/admin/activity/sessions/${encodeURIComponent(id)}`).then((r) => r.data);

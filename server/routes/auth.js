@@ -4,8 +4,10 @@ const mongoose = require('mongoose');
 const router = express.Router();
 const User = require('../models/User');
 const Session = require('../models/Session');
+const activityLog = require('../services/activityLog');
 
 const SESSION_DURATION_MS = 1000 * 60 * 60 * 8; // 8 hours
+const MIN_PASSWORD_LENGTH = 6;
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 // Secure cookies in production (HTTPS ingress); COOKIE_SECURE overrides.
 const COOKIE_SECURE = process.env.COOKIE_SECURE ? process.env.COOKIE_SECURE === 'true' : IS_PRODUCTION;
@@ -29,7 +31,10 @@ router.post('/login', async (req, res) => {
     if (EASY_AUTH) {
       // The platform already authenticated the user; use that identity.
       const principal = String(req.headers['x-ms-client-principal-name'] || '').trim();
-      if (!principal) return res.status(401).json({ error: 'Not signed in. Sign in with your organization account.' });
+      if (!principal) {
+        activityLog.recordFailedLogin('(no platform identity)', 'No signed-in organization account', req);
+        return res.status(401).json({ error: 'Not signed in. Sign in with your organization account.' });
+      }
       userId = principal;
     }
     if (!userId || !userId.trim()) {
@@ -40,6 +45,7 @@ router.post('/login', async (req, res) => {
 
     if (!user) {
       if (!EASY_AUTH && !ALLOW_AUTO_REGISTER) {
+        activityLog.recordFailedLogin(userId.trim(), 'Unknown user', req);
         return res.status(401).json({ error: 'Unknown user.' });
       }
       // Auto-register on first login (password optional; none with platform auth)
@@ -52,6 +58,7 @@ router.post('/login', async (req, res) => {
       // Validate password if user has one set
       const valid = await user.comparePassword(password || '');
       if (!valid) {
+        activityLog.recordFailedLogin(user.userId, 'Wrong password', req);
         return res.status(401).json({ error: 'Invalid password.' });
       }
     }
@@ -63,12 +70,16 @@ router.post('/login', async (req, res) => {
     // Create session token
     const token = crypto.randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + SESSION_DURATION_MS);
+    // Persistent record of this sign-in for the admin User Activity page (best effort).
+    const auditSessionId = await activityLog.startAuditSession({ user, req, expiresAt, authMode: EASY_AUTH ? 'easyauth' : 'local' })
+      .catch((err) => { console.warn('[activity] sign-in record failed:', err?.message || err); return null; });
     await Session.create({
       token,
       userId: user.userId,
       displayName: user.displayName,
       userObjId: user._id,
       expiresAt,
+      auditSessionId,
     });
 
     // Set cookie
@@ -93,6 +104,7 @@ router.post('/login', async (req, res) => {
 router.post('/logout', async (req, res) => {
   const token = req.cookies?.bpmn_iq_sid;
   if (token) {
+    await activityLog.endAuditSession(token, req).catch((err) => console.warn('[activity] sign-out record failed:', err?.message || err));
     await Session.deleteOne({ token }).catch(() => {});
   }
   res.clearCookie('bpmn_iq_sid');
@@ -127,11 +139,25 @@ router.put('/password', async (req, res) => {
   if (!sess) return res.status(401).json({ error: 'Not authenticated' });
 
   try {
-    const { newPassword } = req.body;
+    const { currentPassword, newPassword } = req.body;
     const user = await User.findOne({ userId: sess.userId });
     if (!user) return res.status(404).json({ error: 'User not found' });
-    user.password = newPassword || null;
+    if (!(await user.comparePassword(currentPassword || ''))) {
+      activityLog.recordActivity({ sessionId: sess.auditSessionId || null, userId: sess.userId, kind: 'auth', action: 'Failed password change', detail: 'Wrong current password', ip: activityLog.clientIp(req) }).catch(() => {});
+      return res.status(400).json({ error: 'Your current password is not correct.' });
+    }
+    if (!newPassword || String(newPassword).length < MIN_PASSWORD_LENGTH) {
+      return res.status(400).json({ error: `The new password must be at least ${MIN_PASSWORD_LENGTH} characters.` });
+    }
+    user.password = newPassword;
     await user.save();
+    activityLog.recordActivity({
+      sessionId: sess.auditSessionId || null,
+      userId: sess.userId,
+      kind: 'auth',
+      action: 'Changed password',
+      ip: activityLog.clientIp(req),
+    }).catch(() => {});
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });

@@ -10,6 +10,47 @@
 ## Session log
 Newest entry first. Each entry: date, what was in flight, what's uncommitted/unresolved.
 
+### 2026-11-23 (3) — User sessions and activity, admin User Activity page
+- **Why:** the `sessions` row is a login cookie (8 h TTL, deleted on logout), so there was no history. Admins can now see who signed in and what they did.
+- **Store** (Atlas, shared with Azure):
+  - `usersessions` ([UserSession.js](server/models/UserSession.js)): one row per sign-in. Login, last activity (bumped at most once a minute), cookie expiry, logout, IP, user agent, role, auth mode, and view/change counts.
+  - `useractivities` ([UserActivity.js](server/models/UserActivity.js)): kind `auth|view|change|action`, label, method/path/status/duration and target `{kind,id,name}`. **No request bodies are stored.**
+  - Both have a TTL of `ACTIVITY_RETENTION_DAYS` (default 365). It's fixed when the index is created; changing the env later needs the index dropped.
+  - `Session` gained `auditSessionId`.
+- **[activityLog.js](server/services/activityLog.js):**
+  - `auth.js` records sign-in, sign-out, failed sign-ins (unknown user / wrong password / no Entra identity) and password changes.
+  - The session guard calls `ensureAuditSession`. A cookie from before this existed gets a UserSession lazily (loginAt = the cookie's createdAt).
+  - `recordChanges` middleware: every POST/PUT/PATCH/DELETE becomes a `change` with a readable label from `RULES` (saved/deleted diagram, edited component row, upload, optimizer run, user changes…), or a fallback "Created/Updated/Deleted <segment>".
+  - `IGNORE` skips read-like POSTs (validate, fk-resolve/validate) and automatic ones (heat-map snapshot, `/activity`).
+- **Client events:** `POST /api/activity` takes batches from [activityTracker.ts](client/src/utils/activityTracker.ts).
+  - It sends every 4 s, at 20 events, before sign-out, and by `sendBeacon` on pagehide.
+  - Times are rebased to the server clock and clamped to no earlier than the sign-in.
+  - App.tsx tracks outer-tab and sub-tab views (`OUTER_TAB_NAMES`) and diagram open/close from the Processes tile list.
+- **Admin API** (behind admin.js's Admin capability check): `GET /api/admin/activity/sessions?days=&userId=` (summary, sessions with status active/idle/signed out/expired, failed sign-ins, user list) and `GET /api/admin/activity/sessions/:id` (timeline; diagram, user and component names resolved).
+- **Page:** new outer tab `userActivity` "User Activity" ([UserActivityPage.tsx](client/src/components/UserActivityPage.tsx)), shown only with the Admin capability and added to the end of `OUTER_TAB_KEYS`.
+  - Headline counts, user filter, 24 h / 7 d / 30 d / 90 d.
+  - Sessions table (sortable; status filter); click a row for its timeline with an All / Pages / Changes / Sign-in filter. Failed sign-ins table.
+- **Verified:**
+  - Through the API: the failed sign-in, views, a change (200) and a failed delete (404, "Failed (HTTP 404)"), and sign-out all recorded in order. Non-admin → 403; signed-out cookie → 401.
+  - In the browser as `admin` (Admin role, no password): screenshot checked.
+  - `tsc` 0 errors.
+- **Test data left in Atlas:** sessions for `snapshotqa` / `admin` and a failed sign-in for `super` from 2026-11-23 ~21:48 local.
+- **Passwords (same session):**
+  - At the user's request every account (all 43) got a password, through the User model so each is hashed, and each was verified. The scheme was given in chat and is deliberately not recorded here. Atlas is shared, so this applies on Azure too. Each user's timeline records "Password set by an administrator (bulk)".
+  - Before this, the app had no way to set a password on an existing account. The sign-in page only checks one, so a password typed for an account without one is never saved.
+- **New:**
+  - A key button in the header opens [ChangePasswordModal.tsx](client/src/components/ChangePasswordModal.tsx). `PUT /api/auth/password` now requires the current password and a new one of at least 6 characters; a wrong current password is recorded.
+  - User Administration ([AdminPanel.tsx](client/src/components/AdminPanel.tsx)): a Password column (Set/None), a key button per user to set or remove a password (`PUT /api/admin/users/:id/password`, Admin Write), and a password field on Add User.
+  - `GET /admin/users` returns `hasPassword`, never the hash.
+- **Service account:** [mcp/apiClient.js](server/mcp/apiClient.js) signs in with `MCP_SERVICE_PASSWORD`, which is in the git-ignored `server/.env`. Without it the Process Optimizer's tools can't sign in.
+- **Verified via the API:**
+  - wrong/right password;
+  - self-change: wrong current → 400, short → 400, OK → new password works;
+  - a non-admin setting a password → 403 (recorded as a failed change);
+  - an admin reset works.
+  - Both dialogs screenshot-checked; `tsc` 0 errors.
+- Not committed.
+
 ### 2026-11-23 (2) — Pushed to main
 - Committed `c7edfd0` (telemetry snapshots), fast-forwarded and pushed `main`. The deploy succeeded in 5m17s; live `/api/health` returns version `c7edfd0`.
 - On Azure, Business Metrics, Throughput, Live Lineage and Discovered now return HTTP 200 from snapshots captured locally (each about 4 minutes old when checked). They stay current only while a local server runs with the mockprod stack up.

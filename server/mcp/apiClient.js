@@ -9,6 +9,8 @@
 
 const BASE_URL = process.env.MCP_API_BASE_URL || 'http://localhost:3001';
 const SERVICE_USER_ID = process.env.MCP_SERVICE_USER_ID || 'process-optimizer-agent';
+// The service account has a password (set it in server/.env, never in code).
+const SERVICE_PASSWORD = process.env.MCP_SERVICE_PASSWORD || '';
 // Diagrams/tasks live under the 'LLM AMI' neighborhood (CanonicalData's
 // System Components catalog is a separate neighborhood) — every diagram-
 // scoped route requires this header or it silently sees zero rows, the same
@@ -21,7 +23,7 @@ async function login() {
   const res = await fetch(`${BASE_URL}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ userId: SERVICE_USER_ID }),
+    body: JSON.stringify({ userId: SERVICE_USER_ID, password: SERVICE_PASSWORD }),
   });
   if (!res.ok) throw new Error(`MCP service login failed: ${res.status} ${await res.text()}`);
   const setCookie = res.headers.get('set-cookie');

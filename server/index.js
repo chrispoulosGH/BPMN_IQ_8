@@ -23,6 +23,7 @@ const canonicalRouter = require('./routes/canonical');
 const systemComponentsRouter = require('./routes/systemComponents');
 const referenceDataRouter = require('./routes/referenceData');
 const Session = require('./models/Session');
+const activityLog = require('./services/activityLog');
 const User = require('./models/User');
 const Diagram = require('./models/Diagram');
 const Task = require('./models/Task');
@@ -94,10 +95,25 @@ app.use('/api', async (req, res, next) => {
     // Resolve user role
     const userDoc = await User.findOne({ userId: sess.userId }).lean();
     req.currentUser = { userId: sess.userId, displayName: sess.displayName, role: userDoc?.role || null };
+    // The persistent audit record for this sign-in (admin User Activity page).
+    req.auditSessionId = await activityLog.ensureAuditSession(sess, req, userDoc?.role)
+      .catch((err) => { console.warn('[activity] session link failed:', err?.message || err); return null; });
     next();
   } catch (err) {
     console.error('Session middleware error:', err?.stack || err);
     return res.status(500).json({ error: 'Failed to validate session.' });
+  }
+});
+
+// Every data-changing request is recorded as user activity once it finishes.
+app.use('/api', activityLog.recordChanges);
+// Page views and other actions reported by the client, in batches.
+app.post('/api/activity', async (req, res) => {
+  try {
+    if (!req.auditSessionId) return res.json({ recorded: 0 });
+    res.json({ recorded: await activityLog.recordClientEvents(req) });
+  } catch (err) {
+    res.status(500).json({ error: err?.message || 'Failed to record activity' });
   }
 });
 

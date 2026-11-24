@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Modal, Table, Button, Input, Select, Space, message, Popconfirm, Tag } from 'antd';
-import { PlusOutlined, DeleteOutlined } from '@ant-design/icons';
+import { PlusOutlined, DeleteOutlined, KeyOutlined } from '@ant-design/icons';
 import api from '../api';
 import { enhanceColumnsWithSortAndFilters } from '../utils/tableEnhancer';
 
@@ -10,6 +10,7 @@ interface UserRecord {
   displayName: string;
   role: string | null;
   lastLogin?: string;
+  hasPassword?: boolean;
 }
 
 interface RoleOption {
@@ -32,6 +33,10 @@ export default function AdminPanel({ open, onClose }: AdminPanelProps) {
   const [newDisplayName, setNewDisplayName] = useState('');
   const [newRole, setNewRole] = useState<string | undefined>(undefined);
   const [adding, setAdding] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [passwordFor, setPasswordFor] = useState<UserRecord | null>(null);
+  const [passwordValue, setPasswordValue] = useState('');
+  const [savingPassword, setSavingPassword] = useState(false);
 
   const fetchData = async () => {
     setLoading(true);
@@ -71,17 +76,37 @@ export default function AdminPanel({ open, onClose }: AdminPanelProps) {
         userId: newUserId.trim(),
         displayName: newDisplayName.trim() || newUserId.trim(),
         role: newRole || null,
+        password: newPassword || null,
       });
       setUsers((prev) => [...prev, res.data]);
       setShowAdd(false);
       setNewUserId('');
       setNewDisplayName('');
       setNewRole(undefined);
+      setNewPassword('');
       message.success('User created');
     } catch (err: any) {
       message.error(err.response?.data?.error || 'Failed to create user');
     } finally {
       setAdding(false);
+    }
+  };
+
+  // Set (or, when blank, remove) a user's password.
+  const handleSetPassword = async () => {
+    if (!passwordFor) return;
+    if (passwordValue && passwordValue.length < 6) { message.warning('The password must be at least 6 characters'); return; }
+    setSavingPassword(true);
+    try {
+      const res = await api.put(`/admin/users/${passwordFor._id}/password`, { password: passwordValue });
+      setUsers((prev) => prev.map((u) => (u._id === passwordFor._id ? { ...u, hasPassword: res.data.hasPassword } : u)));
+      message.success(passwordValue ? `Password set for ${passwordFor.userId}` : `Password removed for ${passwordFor.userId}`);
+      setPasswordFor(null);
+      setPasswordValue('');
+    } catch (err: any) {
+      message.error(err.response?.data?.error || 'Failed to set the password');
+    } finally {
+      setSavingPassword(false);
     }
   };
 
@@ -122,13 +147,23 @@ export default function AdminPanel({ open, onClose }: AdminPanelProps) {
       render: (v: string) => v ? new Date(v).toLocaleDateString() : '—',
     },
     {
+      title: 'Password',
+      dataIndex: 'hasPassword',
+      key: 'hasPassword',
+      width: 110,
+      render: (v: boolean) => (v ? <Tag color="green">Set</Tag> : <Tag color="orange">None</Tag>),
+    },
+    {
       title: '',
       key: 'actions',
-      width: 50,
+      width: 80,
       render: (_: unknown, record: UserRecord) => (
+        <Space size={0}>
+        <Button type="text" icon={<KeyOutlined />} size="small" title="Set password" aria-label={`Set password for ${record.userId}`} onClick={() => { setPasswordFor(record); setPasswordValue(''); }} />
         <Popconfirm title="Delete this user?" onConfirm={() => handleDelete(record._id)}>
           <Button type="text" danger icon={<DeleteOutlined />} size="small" />
         </Popconfirm>
+        </Space>
       ),
     },
   ];
@@ -173,6 +208,12 @@ export default function AdminPanel({ open, onClose }: AdminPanelProps) {
                 value={newDisplayName}
                 onChange={(e) => setNewDisplayName(e.target.value)}
               />
+              <Input.Password
+                placeholder="Password (optional, at least 6 characters)"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                autoComplete="new-password"
+              />
               <Select
                 placeholder="Assign role (optional)"
                 allowClear
@@ -189,6 +230,29 @@ export default function AdminPanel({ open, onClose }: AdminPanelProps) {
           </div>
         )}
       </Space>
+
+      <Modal
+        title={passwordFor ? `Set password for ${passwordFor.userId}` : 'Set password'}
+        open={Boolean(passwordFor)}
+        onOk={handleSetPassword}
+        okText={passwordValue ? 'Set password' : 'Remove password'}
+        okButtonProps={{ danger: !passwordValue }}
+        confirmLoading={savingPassword}
+        onCancel={() => { setPasswordFor(null); setPasswordValue(''); }}
+        destroyOnClose
+      >
+        <Input.Password
+          autoFocus
+          placeholder="New password (at least 6 characters)"
+          value={passwordValue}
+          onChange={(e) => setPasswordValue(e.target.value)}
+          onPressEnter={handleSetPassword}
+          autoComplete="new-password"
+        />
+        <div style={{ marginTop: 8, fontSize: 12, color: '#64748b' }}>
+          Leave it blank to remove the password; the user can then sign in with any password. Their open sessions stay signed in.
+        </div>
+      </Modal>
     </Modal>
   );
 }
