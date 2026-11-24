@@ -10,6 +10,9 @@
 ## Session log
 Newest entry first. Each entry: date, what was in flight, what's uncommitted/unresolved.
 
+### 2026-11-24 (3) — Pushed to main
+- Committed `0a6c06c` (SMC landing page, logo, vehicle renderings), fast-forwarded and pushed `main`. The deploy succeeded in 5m45s; live `/api/health` returns version `0a6c06c`. The 2026-11-24 (2) entry below is now committed.
+
 ### 2026-11-24 (2) — Landing page rebranded for Standard Motor Company (SMC)
 - **Framing:** the landing tab is now SMC's internal BPMN IQ site: an "Internal · SMC employees and contractors only" pill and "Every vehicle we design, build, sell and service runs on a process." The animated BPMN backdrop is kept.
 - **New [brand/SmcLogo.tsx](client/src/components/brand/SmcLogo.tsx):** `SmcMark` is an original badge whose S is a BPMN sequence flow (start event top-right → routed flow → amber end event). `SmcLogo tone=dark|light` adds the STANDARD / MOTOR COMPANY wordmark. It deliberately looks nothing like the historic Standard Motor Co. (UK) badge.
@@ -23,7 +26,7 @@ Newest entry first. Each entry: date, what was in flight, what's uncommitted/unr
   - **"The 2027 lineup":** fictional Halcyon / Tessera / Ironbark / Lumen EV studio cards, each with 3 real flows; they open Business Processes.
   - The rest: features and steps (copy mentions SMC), a CTA with a faint SUV, and a footer lockup.
   - All 18 flow names were checked against `diagrams`.
-- **Verified:** screenshots at 1440 and 390 px (no horizontal overflow); `tsc` 0 errors. Not committed.
+- **Verified:** screenshots at 1440 and 390 px (no horizontal overflow); `tsc` 0 errors.
 - **Follow-up: "photo-realistic, more conventional".** The user chose upgraded renderings over stock photos (real photos would show real makes) or supplied photos.
   - VehicleArt was redrawn at real-world proportions: a 4.9 m sedan, a compact crossover, a 5.8 m crew-cab pickup and an electric fastback.
   - Rendering details:
