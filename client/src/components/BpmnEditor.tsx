@@ -1178,17 +1178,17 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
               `Application: ${displayName}`,
               applicationMeta?.correlationId ? `Correlation ID: ${applicationMeta.correlationId}` : null,
               applicationMeta?.acronym ? `Acronym: ${applicationMeta.acronym}` : null,
-              hasAppImpact ? `${appIssues.length} Jira issue${appIssues.length === 1 ? '' : 's'} — click for details` : null,
+              'Click for application details',
+              hasAppImpact ? `${appIssues.length} Jira issue${appIssues.length === 1 ? '' : 's'}: click the count to open them` : null,
             ].filter(Boolean).join('\n');
             row.style.cssText = `display:flex;align-items:center;gap:3px;white-space:nowrap;cursor:pointer;padding:1px 3px;border-radius:3px;${hasAppImpact ? `background:${appHasOverdue ? '#fff1f0' : '#fffbe6'};border:1px solid ${appHasOverdue ? '#ffa39e' : '#ffe58f'};` : ''}`;
             row.addEventListener('mouseenter', () => { row.style.background = hasAppImpact ? (appHasOverdue ? '#ffd8d6' : '#fff1b8') : '#f0f5ff'; });
             row.addEventListener('mouseleave', () => { row.style.background = hasAppImpact ? (appHasOverdue ? '#fff1f0' : '#fffbe6') : 'transparent'; });
             row.addEventListener('click', (e) => {
+              // A left click always opens the application's details in the
+              // right column, on every canvas. Jira issues (Process Change
+              // Radar) open from the count badge or from the details card.
               e.stopPropagation();
-              if (hasAppImpact && onImpactIndicatorClickRef.current) {
-                onImpactIndicatorClickRef.current(appIssues, { elementType: 'task', elementName: displayName });
-                return;
-              }
               // Every task on this canvas that uses the same application.
               const appKey = normalizeApplicationLookupValue(appName);
               const usedByTasks = Array.from(new Set<string>(
@@ -1239,7 +1239,12 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
             if (hasAppImpact) {
               const countBadge = document.createElement('span');
               countBadge.textContent = String(appIssues.length);
-              countBadge.style.cssText = `display:inline-flex;align-items:center;justify-content:center;min-width:14px;height:14px;padding:0 3px;border-radius:7px;background:${appHasOverdue ? '#ff4d4f' : '#faad14'};color:#fff;font-size:9px;font-weight:700;line-height:1;flex-shrink:0;`;
+              countBadge.style.cssText = `display:inline-flex;align-items:center;justify-content:center;min-width:14px;height:14px;padding:0 3px;border-radius:7px;background:${appHasOverdue ? '#ff4d4f' : '#faad14'};color:#fff;font-size:9px;font-weight:700;line-height:1;flex-shrink:0;cursor:pointer;`;
+              countBadge.title = `${appIssues.length} Jira issue${appIssues.length === 1 ? '' : 's'}: click to open`;
+              countBadge.addEventListener('click', (e) => {
+                e.stopPropagation();
+                onImpactIndicatorClickRef.current?.(appIssues, { elementType: 'task', elementName: displayName });
+              });
               row.appendChild(countBadge);
             }
             html.appendChild(row);
@@ -3713,6 +3718,24 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
                         </button>
                       </div>
                     ) : null}
+                    {(() => {
+                      // Process Change Radar: in-flight Jira work that names this application.
+                      const issues = impactByApplicationName?.[normalizeImpactName(selectedApp.name)] || [];
+                      if (!issues.length || !onImpactIndicatorClick) return null;
+                      const overdue = issues.filter((issue) => issue.isOverdue).length;
+                      return (
+                        <div className="border-t border-gray-100 mt-3 pt-3">
+                          <button
+                            className="w-full text-xs py-1.5 px-3 rounded border text-left flex items-center gap-1.5"
+                            style={{ color: overdue ? '#a8071a' : '#874d00', background: overdue ? '#fff1f0' : '#fffbe6', borderColor: overdue ? '#ffa39e' : '#ffe58f' }}
+                            onClick={() => onImpactIndicatorClick(issues, { elementType: 'task', elementName: getAppDisplayName(selectedApp.name) })}
+                          >
+                            {issues.length} Jira change{issues.length === 1 ? '' : 's'} in flight
+                            {overdue ? <span className="ml-auto font-semibold">{overdue} overdue</span> : null}
+                          </button>
+                        </div>
+                      );
+                    })()}
                     {linkedComponentTypes.length ? (
                       <div className="border-t border-gray-100 mt-3 pt-3">
                         <div className="text-xs text-gray-500 uppercase tracking-wide mb-1.5">Linked system components</div>
@@ -3739,7 +3762,7 @@ const BpmnEditor = forwardRef<BpmnEditorHandle, BpmnEditorProps>(
                 </button>
               </div>
               <button className="mt-4 w-full text-xs py-1.5 px-3 rounded-lg border border-blue-100 hover:bg-blue-50 text-slate-600" onClick={() => setSelectedApp(null)}>
-                ← Back to Properties
+                {showProperties ? '← Back to Properties' : 'Close'}
               </button>
             </div>
           </div>

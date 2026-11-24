@@ -5,7 +5,7 @@ import BpmnEditor, { EMPTY_DIAGRAM, type BpmnEditorHandle, type OptimizerFinding
 import SpeedometerGauge from './SpeedometerGauge';
 import ProcessOptimizerDrawer from './ProcessOptimizerDrawer';
 import {
-  getApplicationRiskReference, getDashboardFeatureCost3D, getDiagram, getDiagramsForNeighborhood,
+  getApplicationReferenceForNeighborhood, getApplicationRiskReference, getDashboardFeatureCost3D, getDiagram, getDiagramsForNeighborhood,
   getProcessChangeRadar, getProcessOptimizerProposals, runProcessOptimizerAnalysis, setApiNeighborhoodScope,
 } from '../api';
 import type { ApplicationRiskProfile, FeatureCostPoint } from '../api';
@@ -14,7 +14,7 @@ import {
   buildRiskLookup, computeAggregateCost, computeAggregateDefectRisk,
   computeAggregateSecurityRisk, computeLiveJiraActivity, type CostTaskEntry,
 } from '../utils/quantitativeModel';
-import type { DiagramMeta, JiraImpactIssue, ProcessChangeRadarResponse, ProcessOptimizationProposal } from '../types';
+import type { ApplicationItem, DiagramMeta, JiraImpactIssue, ProcessChangeRadarResponse, ProcessOptimizationProposal } from '../types';
 
 const { Title, Text } = Typography;
 
@@ -70,6 +70,14 @@ export default function QuantitativeModeling() {
   const [riskLookup, setRiskLookup] = useState<Map<string, ApplicationRiskProfile>>(new Map());
   const [costPoints, setCostPoints] = useState<FeatureCostPoint[]>([]);
   const [radarData, setRadarData] = useState<ProcessChangeRadarResponse | null>(null);
+  // Application catalog, so application rows on both canvases are checked
+  // against it and a click shows the application's full details.
+  const [allApplications, setAllApplications] = useState<ApplicationItem[]>([]);
+  useEffect(() => {
+    getApplicationReferenceForNeighborhood('System Components')
+      .then((applications) => setAllApplications(applications || []))
+      .catch(() => setAllApplications([]));
+  }, []);
   const [refLoading, setRefLoading] = useState(true);
   const [refError, setRefError] = useState<string | null>(null);
 
@@ -375,6 +383,7 @@ export default function QuantitativeModeling() {
           {selectedMeta && (
             <div className="grid h-full min-h-0 grid-rows-2 divide-y divide-slate-200">
               <ComparisonPanel
+                allApplications={allApplications}
                 title="Baseline"
                 subtitle="Read-only — as currently saved"
                 xml={baselineXml}
@@ -384,6 +393,7 @@ export default function QuantitativeModeling() {
                 readOnly
               />
               <ComparisonPanel
+                allApplications={allApplications}
                 title="What-If"
                 subtitle="Editable — change tasks/applications to see live impact"
                 xml={baselineXml}
@@ -471,9 +481,10 @@ interface ComparisonPanelProps {
   onDirty?: () => void;
   optimizerFindingByTaskName?: Record<string, OptimizerFindingLike>;
   onOptimizerFindingClick?: () => void;
+  allApplications?: ApplicationItem[];
 }
 
-function ComparisonPanel({ title, subtitle, xml, importTrigger, diagramName, loading, readOnly, editorRef, onDirty, optimizerFindingByTaskName, onOptimizerFindingClick }: ComparisonPanelProps) {
+function ComparisonPanel({ title, subtitle, xml, importTrigger, diagramName, loading, readOnly, editorRef, onDirty, optimizerFindingByTaskName, onOptimizerFindingClick, allApplications }: ComparisonPanelProps) {
   return (
     <div className="flex min-h-0 flex-col">
       <div className="border-b border-slate-100 bg-slate-50 px-3 py-2">
@@ -499,6 +510,7 @@ function ComparisonPanel({ title, subtitle, xml, importTrigger, diagramName, loa
           onDirty={onDirty}
           optimizerFindingByTaskName={optimizerFindingByTaskName}
           onOptimizerFindingClick={onOptimizerFindingClick}
+          allApplications={allApplications}
         />
       </div>
     </div>

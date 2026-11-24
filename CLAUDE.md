@@ -10,6 +10,18 @@
 ## Session log
 Newest entry first. Each entry: date, what was in flight, what's uncommitted/unresolved.
 
+### 2026-11-24 (6) — Application click → details card on every canvas
+- The user asked that a left click on an application on any canvas show its details in the right column. Tested all 6 canvases in the browser:
+  - Business Processes, Discovered and Undefined already worked.
+  - **Process Change Radar** opened the Jira drawer instead for apps with issues.
+  - **Quantitative Modeling** passed no `allApplications`, so every app read "Not in application catalog" with no details.
+  - On every canvas the card was **translucent** (`rgba(255,255,255,.9)`), so the diagram showed through.
+- **Fixes:**
+  - BpmnEditor: a row click always calls `selectApplication`. The Jira count badge on the row is its own click target that opens the drawer, and the card gained an "N Jira changes in flight · N overdue" button when `impactByApplicationName` has issues. The card's bottom button reads "Close" when `showProperties` is false.
+  - `.properties-panel-summary-card` is opaque white with a side shadow (index.css).
+  - QuantitativeModeling fetches the System Components application catalog and passes it to both canvases.
+- **Verified:** row → card on Business Processes / Radar / QM. Radar badge → drawer; QM status Valid. Screenshots checked; `tsc` 0 errors.
+
 ### 2026-11-24 (5) — Pushed to main
 - Committed `b3ce6bc` (stock photos + Photos | Illustrations switch), fast-forwarded and pushed `main`. The deploy succeeded in 5m14s; live `/api/health` returns version `b3ce6bc`, and `/stock/hero-night.jpg` is served (200, image/jpeg).
 
