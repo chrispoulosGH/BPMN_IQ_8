@@ -10,6 +10,15 @@
 ## Session log
 Newest entry first. Each entry: date, what was in flight, what's uncommitted/unresolved.
 
+### 2026-11-27 — Ask BIQ pushed and live on Azure
+- Committed `d42ae3d` (Ask BIQ phase 1), fast-forwarded and pushed `main`. The deploy succeeded in 5m4s; live `/api/health` returns version `d42ae3d`.
+- **Azure key (the same key as local, at the user's request):**
+  - Stored as Key Vault secret `anthropic-api-key` in `kv-…` (`$KEYVAULT` in config.sh), via a temporary file that was deleted immediately. The value was never printed.
+  - Set app setting `ANTHROPIC_API_KEY=@Microsoft.KeyVault(SecretUri=<vault>/secrets/anthropic-api-key/)`. App Service config-reference status is "Resolved".
+  - After the restart (about 1 minute), `/api/assistant/status` returns configured: true.
+- **Verified on Azure:** "Which flows depend on CONNECTED-CAR?" answered in 5 s with 1 tool and the correct 10 flows.
+- To rotate the key, update the secret; the app picks it up after a restart or within about 24 h.
+
 ### 2026-11-25 — "Ask BIQ" assistant, phase 1
 - **User decisions:** use the stronger model (`claude-opus-5-5`, override with `ASSISTANT_MODEL`); everyone can use it; start phase 1. My defaults:
   - conversations are saved per user;
