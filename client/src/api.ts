@@ -892,3 +892,58 @@ export const getUserSessions = (days = 7, userId?: string): Promise<UserSessions
   api.get('/admin/activity/sessions', { params: { days, ...(userId ? { userId } : {}) } }).then((r) => r.data);
 export const getUserSessionDetail = (id: string): Promise<{ session: UserSessionSummary; activities: UserActivityEvent[] }> =>
   api.get(`/admin/activity/sessions/${encodeURIComponent(id)}`).then((r) => r.data);
+
+// ─── Ask BIQ (server/routes/assistant.js) ───
+export interface AskBiqRef { kind: 'flow' | 'app' | 'control' | 'jira'; id: string; name?: string; url?: string }
+export interface AskBiqTool { name: string; label: string; ok?: boolean; error?: string }
+export interface AskBiqTurn { role: 'user' | 'assistant'; text: string; refs?: AskBiqRef[]; tools?: AskBiqTool[]; at?: string }
+export type AskBiqEvent =
+  | { type: 'meta'; conversationId: string; model: string }
+  | { type: 'text'; delta: string }
+  | { type: 'tool'; id: string; name: string; label: string; status: 'running' | 'done' | 'error'; error?: string }
+  | { type: 'done'; refs: AskBiqRef[]; tools: AskBiqTool[] }
+  | { type: 'error'; message: string; code?: string | null };
+
+export const getAskBiqStatus = (): Promise<{ configured: boolean; model: string }> =>
+  api.get('/assistant/status').then((r) => r.data);
+export const getAskBiqConversations = (): Promise<Array<{ id: string; title: string; updatedAt: string }>> =>
+  api.get('/assistant/conversations').then((r) => r.data);
+export const getAskBiqConversation = (id: string): Promise<{ id: string; title: string; turns: AskBiqTurn[] }> =>
+  api.get(`/assistant/conversations/${encodeURIComponent(id)}`).then((r) => r.data);
+export const deleteAskBiqConversation = (id: string): Promise<void> =>
+  api.delete(`/assistant/conversations/${encodeURIComponent(id)}`).then(() => undefined);
+
+/** Ask a question; events stream in through onEvent (server-sent events over fetch). */
+export async function askBiq(
+  body: { conversationId?: string | null; message: string; context?: Record<string, string | undefined> },
+  onEvent: (event: AskBiqEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch('/api/assistant/chat', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!res.ok || !res.body) {
+    const err = await res.json().catch(() => null);
+    onEvent({ type: 'error', message: err?.error || `Ask BIQ failed (HTTP ${res.status})`, code: err?.code || null });
+    return;
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let cut;
+    while ((cut = buffer.indexOf('\n\n')) >= 0) {
+      const chunk = buffer.slice(0, cut);
+      buffer = buffer.slice(cut + 2);
+      const data = chunk.split('\n').filter((l) => l.startsWith('data: ')).map((l) => l.slice(6)).join('\n');
+      if (data) { try { onEvent(JSON.parse(data)); } catch { /* ignore a malformed event */ } }
+    }
+  }
+}

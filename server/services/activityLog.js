@@ -123,6 +123,7 @@ async function ensureAuditSession(sess, req, role) {
 /** Requests that change nothing, or that the app makes on its own. */
 const IGNORE = [
   /^POST \/activity$/,
+  /^POST \/assistant\/chat$/, // recorded as "Asked BIQ" by routes/assistant.js
   /^POST \/process-change-radar\/snapshot$/,
   /^POST \/(diagrams|tasks)\/validate$/,
   /^POST \/custom-factories\/(fk-resolve|fk-validate)$/,
@@ -158,6 +159,7 @@ const RULES = [
   [/^POST \/capabilities\/match$/, 'Ran capability matching'],
   [/^POST \/states\/transition$/, 'Changed a workflow state'],
   [/^POST \/telemetry-snapshots\/capture$/, 'Captured telemetry snapshots'],
+  [/^DELETE \/assistant\/conversations\/[^/]+$/, 'Deleted an Ask BIQ conversation'],
 ];
 const VERB = { POST: 'Created', PUT: 'Updated', PATCH: 'Updated', DELETE: 'Deleted' };
 const humanize = (segment) => String(segment || 'data').replace(/[-_]+/g, ' ');

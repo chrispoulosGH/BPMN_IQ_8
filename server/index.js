@@ -159,6 +159,8 @@ app.get('/api/telemetry-snapshots', async (req, res) => {
 app.post('/api/telemetry-snapshots/capture', async (req, res) => {
   try { res.json(await telemetrySnapshots.captureAll()); } catch (err) { res.status(500).json({ error: err?.message || 'Failed' }); }
 });
+const assistantRouter = require('./routes/assistant');
+app.use('/api/assistant', assistantRouter);
 const soxControlsRouter = require('./routes/soxControls');
 app.use('/api/sox-controls', soxControlsRouter);
 

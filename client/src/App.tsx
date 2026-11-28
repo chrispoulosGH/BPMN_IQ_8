@@ -54,6 +54,7 @@ import {
   FundOutlined,
   TeamOutlined,
   KeyOutlined,
+  MessageOutlined,
   LineChartOutlined,
   FireOutlined,
   ExperimentOutlined,
@@ -100,6 +101,7 @@ import ReportsPanel from './components/ReportsPanel';
 import Login from './components/Login';
 import AdminPanel from './components/AdminPanel';
 import ChangePasswordModal from './components/ChangePasswordModal';
+import AskBiqPanel from './components/AskBiqPanel';
 import UserActivityPage from './components/UserActivityPage';
 import { trackActivity, flushActivity, resetActivityTracker } from './utils/activityTracker';
 import GlobalComponentSearch from './components/GlobalComponentSearch';
@@ -524,6 +526,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   const canEditFactories = !readOnly;
   const [showAdmin, setShowAdmin] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
+  const [showAskBiq, setShowAskBiq] = useState(false);
   const [showGlobalComponentSearch, setShowGlobalComponentSearch] = useState(false);
   const [componentSearchTerms, setComponentSearchTerms] = useState<Record<string, string>>({}); // Key: ${neighborhoodName}:${componentId}
   const [activeNeighborhoodTab, setActiveNeighborhoodTab] = useState<string>('');
@@ -3153,6 +3156,11 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
         <Space size={4} className="toolbar-actions">
           <div className="toolbar-divider" />
 
+          <Tooltip title="Ask questions about SMC's flows, apps, costs, SOX and Jira">
+            <Button type="text" icon={<MessageOutlined />} onClick={() => { setShowAskBiq(true); trackActivity('action', 'Opened Ask BIQ'); }} className="toolbar-btn" size="small">
+              Ask BIQ
+            </Button>
+          </Tooltip>
           <Tooltip title="Search all components">
             <Button type="text" icon={<SearchOutlined />} onClick={() => setShowGlobalComponentSearch(true)} className="toolbar-btn" size="small" />
           </Tooltip>
@@ -3827,6 +3835,22 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
 
       {hasAdminAccess && <AdminPanel open={showAdmin} onClose={() => setShowAdmin(false)} />}
       <ChangePasswordModal open={showChangePassword} onClose={() => setShowChangePassword(false)} />
+      <AskBiqPanel
+        open={showAskBiq}
+        onClose={() => setShowAskBiq(false)}
+        context={{
+          tab: OUTER_TAB_NAMES[activeOuterTab] || activeOuterTab,
+          ...(activeOuterTab === 'bpmn' && selectedDiagramIds.length === 1
+            ? { diagramId: selectedDiagramIds[0], diagramName: String(activeDiagram?.name || canvasDiagramName || '').replace(/&amp;/g, '&') || undefined }
+            : {}),
+        }}
+        onOpenFlow={(diagramId) => handleDashboardFlowOpen({ diagramId, neighborhoodName: 'LLM AMI' })}
+        onOpenApplication={(acronym) => {
+          const app = allApplications.find((a) => a.acronym === acronym || a.correlationId === acronym);
+          if (app?.correlationId) handleApplicationLinkClick(acronym, app.correlationId);
+          else message.info(`${acronym} isn't in the Applications catalog.`);
+        }}
+      />
       <GlobalComponentSearch
         open={showGlobalComponentSearch}
         neighborhoodName={activeNeighborhoodTab}
