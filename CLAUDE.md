@@ -10,6 +10,78 @@
 ## Session log
 Newest entry first. Each entry: date, what was in flight, what's uncommitted/unresolved.
 
+### 2026-11-28 (2) — Vendor support (end-of-support) dates rolled up to business flows
+- **Dates used** (each looked up from the catalog, except the hardware estimate):
+  - **Hardware:** the model's end of vendor support.
+    - The catalog has no per-model end-of-service-life date, so [hardwareLifecycle.js](server/services/hardwareLifecycle.js) **estimates** it as the generation's release month + `HARDWARE_SUPPORT_YEARS` (default 8).
+    - Generations: Dell 14G/15G/16G, HPE Gen10/Gen10 Plus/Gen11, Lenovo first gen/V2/V3. "Gen10+" is folded into "Gen10 Plus".
+    - A unit whose `SUPPORT_CONTRACT` is "Expired" counts as unsupported now.
+    - `WARRANTY_EXPIRY` is **reported separately as out of warranty and not counted as unsupported**. The first version used it as the unsupported date, which made 53% of servers and 100 of 110 flows unsupported; support contracts run past warranty.
+  - **OS:** Servers `OS_EOL_DATE`.
+  - **Software:** `END_OF_SUPPORT_DATE` (90 installs have "N/A" and count as unknown).
+- **[supportLifecycle.js](server/services/supportLifecycle.js):**
+  - Loads the catalog with `$getField` projections (fast; full rows are slow over Atlas). Cached for 10 minutes.
+  - Maps each flow to infrastructure: diagram task application acronym → Applications APP_ID → Servers/Software by FK APP_ID. For shared acronyms it prefers the IDs that have infrastructure.
+  - Checkpoints: now / +1 / +2 / +3 years. A server counts once if its hardware or OS is unsupported.
+  - Also returns a quarterly timeline, drivers (products losing support), the next item to lose support, and landscape (whole estate) and domain totals.
+  - **Rating:** red = ≥25% of servers or ≥10% of software unsupported now; amber = anything unsupported now, or red levels reached within 12 months; "no data" = no catalogued infrastructure.
+  - Today: 10 red / 90 amber / 0 green / 10 no data. Estate: servers 10% unsupported now, 26% at +1 and +2 years, 97% at +3 years (the 2029 hardware estimates). Software 0.1% → 44% → 93% → 99%.
+- **Register:** new `vendorsupportproducts` ([VendorSupportProduct.js](server/models/VendorSupportProduct.js)), 390 rows, one per hardware model / OS version / software product+version.
+  - Each row holds the earliest and latest date, installs, apps and `dateBasis`. A change to either date is pushed to `history`.
+  - It syncs at most hourly after a compute; products no longer in the catalog are marked `retired`.
+  - Admin override (`endOfSupportOverride`, note, by, at) replaces the date for every install and clears the cache.
+- **Routes** at `/api/support-lifecycle` ([supportLifecycle.js](server/routes/supportLifecycle.js)):
+  - `GET /flows?asOf=&years=&diagramId=&flow=&domain=&application=&drivers=1&fresh=1`
+  - `GET /flows/:id/assets`
+  - `GET /products`
+  - `POST /sync`
+  - `PUT /products/override {key, date|null, note}`: Admin **Write** only, 403 otherwise.
+  - activityLog labels the override and the sync.
+- **Client:** new outer tab `vendorSupport` "Vendor Support" ([VendorSupport.tsx](client/src/components/VendorSupport.tsx)), after Business Metrics.
+  - "By business flow":
+    - a Now / +1 / +2 / +3 years switch;
+    - 5 stat tiles;
+    - a step chart of the share of servers and software unsupported per quarter (blue/orange validated slots 1–2, legend + end labels, hover tooltip, checkpoint reference lines);
+    - a flow table with server and software bars per checkpoint, sorted by the selected horizon;
+    - row expand: the flow's own chart, drivers, the affected item list (filter by type), a "Not in catalog" tag, and Open flow;
+    - an estate drivers table.
+  - "Vendor support register": filter by type and text; date column with an Estimate / Vendor date tag; status; history tooltip; pencil → date + source note dialog (admins with Write only).
+  - New api.ts types and `getVendorSupport*` / `setVendorSupportOverride`.
+- **Ask BIQ:** new tool `vendor_support` (filters, asOf, sort now/1y/2y/3y, detail full adds the timeline and drivers); the system prompt lists the data; new suggested question. A test question took 26 s and 4 tool calls; the answer was correct and flagged that the hardware dates are estimates.
+- **Verified:**
+  - The override raised and cleared changed the Special Finance Processing counts (11 → 6 → 11); the test history was cleaned afterwards.
+  - Non-admin `snapshotqa` gets 403.
+  - Browser screenshots of the overview, row expand, register and edit dialog checked.
+  - `tsc` 0 errors.
+- Gotcha: a temp script in `server/` makes nodemon restart the server mid-test. Run temp scripts from elsewhere, using `require` paths into server/node_modules.
+- Not committed (together with the Jira rollup entry below).
+
+### 2026-11-28 — Jira work rolled up per business flow, available to Ask BIQ
+- **Server:**
+  - New [jiraFlowAggregates.js](server/services/jiraFlowAggregates.js): `aggregateIssues` and `buildFlowAggregates` work per flow, per domain and for the whole landscape. Domain and landscape totals count each issue once.
+    - Story points: total / on track / due within 7 days / overdue, plus dev-days and unestimated issues.
+    - Late (overdue) issues and points, max and average days overdue, and the oldest late issue.
+    - User stories (Story / User Story types) and how many are late.
+    - Issues with no due date, and stale issues (not updated in `JIRA_STALE_DAYS`, default 14).
+    - Breakdowns by type, status, status category, priority, sprint (current / planned / none) and assignee (top 5, unassigned count).
+    - Jeopardy ratio and RAG rating, using **the same rules as client domainExposure.ts**.
+    - How each issue was matched (Business Process Flow field, application or API field), and the top applications.
+  - [processChangeRadar.js](server/routes/processChangeRadar.js): the GET body became `computeRadar()`. `GET /`'s output is unchanged.
+  - New `GET /api/process-change-radar/flow-aggregates?diagramId=&flow=&domain=&application=&sort=&limit=&fresh=1`. It is cached for 2 minutes, and a failed run isn't cached.
+  - [jiraClient.js](server/services/jiraClient.js): each issue gains `sprint {name, state, endDate}` from the Sprint field (`pickSprint`: active first, then the next future sprint).
+- **Ask BIQ:**
+  - New tool `jira_flow_rollup` in tools.js, with sorts latePoints / lateIssues / lateStories / storyPoints / issues / jeopardy / daysOverdue / dueSoon / stale and detail summary|full. Its refs are flows plus each flow's oldest late issue.
+  - The `jira_changes` description now points to it for totals.
+  - New suggested question in AskBiqPanel.
+- **Verified against live Jira:**
+  - The totals match the raw radar data: 72 flows, 136 issues, 697 points, 60 late.
+  - Ask BIQ's "top 5 flows by late work" answer took 10 s with 1 tool, was correct and cited its sources. The Sales & Distribution figure checked out (233 of 385 points late).
+  - `tsc` 0 errors.
+- **Data facts worth knowing:**
+  - All 136 open issues are type **Task**, so "late user stories" is 0 everywhere until teams log Stories. The assistant says so.
+  - All 136 are "stale" (seeded and never updated). 130 are in future sprints, and some of those sprints' end dates (e.g. Sprint 10, ends 2026-09-27) are already past.
+- Not committed.
+
 ### 2026-11-27 — Ask BIQ pushed and live on Azure
 - Committed `d42ae3d` (Ask BIQ phase 1), fast-forwarded and pushed `main`. The deploy succeeded in 5m4s; live `/api/health` returns version `d42ae3d`.
 - **Azure key (the same key as local, at the user's request):**

@@ -125,6 +125,16 @@ function extractStoryPoints(raw) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+// The Sprint field holds every sprint an issue has been in; report the one
+// it's in now (active), else the next planned (future) one.
+function pickSprint(raw) {
+  const list = (Array.isArray(raw) ? raw : raw ? [raw] : []).filter((x) => x && typeof x === 'object');
+  const chosen = list.find((x) => x.state === 'active')
+    || list.filter((x) => x.state === 'future').sort((x, y) => String(x.startDate || '').localeCompare(String(y.startDate || '')))[0]
+    || list[list.length - 1];
+  return chosen ? { name: chosen.name || null, state: chosen.state || null, endDate: chosen.endDate ? String(chosen.endDate).slice(0, 10) : null } : null;
+}
+
 // cf[NNNNN] is JQL's id-based field reference — more robust than quoting the
 // field's display name (which can collide with reserved words or, in rare
 // cases, not be unique on a site).
@@ -198,6 +208,7 @@ async function getProcessChangeIssues() {
   const apiFieldId = JIRA_API_FIELD_ID || resolveFieldId(byName, [JIRA_API_FIELD_NAME]);
   const storyPointsFieldId = resolveFieldId(byName, JIRA_STORY_POINTS_FIELD_NAMES);
   const dueDateFieldId = JIRA_DUE_DATE_FIELD_NAME ? resolveFieldId(byName, [JIRA_DUE_DATE_FIELD_NAME]) : 'duedate';
+  const sprintFieldId = resolveFieldId(byName, ['Sprint']);
 
   const linkFieldIds = [businessFlowFieldId, applicationFieldId, apiFieldId].filter(Boolean);
   if (!linkFieldIds.length) {
@@ -245,6 +256,7 @@ async function getProcessChangeIssues() {
   const fieldIds = [...new Set([
     'summary', 'status', 'issuetype', 'priority', 'assignee', 'updated',
     dueDateFieldId, ...linkFieldIds, ...(storyPointsFieldId ? [storyPointsFieldId] : []),
+    ...(sprintFieldId ? [sprintFieldId] : []),
   ])];
 
   const rawIssues = await searchAllIssues(jql, fieldIds);
@@ -271,6 +283,7 @@ async function getProcessChangeIssues() {
       dueDate,
       isOverdue,
       storyPoints,
+      sprint: sprintFieldId ? pickSprint(fields[sprintFieldId]) : null,
       devDays: Math.round(storyPoints * STORY_POINT_DAY_RATIO * 100) / 100,
       businessFlowNames: businessFlowFieldId ? extractFieldValues(fields[businessFlowFieldId]) : [],
       applicationNames: applicationFieldId ? extractFieldValues(fields[applicationFieldId]) : [],

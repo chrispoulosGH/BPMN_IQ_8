@@ -161,6 +161,8 @@ app.post('/api/telemetry-snapshots/capture', async (req, res) => {
 });
 const assistantRouter = require('./routes/assistant');
 app.use('/api/assistant', assistantRouter);
+const supportLifecycleRouter = require('./routes/supportLifecycle');
+app.use('/api/support-lifecycle', supportLifecycleRouter);
 const soxControlsRouter = require('./routes/soxControls');
 app.use('/api/sox-controls', soxControlsRouter);
 

@@ -947,3 +947,50 @@ export async function askBiq(
     }
   }
 }
+
+// ─── Vendor support lifecycle (server/services/supportLifecycle.js) ───
+export type SupportRating = 'red' | 'amber' | 'green' | 'no data';
+export interface SupportCheckpoint {
+  label: string; date: string;
+  hardware: number; os: number; software: number;
+  serversAffected: number; serversPct: number; softwarePct: number; appsAffected: number; outOfWarranty: number;
+}
+export interface SupportTimelinePoint { date: string; hardware: number; os: number; software: number; serversAffected: number }
+export interface SupportDriver {
+  kind: 'hardware' | 'os' | 'software'; vendor: string; product: string; version: string;
+  installs: number; unsupportedNow: number; earliest: string | null; latest: string | null; contractExpired: number; apps: string[];
+}
+export interface SupportTotals { servers: number; software: number; unknownDates: number }
+export interface SupportFlow {
+  diagramId: string; name: string; domain: string; applications: string[]; uncataloguedApplications: string[];
+  totals: SupportTotals; checkpoints: SupportCheckpoint[]; rating: SupportRating;
+  nextLoss: { date: string; kind: string; vendor: string; product: string; version: string; asset: string } | null;
+  timeline: SupportTimelinePoint[]; drivers?: SupportDriver[];
+}
+export interface SupportResponse {
+  asOf: string; years: number; catalogLoadedAt: string;
+  sources: Record<'hardware' | 'os' | 'software', string>; ratingRule: string;
+  landscape: { scope: string; totals: SupportTotals; checkpoints: SupportCheckpoint[]; timeline: SupportTimelinePoint[]; drivers: SupportDriver[]; ratings: Record<SupportRating, number> };
+  byDomain: { domain: string; flows: number; ratings: Record<SupportRating, number> }[];
+  flows: SupportFlow[];
+}
+export interface SupportAsset {
+  kind: 'hardware' | 'os' | 'software'; asset: string; serverId: string; softwareId: string | null; application: string;
+  vendor: string; product: string; version: string; endDate: string | null; dateBasis: string; contract: string | null;
+  warrantyEnd: string | null; status: 'unsupported' | 'upcoming';
+}
+export interface SupportProduct {
+  key: string; kind: 'hardware' | 'os' | 'software'; vendor: string; product: string; version: string;
+  endOfSupportEarliest: string | null; endOfSupportLatest: string | null; installs: number; unknownDates: number;
+  contractExpired: number; applicationCount: number; status: string; dateBasis: string | null;
+  override: { date: string; note: string | null; by: string | null; at: string | null } | null;
+  firstSeenAt: string; lastSyncedAt: string; history: { at: string; field: string; from: string | null; to: string | null; by?: string; note?: string }[];
+}
+export const getVendorSupport = (params: { diagramId?: string; drivers?: boolean; asOf?: string } = {}): Promise<SupportResponse> =>
+  api.get('/support-lifecycle/flows', { params: { ...params, drivers: params.drivers ? 1 : undefined } }).then((r) => r.data as SupportResponse);
+export const getVendorSupportAssets = (diagramId: string, years = 3): Promise<{ name: string; asOf: string; horizon: string; count: number; assets: SupportAsset[] }> =>
+  api.get(`/support-lifecycle/flows/${encodeURIComponent(diagramId)}/assets`, { params: { years } }).then((r) => r.data);
+export const getVendorSupportProducts = (): Promise<SupportProduct[]> =>
+  api.get('/support-lifecycle/products').then((r) => r.data as SupportProduct[]);
+export const setVendorSupportOverride = (key: string, date: string | null, note?: string): Promise<{ success: boolean }> =>
+  api.put('/support-lifecycle/products/override', { key, date, note }).then((r) => r.data);

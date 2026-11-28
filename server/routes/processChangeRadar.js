@@ -4,6 +4,7 @@ const Diagram = require('../models/Diagram');
 const ProcessChangeSnapshot = require('../models/ProcessChangeSnapshot');
 const { isJiraConfigured, getProcessChangeIssues } = require('../services/jiraClient');
 const { listApplicationReferences } = require('../utils/applicationReferenceLookup');
+const { buildFlowAggregates, SORTS, STALE_DAYS } = require('../services/jiraFlowAggregates');
 
 function normalizeName(value) {
   return String(value || '').trim().toLowerCase();
@@ -98,105 +99,160 @@ function fanOutByName(map, names, issue, source) {
   }
 }
 
-// GET /api/process-change-radar — ranks business process flows by how much
-// currently-or-soon in-flight Jira change touches them (via the Business
-// Process Flow/Application/API custom fields), for the Process Change Radar
-// tab. Runs the live Jira query fresh on every call — this route is only
-// ever hit when that tab is opened, by design (see ProcessChangeRadar.tsx).
-router.get('/', async (req, res) => {
-  if (!isJiraConfigured()) {
-    return res.status(400).json({
-      error: 'Jira is not configured. Set JIRA_BASE_URL, JIRA_EMAIL, and JIRA_API_TOKEN in server/.env, then restart the server.',
-      configured: false,
+// Runs the live Jira query and matches it to diagrams: ranks business
+// process flows by how much currently-or-soon in-flight Jira change touches
+// them (via the Business Process Flow/Application/API custom fields).
+async function computeRadar() {
+  const issues = await getProcessChangeIssues();
+
+  // Business Process Flow names a diagram directly (Diagram.businessFlow/
+  // name) — matched once per diagram below, not per task. Application/API
+  // name applications used by a diagram's tasks — matched per task.
+  const issuesByBusinessFlowName = new Map();
+  const issuesByApplicationName = new Map();
+  for (const issue of issues) {
+    fanOutByName(issuesByBusinessFlowName, issue.businessFlowNames, issue, 'businessFlow');
+    fanOutByName(issuesByApplicationName, issue.applicationNames, issue, 'application');
+    // "API" isn't its own element on a diagram — an API-linked issue is
+    // surfaced through whichever Application it's also tied to. An issue
+    // that names only an API (no Business Process Flow/Application) has
+    // nothing to anchor to and won't appear on any diagram, but that's a
+    // data-entry gap in Jira, not something this route can resolve.
+    fanOutByName(issuesByApplicationName, issue.apiNames, issue, 'api');
+  }
+
+  if (!issuesByBusinessFlowName.size && !issuesByApplicationName.size) {
+    return {
+      configured: true,
+      generatedAt: new Date().toISOString(),
+      diagrams: [],
+      issuesByApplicationName: {},
+    };
+  }
+
+  const diagrams = await Diagram.find({}, {
+    name: 1, businessFlow: 1, neighborhoodName: 1, status: 1, tasks: 1, domain: 1,
+  }).lean();
+
+  const getCriticalityIndex = makeCriticalityIndexLoader();
+  const summaries = [];
+  for (const diagram of diagrams) {
+    const matchedIssueKeys = new Set();
+    const matchedIssues = [];
+    let atRiskCount = 0;
+    let totalDevDays = 0;
+    const record = (issueList) => {
+      for (const issue of issueList) {
+        if (matchedIssueKeys.has(issue.key)) continue;
+        matchedIssueKeys.add(issue.key);
+        matchedIssues.push(issue);
+        if (issue.isOverdue) atRiskCount += 1;
+        totalDevDays += issue.devDays || 0;
+      }
+    };
+
+    record(issuesByBusinessFlowName.get(normalizeName(diagram.businessFlow || diagram.name)) || []);
+    for (const task of diagram.tasks || []) {
+      for (const application of task.applications || []) {
+        record(issuesByApplicationName.get(normalizeName(application.name)) || []);
+      }
+    }
+
+    if (!matchedIssueKeys.size) continue;
+    const applicationImpact = await buildApplicationImpact(matchedIssues, diagram.neighborhoodName, getCriticalityIndex);
+    summaries.push({
+      diagramId: String(diagram._id),
+      name: diagram.businessFlow || diagram.name,
+      neighborhoodName: diagram.neighborhoodName || null,
+      status: diagram.status || null,
+      domain: diagram.domain || null,
+      issueCount: matchedIssueKeys.size,
+      atRiskCount,
+      totalDevDays: Math.round(totalDevDays * 100) / 100,
+      issues: matchedIssues,
+      applicationImpact,
     });
   }
 
+  // Most impacted first: flows with the most overdue/at-risk issues lead,
+  // ties broken by total remaining dev-days.
+  summaries.sort((a, b) => (b.atRiskCount - a.atRiskCount) || (b.totalDevDays - a.totalDevDays));
+
+  return {
+    configured: true,
+    generatedAt: new Date().toISOString(),
+    diagrams: summaries,
+    issuesByApplicationName: Object.fromEntries(issuesByApplicationName),
+  };
+}
+
+const NOT_CONFIGURED = {
+  error: 'Jira is not configured. Set JIRA_BASE_URL, JIRA_EMAIL, and JIRA_API_TOKEN in server/.env, then restart the server.',
+  configured: false,
+};
+
+function sendRadarError(res, err) {
+  console.error('[PROCESS CHANGE RADAR] failed:', err);
+  const knownConfigError = err.code === 'JIRA_NOT_CONFIGURED' || err.code === 'JIRA_FIELDS_NOT_FOUND';
+  res.status(knownConfigError ? 400 : 500).json({ error: err.message, configured: !knownConfigError });
+}
+
+// GET /api/process-change-radar — for the Process Change Radar tab. Runs the
+// live Jira query fresh on every call; the tab only calls it when opened.
+router.get('/', async (req, res) => {
+  if (!isJiraConfigured()) return res.status(400).json(NOT_CONFIGURED);
   try {
-    const issues = await getProcessChangeIssues();
+    res.json(await computeRadar());
+  } catch (err) {
+    sendRadarError(res, err);
+  }
+});
 
-    // Business Process Flow names a diagram directly (Diagram.businessFlow/
-    // name) — matched once per diagram below, not per task. Application/API
-    // name applications used by a diagram's tasks — matched per task.
-    const issuesByBusinessFlowName = new Map();
-    const issuesByApplicationName = new Map();
-    for (const issue of issues) {
-      fanOutByName(issuesByBusinessFlowName, issue.businessFlowNames, issue, 'businessFlow');
-      fanOutByName(issuesByApplicationName, issue.applicationNames, issue, 'application');
-      // "API" isn't its own element on a diagram — an API-linked issue is
-      // surfaced through whichever Application it's also tied to. An issue
-      // that names only an API (no Business Process Flow/Application) has
-      // nothing to anchor to and won't appear on any diagram, but that's a
-      // data-entry gap in Jira, not something this route can resolve.
-      fanOutByName(issuesByApplicationName, issue.apiNames, issue, 'api');
+// GET /api/process-change-radar/flow-aggregates — Jira work rolled up per
+// business flow (story points, late/overdue work, due soon, by type/status/
+// priority/sprint/assignee), plus per-domain and landscape totals. Used by
+// Ask BIQ. Filters: diagramId, flow (name contains), domain, application
+// (acronym or name an issue names); sort (see SORTS); limit (flows, default
+// all). Cached 2 minutes because the Jira query is slow; ?fresh=1 bypasses.
+let aggregatesCache = { at: 0, promise: null };
+const AGGREGATES_TTL_MS = 2 * 60 * 1000;
+router.get('/flow-aggregates', async (req, res) => {
+  if (!isJiraConfigured()) return res.status(400).json(NOT_CONFIGURED);
+  try {
+    if (!aggregatesCache.promise || req.query.fresh === '1' || Date.now() - aggregatesCache.at > AGGREGATES_TTL_MS) {
+      const promise = computeRadar();
+      aggregatesCache = { at: Date.now(), promise };
+      promise.catch(() => { if (aggregatesCache.promise === promise) aggregatesCache = { at: 0, promise: null }; });
     }
-
-    if (!issuesByBusinessFlowName.size && !issuesByApplicationName.size) {
-      return res.json({
-        configured: true,
-        generatedAt: new Date().toISOString(),
-        diagrams: [],
-        issuesByApplicationName: {},
-      });
+    const radar = await aggregatesCache.promise;
+    const has = (v, q) => String(v || '').toLowerCase().includes(String(q).toLowerCase());
+    let diagrams = radar.diagrams || [];
+    if (req.query.diagramId) diagrams = diagrams.filter((d) => String(d.diagramId) === String(req.query.diagramId));
+    if (req.query.flow) diagrams = diagrams.filter((d) => has(d.name, req.query.flow));
+    if (req.query.domain) diagrams = diagrams.filter((d) => has(String(d.domain || '').replace(/&amp;/g, '&'), req.query.domain));
+    if (req.query.application) {
+      const q = req.query.application;
+      diagrams = diagrams
+        .map((d) => ({ ...d, issues: (d.issues || []).filter((i) => (i.applicationNames || []).concat(i.apiNames || []).some((n) => has(n, q))) }))
+        .filter((d) => d.issues.length);
     }
-
-    const diagrams = await Diagram.find({}, {
-      name: 1, businessFlow: 1, neighborhoodName: 1, status: 1, tasks: 1, domain: 1,
-    }).lean();
-
-    const getCriticalityIndex = makeCriticalityIndexLoader();
-    const summaries = [];
-    for (const diagram of diagrams) {
-      const matchedIssueKeys = new Set();
-      const matchedIssues = [];
-      let atRiskCount = 0;
-      let totalDevDays = 0;
-      const record = (issueList) => {
-        for (const issue of issueList) {
-          if (matchedIssueKeys.has(issue.key)) continue;
-          matchedIssueKeys.add(issue.key);
-          matchedIssues.push(issue);
-          if (issue.isOverdue) atRiskCount += 1;
-          totalDevDays += issue.devDays || 0;
-        }
-      };
-
-      record(issuesByBusinessFlowName.get(normalizeName(diagram.businessFlow || diagram.name)) || []);
-      for (const task of diagram.tasks || []) {
-        for (const application of task.applications || []) {
-          record(issuesByApplicationName.get(normalizeName(application.name)) || []);
-        }
-      }
-
-      if (!matchedIssueKeys.size) continue;
-      const applicationImpact = await buildApplicationImpact(matchedIssues, diagram.neighborhoodName, getCriticalityIndex);
-      summaries.push({
-        diagramId: String(diagram._id),
-        name: diagram.businessFlow || diagram.name,
-        neighborhoodName: diagram.neighborhoodName || null,
-        status: diagram.status || null,
-        domain: diagram.domain || null,
-        issueCount: matchedIssueKeys.size,
-        atRiskCount,
-        totalDevDays: Math.round(totalDevDays * 100) / 100,
-        issues: matchedIssues,
-        applicationImpact,
-      });
-    }
-
-    // Most impacted first: flows with the most overdue/at-risk issues lead,
-    // ties broken by total remaining dev-days.
-    summaries.sort((a, b) => (b.atRiskCount - a.atRiskCount) || (b.totalDevDays - a.totalDevDays));
-
+    const { flows, byDomain, totals } = buildFlowAggregates(diagrams);
+    const sort = SORTS[req.query.sort] ? req.query.sort : 'latePoints';
+    flows.sort(SORTS[sort]);
+    const limit = Math.max(1, Math.min(Number(req.query.limit) || flows.length || 1, 500));
     res.json({
       configured: true,
-      generatedAt: new Date().toISOString(),
-      diagrams: summaries,
-      issuesByApplicationName: Object.fromEntries(issuesByApplicationName),
+      generatedAt: radar.generatedAt,
+      filters: { diagramId: req.query.diagramId || null, flow: req.query.flow || null, domain: req.query.domain || null, application: req.query.application || null },
+      sort,
+      staleDays: STALE_DAYS,
+      flowCount: flows.length,
+      totals,
+      byDomain,
+      flows: flows.slice(0, limit),
     });
   } catch (err) {
-    console.error('[PROCESS CHANGE RADAR] failed:', err);
-    const knownConfigError = err.code === 'JIRA_NOT_CONFIGURED' || err.code === 'JIRA_FIELDS_NOT_FOUND';
-    res.status(knownConfigError ? 400 : 500).json({ error: err.message, configured: !knownConfigError });
+    sendRadarError(res, err);
   }
 });
 

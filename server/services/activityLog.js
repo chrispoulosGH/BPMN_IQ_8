@@ -138,6 +138,8 @@ const RULES = [
   [/^PUT \/diagrams\/([^/]+)$/, 'Saved a diagram', 'diagram'],
   [/^DELETE \/diagrams\/([^/]+)$/, 'Deleted a diagram', 'diagram'],
   [/^POST \/process-optimizer\/analyze\/([^/]+)$/, 'Ran the Process Optimizer', 'diagram'],
+  [/^PUT \/support-lifecycle\/products\/override$/, 'Changed a vendor support date'],
+  [/^POST \/support-lifecycle\/sync$/, 'Refreshed the vendor support register'],
   [/^POST \/admin\/users$/, 'Created a user'],
   [/^PUT \/admin\/users\/([^/]+)\/password$/, 'Set a user\'s password', 'user'],
   [/^PUT \/admin\/users\/([^/]+)$/, 'Changed a user', 'user'],

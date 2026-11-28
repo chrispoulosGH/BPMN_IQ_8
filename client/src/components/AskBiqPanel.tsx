@@ -33,7 +33,9 @@ const SUGGESTIONS = [
   'Which flows have the lowest SOX compliance, and what are their open High deviations?',
   'What are the 5 most expensive business flows by TCO, and how did they change from last year?',
   'Which flows depend on CONNECTED-CAR?',
+  'Which flows have the most late Jira work, and how many story points are in flight by domain?',
   'What Jira work on Digital Retailing Journey is overdue?',
+  'Which flows will be most exposed to unsupported hardware and software over the next 3 years?',
   'How did vehicles sold and warranty claims paid compare with the previous 7 days?',
   'Tell me about the WARRANTY-SALES application: owners, cost and risk.',
 ];

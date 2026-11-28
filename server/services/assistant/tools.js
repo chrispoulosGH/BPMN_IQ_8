@@ -261,7 +261,7 @@ let radarCache = { at: 0, data: null };
 const jiraChanges = {
   name: 'jira_changes',
   label: 'Checking Jira changes',
-  description: 'In-flight Jira work (active and planned sprints) that touches business flows and applications: per flow the issue count, at-risk (missed due date) count and remaining dev-days, plus the issues (key, summary, status, assignee, due date, overdue). Filter by diagramId, flow name or application acronym; optionally only overdue issues.',
+  description: 'In-flight Jira work (active and planned sprints) that touches business flows and applications: per flow the issue count, at-risk (missed due date) count and remaining dev-days, plus the issues (key, summary, status, assignee, due date, overdue). Filter by diagramId, flow name or application acronym; optionally only overdue issues. For totals, rankings and story-point rollups use jira_flow_rollup.',
   input_schema: {
     type: 'object',
     properties: {
@@ -303,6 +303,114 @@ const jiraChanges = {
   },
 };
 
+const jiraFlowRollup = {
+  name: 'jira_flow_rollup',
+  label: 'Rolling up Jira work by flow',
+  description: 'Jira work in flight rolled up per business process flow, plus per-domain and landscape totals. Per flow: issue count; story points (total, on track, due within 7 days, overdue) and dev-days; late (overdue) issues and points, max/avg days overdue and the oldest late issue; user stories (Story-type issues) and how many are late; issues with no due date or no estimate; stale issues (not updated recently); breakdowns by issue type, status, status category, priority, sprint (current vs planned) and assignee; jeopardy ratio and red/amber/green rating (same rules as the Process Change Heat Map); how issues were matched (Business Process Flow field vs application/API); top applications. Use this for counts, totals, rankings and comparisons ("which flows have the most late work", "story points in flight for Finance", "how many late stories on X"). Use jira_changes for the individual issues. Filter by diagramId, flow name, domain or application; sort by latePoints (default), lateIssues, lateStories, storyPoints, issues, jeopardy, daysOverdue, dueSoon or stale. detail "summary" (default) returns the headline numbers per flow; "full" adds every breakdown (use it for one or a few flows).',
+  input_schema: {
+    type: 'object',
+    properties: {
+      diagramId: { type: 'string' },
+      flow: { type: 'string', description: 'Flow name or part of it' },
+      domain: { type: 'string', description: 'Business domain or part of it' },
+      application: { type: 'string', description: 'Only issues that name this application or API (acronym or name)' },
+      sort: { type: 'string', enum: ['latePoints', 'lateIssues', 'lateStories', 'storyPoints', 'issues', 'jeopardy', 'daysOverdue', 'dueSoon', 'stale'] },
+      detail: { type: 'string', enum: ['summary', 'full'] },
+      limit: { type: 'integer', minimum: 1, maximum: 120, description: 'Flows to return, default 15' },
+    },
+  },
+  async handler(args, api) {
+    let data;
+    try {
+      data = await api.get('/process-change-radar/flow-aggregates', {
+        diagramId: args.diagramId, flow: args.flow, domain: args.domain, application: args.application, sort: args.sort,
+      }, { timeoutMs: 180000 });
+    } catch (err) {
+      if (err.status === 400) return { result: { error: 'Jira is not configured on this server.' }, refs: [] };
+      throw err;
+    }
+    const full = args.detail === 'full';
+    const limit = Math.min(args.limit || 15, 120);
+    const flows = (data.flows || []).slice(0, limit).map((f) => {
+      const base = {
+        diagramId: f.diagramId, name: f.name, domain: f.domain, rag: f.rag, jeopardyRatio: f.jeopardyRatio,
+        issues: f.issueCount, storyPoints: f.storyPoints, late: f.late, latePointsPct: f.latePointsPct,
+        dueSoon7: f.dueSoon7, userStories: f.userStories, noDueDate: f.noDueDate, stale: f.stale.issues, nearestDue: f.nearestDue,
+      };
+      if (!full) return base;
+      return {
+        ...base, staleDetail: f.stale, byType: f.byType, byStatus: f.byStatus, byStatusCategory: f.byStatusCategory,
+        byPriority: f.byPriority, bySprint: f.bySprint, assignees: f.assignees, matchedVia: f.matchedVia, applications: f.applications,
+      };
+    });
+    const t = data.totals || {};
+    return {
+      result: {
+        asOf: data.generatedAt,
+        scope: 'Open Jira work only (not Done), in active or planned sprints. "Late" = past its due date.',
+        sort: data.sort, staleAfterDays: data.staleDays,
+        flowsMatching: data.flowCount, returned: flows.length,
+        totals: {
+          flowsWithWork: t.flowsWithWork, flowRag: t.flowRag, issues: t.issueCount, storyPoints: t.storyPoints,
+          late: t.late, dueSoon7: t.dueSoon7, userStories: t.userStories, latePointsPct: t.latePointsPct,
+          noDueDate: t.noDueDate, stale: t.stale, byType: t.byType, byStatusCategory: t.byStatusCategory, bySprint: t.bySprint,
+          assignees: t.assignees ? { distinct: t.assignees.distinct, unassignedIssues: t.assignees.unassignedIssues } : null,
+          note: t.note,
+        },
+        byDomain: data.byDomain,
+        flows,
+      },
+      refs: flows.map((f) => ({ kind: 'flow', id: f.diagramId, name: f.name }))
+        .concat(flows.map((f) => f.late?.oldest).filter(Boolean).map((o) => ({ kind: 'jira', id: o.key, name: o.summary }))),
+    };
+  },
+};
+
+const vendorSupport = {
+  name: 'vendor_support',
+  label: 'Checking vendor support dates',
+  description: 'Vendor support lifecycle of the hardware, operating systems and software behind business flows, now and forecast 1, 2 and 3 years out. Per flow: servers and software installs, and at each checkpoint how many servers have unsupported hardware or OS, how many software installs are past end of support, % of the flow\'s servers and software affected, applications affected, and servers out of warranty (reported separately; out of warranty is not unsupported). Also the flow\'s rating (red/amber/green/no data), the next item to lose support, and (detail "full") a quarterly timeline and the products driving it. The landscape section covers the whole estate (or the matching flows when filtered), with the top products losing support. Hardware dates are ESTIMATES (server generation release + 8 years) unless an administrator entered the vendor date; OS and software dates come from the catalog. Filter by diagramId, flow, domain or application acronym; asOf (YYYY-MM-DD) shifts "now". Sort flows by now, 1y, 2y or 3y (share of servers affected).',
+  input_schema: {
+    type: 'object',
+    properties: {
+      diagramId: { type: 'string' },
+      flow: { type: 'string' },
+      domain: { type: 'string' },
+      application: { type: 'string', description: 'Application acronym' },
+      asOf: { type: 'string', description: 'YYYY-MM-DD; default today' },
+      sort: { type: 'string', enum: ['now', '1y', '2y', '3y'], description: 'Default now' },
+      detail: { type: 'string', enum: ['summary', 'full'] },
+      limit: { type: 'integer', minimum: 1, maximum: 110, description: 'Flows to return, default 15' },
+    },
+  },
+  async handler(args, api) {
+    const full = args.detail === 'full';
+    const data = await api.get('/support-lifecycle/flows', {
+      diagramId: args.diagramId, flow: args.flow, domain: args.domain, application: args.application, asOf: args.asOf, drivers: full ? 1 : undefined,
+    });
+    const idx = { now: 0, '1y': 1, '2y': 2, '3y': 3 }[args.sort || 'now'] ?? 0;
+    const score = (f) => (f.checkpoints[idx]?.serversPct || 0) + (f.checkpoints[idx]?.softwarePct || 0) / 100;
+    const flows = [...(data.flows || [])].sort((a, b) => score(b) - score(a)).slice(0, Math.min(args.limit || 15, 110));
+    const slim = (c) => ({ when: c.label, date: c.date, serversAffected: c.serversAffected, serversPct: c.serversPct, hardware: c.hardware, os: c.os, software: c.software, softwarePct: c.softwarePct, appsAffected: c.appsAffected, outOfWarranty: c.outOfWarranty });
+    const out = flows.map((f) => ({
+      diagramId: f.diagramId, name: f.name, domain: f.domain, rating: f.rating,
+      servers: f.totals.servers, softwareInstalls: f.totals.software, unknownDates: f.totals.unknownDates,
+      checkpoints: f.checkpoints.map(slim), nextLoss: f.nextLoss,
+      uncataloguedApplications: f.uncataloguedApplications.length ? f.uncataloguedApplications : undefined,
+      ...(full ? { timeline: f.timeline, drivers: f.drivers } : {}),
+    }));
+    return {
+      result: {
+        asOf: data.asOf, sources: data.sources, ratingRule: data.ratingRule,
+        landscape: { scope: data.landscape.scope, totals: data.landscape.totals, ratings: data.landscape.ratings, checkpoints: data.landscape.checkpoints.map(slim), topProductsLosingSupport: data.landscape.drivers.slice(0, full ? 15 : 8) },
+        byDomain: data.byDomain,
+        flowsMatching: (data.flows || []).length, returned: out.length, flows: out,
+      },
+      refs: out.map((f) => ({ kind: 'flow', id: f.diagramId, name: f.name })),
+    };
+  },
+};
+
 const businessMetrics = {
   name: 'business_metrics',
   label: 'Reading business metrics',
@@ -328,6 +436,6 @@ const businessMetrics = {
   },
 };
 
-const TOOLS = [searchFlows, getFlow, flowScorecards, getApplication, soxControls, soxDeviations, jiraChanges, businessMetrics];
+const TOOLS = [searchFlows, getFlow, flowScorecards, getApplication, soxControls, soxDeviations, jiraChanges, jiraFlowRollup, vendorSupport, businessMetrics];
 
 module.exports = { TOOLS };

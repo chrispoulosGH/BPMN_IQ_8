@@ -56,6 +56,7 @@ import {
   KeyOutlined,
   MessageOutlined,
   LineChartOutlined,
+  SafetyCertificateOutlined,
   FireOutlined,
   ExperimentOutlined,
   HomeOutlined,
@@ -78,6 +79,7 @@ import ProcessChangeRadar from './components/ProcessChangeRadar';
 import ProcessChangeHeatMap from './components/ProcessChangeHeatMap';
 import ExecutiveDashboard from './components/ExecutiveDashboard';
 import BusinessMetrics from './components/BusinessMetrics';
+import VendorSupport from './components/VendorSupport';
 import QuantitativeModeling from './components/QuantitativeModeling';
 import DiagramBrowser from './components/DiagramBrowser';
 import NewDiagramDialog from './components/NewDiagramDialog';
@@ -498,6 +500,7 @@ const OUTER_TAB_NAMES: Record<string, string> = {
   landing: 'BPMN IQ home',
   execDashboard: 'Dashboard',
   businessMetrics: 'Business Metrics & Analysis',
+  vendorSupport: 'Vendor Support',
   analytics: 'Analytics',
   reports: 'Reports',
   valueStreams: 'Value Streams/Journeys',
@@ -522,6 +525,7 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
   const GLOBAL_MODEL_FACTORY_COUNT = 3;
   const CURRENT_USER = user.userId;
   const hasAdminAccess = user.capabilities?.some(c => c.function === 'Admin') ?? false;
+  const hasAdminWrite = user.capabilities?.some(c => c.function === 'Admin' && c.permission === 'Write') ?? false;
   const readOnly = !(user.capabilities?.some(c => c.permission !== 'Read'));
   const canEditFactories = !readOnly;
   const [showAdmin, setShowAdmin] = useState(false);
@@ -3214,6 +3218,11 @@ function AuthenticatedApp({ user, onLogout }: { user: { _id: string; userId: str
                 key: 'businessMetrics',
                 label: outerTabLabel('businessMetrics', <span><LineChartOutlined /> Business Metrics &amp; Analysis</span>),
                 children: <BusinessMetrics />,
+              },
+              {
+                key: 'vendorSupport',
+                label: outerTabLabel('vendorSupport', <span><SafetyCertificateOutlined /> Vendor Support</span>),
+                children: <VendorSupport canEdit={hasAdminWrite} onOpenFlow={(diagramId) => handleDashboardFlowOpen({ diagramId, neighborhoodName: 'LLM AMI' })} />,
               },
               {
                 key: 'analytics',
