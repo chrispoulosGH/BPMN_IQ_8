@@ -10,6 +10,13 @@
 ## Session log
 Newest entry first. Each entry: date, what was in flight, what's uncommitted/unresolved.
 
+### 2026-11-28 (3) — Pushed to main
+- Committed `1a8ee40` (Jira rollups per flow + vendor support lifecycle; the two 2026-11-28 entries below are now committed), fast-forwarded and pushed `main`. The deploy succeeded in 5m21s; live `/api/health` returns version `1a8ee40`.
+- Checked on Azure:
+  - `/support-lifecycle/flows`: 110 flows rated 10 red / 90 amber / 0 green / 10 no data, the same as local.
+  - The register: 390 products.
+  - `/process-change-radar/flow-aggregates`: 72 flows, 136 issues, 697 points, 60 late.
+
 ### 2026-11-28 (2) — Vendor support (end-of-support) dates rolled up to business flows
 - **Dates used** (each looked up from the catalog, except the hardware estimate):
   - **Hardware:** the model's end of vendor support.
